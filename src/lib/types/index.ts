@@ -8,7 +8,8 @@ export type UserRole =
   | 'kepala_cutting'
   | 'kepala_jahit'
   | 'kepala_steam'
-  | 'kepala_keluar';
+  | 'kepala_keluar'
+  | 'developer';
 
 export interface UserProfile {
   uid: string;

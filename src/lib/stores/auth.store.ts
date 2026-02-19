@@ -16,7 +16,7 @@ export const userRole = derived(currentUser, ($user): UserRole | null => $user?.
 // Derived: apakah user adalah admin gudang
 export const isAdmin = derived(
   currentUser,
-  ($user) => $user?.role === 'admin_gudang'
+  ($user) => $user?.role === 'admin_gudang' || $user?.role === 'developer'
 );
 
 // Inisialisasi listener auth — panggil sekali di root +layout.svelte
