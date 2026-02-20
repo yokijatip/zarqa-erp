@@ -1,135 +1,108 @@
 <script lang="ts" module>
-  import BookOpenIcon from "@lucide/svelte/icons/book-open";
-  import BotIcon from "@lucide/svelte/icons/bot";
-  import ChartPieIcon from "@lucide/svelte/icons/chart-pie";
-  import FrameIcon from "@lucide/svelte/icons/frame";
-  import LifeBuoyIcon from "@lucide/svelte/icons/life-buoy";
-  import MapIcon from "@lucide/svelte/icons/map";
-  import SendIcon from "@lucide/svelte/icons/send";
-  import Settings2Icon from "@lucide/svelte/icons/settings-2";
-  import SquareTerminalIcon from "@lucide/svelte/icons/square-terminal";
+  import LayoutDashboardIcon from "@lucide/svelte/icons/layout-dashboard";
+  import PackageIcon from "@lucide/svelte/icons/package";
+  import ScissorsIcon from "@lucide/svelte/icons/scissors";
+  import ShirtIcon from "@lucide/svelte/icons/shirt";
+  import TruckIcon from "@lucide/svelte/icons/truck";
+  import WalletIcon from "@lucide/svelte/icons/wallet";
+  import UsersIcon from "@lucide/svelte/icons/users";
+  import BarChartIcon from "@lucide/svelte/icons/bar-chart-2";
+  import SettingsIcon from "@lucide/svelte/icons/settings";
   import HandbagIcon from "@lucide/svelte/icons/handbag";
 
   const data = {
-    user: {
-      name: "John Doe",
-      email: "m@example.com",
-      avatar: "/avatars/shadcn.jpg",
-    },
     navMain: [
       {
-        title: "Playground",
-        url: "#",
-        icon: SquareTerminalIcon,
+        title: "Dashboard",
+        url: "/dashboard",
+        icon: LayoutDashboardIcon,
+        items: [],
+      },
+      {
+        title: "Gudang",
+        url: "/dashboard",
+        icon: PackageIcon,
         isActive: true,
         items: [
-          {
-            title: "History",
-            url: "#",
-          },
-          {
-            title: "Starred",
-            url: "#",
-          },
-          {
-            title: "Settings",
-            url: "#",
-          },
+          { title: "Stok Kain", url: "/stok-kain" },
+          { title: "Model Baju", url: "/model-baju" },
+          { title: "Order Produksi", url: "/order-produksi" },
+          { title: "Monitor Produksi", url: "/monitor-produksi" },
+          { title: "Barang Jadi", url: "/barang-jadi" },
+          { title: "Barang Keluar", url: "/barang-keluar" },
         ],
       },
       {
-        title: "Models",
+        title: "Produksi",
         url: "#",
-        icon: BotIcon,
+        icon: ScissorsIcon,
+        comingSoon: true,
         items: [
-          {
-            title: "Genesis",
-            url: "#",
-          },
-          {
-            title: "Explorer",
-            url: "#",
-          },
-          {
-            title: "Quantum",
-            url: "#",
-          },
+          { title: "Jadwal Produksi", url: "#" },
+          { title: "Kapasitas Mesin", url: "#" },
+          { title: "Quality Control", url: "#" },
         ],
       },
       {
-        title: "Documentation",
+        title: "Penjualan",
         url: "#",
-        icon: BookOpenIcon,
+        icon: ShirtIcon,
+        comingSoon: true,
         items: [
-          {
-            title: "Introduction",
-            url: "#",
-          },
-          {
-            title: "Get Started",
-            url: "#",
-          },
-          {
-            title: "Tutorials",
-            url: "#",
-          },
-          {
-            title: "Changelog",
-            url: "#",
-          },
+          { title: "Order Penjualan", url: "#" },
+          { title: "Data Buyer", url: "#" },
+          { title: "Retur", url: "#" },
         ],
       },
       {
-        title: "Settings",
+        title: "Pengiriman",
         url: "#",
-        icon: Settings2Icon,
+        icon: TruckIcon,
+        comingSoon: true,
         items: [
-          {
-            title: "General",
-            url: "#",
-          },
-          {
-            title: "Team",
-            url: "#",
-          },
-          {
-            title: "Billing",
-            url: "#",
-          },
-          {
-            title: "Limits",
-            url: "#",
-          },
+          { title: "Jadwal Kirim", url: "#" },
+          { title: "Tracking", url: "#" },
+        ],
+      },
+      {
+        title: "Keuangan",
+        url: "#",
+        icon: WalletIcon,
+        comingSoon: true,
+        items: [
+          { title: "Pemasukan", url: "#" },
+          { title: "Pengeluaran", url: "#" },
+          { title: "Laporan Laba Rugi", url: "#" },
+        ],
+      },
+      {
+        title: "HR & Penggajian",
+        url: "#",
+        icon: UsersIcon,
+        comingSoon: true,
+        items: [
+          { title: "Data Karyawan", url: "#" },
+          { title: "Absensi", url: "#" },
+          { title: "Penggajian", url: "#" },
+        ],
+      },
+      {
+        title: "Laporan",
+        url: "#",
+        icon: BarChartIcon,
+        comingSoon: true,
+        items: [
+          { title: "Laporan Produksi", url: "#" },
+          { title: "Laporan Penjualan", url: "#" },
+          { title: "Laporan Keuangan", url: "#" },
         ],
       },
     ],
     navSecondary: [
       {
-        title: "Support",
+        title: "Pengaturan",
         url: "#",
-        icon: LifeBuoyIcon,
-      },
-      {
-        title: "Feedback",
-        url: "#",
-        icon: SendIcon,
-      },
-    ],
-    projects: [
-      {
-        name: "Design Engineering",
-        url: "#",
-        icon: FrameIcon,
-      },
-      {
-        name: "Sales & Marketing",
-        url: "#",
-        icon: ChartPieIcon,
-      },
-      {
-        name: "Travel",
-        url: "#",
-        icon: MapIcon,
+        icon: SettingsIcon,
       },
     ],
   };
@@ -137,17 +110,22 @@
 
 <script lang="ts">
   import NavMain from "./nav-main.svelte";
-  import NavProjects from "./nav-projects.svelte";
   import NavSecondary from "./nav-secondary.svelte";
   import NavUser from "./nav-user.svelte";
   import * as Sidebar from "$lib/components/ui/sidebar/index.js";
-  import CommandIcon from "@lucide/svelte/icons/command";
+  import { currentUser } from "$lib/stores/auth.store";
   import type { ComponentProps } from "svelte";
 
   let {
     ref = $bindable(null),
     ...restProps
   }: ComponentProps<typeof Sidebar.Root> = $props();
+
+  const user = $derived({
+    name: $currentUser?.nama ?? "Admin",
+    email: $currentUser?.email ?? "",
+    avatar: "",
+  });
 </script>
 
 <Sidebar.Root bind:ref variant="inset" {...restProps}>
@@ -156,7 +134,7 @@
       <Sidebar.MenuItem>
         <Sidebar.MenuButton size="lg">
           {#snippet child({ props })}
-            <a href="##" {...props}>
+            <a href="/dashboard" {...props}>
               <div
                 class="bg-sidebar-primary text-sidebar-primary-foreground flex aspect-square size-8 items-center justify-center rounded-lg"
               >
@@ -172,11 +150,13 @@
       </Sidebar.MenuItem>
     </Sidebar.Menu>
   </Sidebar.Header>
+
   <Sidebar.Content>
     <NavMain items={data.navMain} />
     <NavSecondary items={data.navSecondary} class="mt-auto" />
   </Sidebar.Content>
+
   <Sidebar.Footer>
-    <NavUser user={data.user} />
+    <NavUser {user} />
   </Sidebar.Footer>
 </Sidebar.Root>
