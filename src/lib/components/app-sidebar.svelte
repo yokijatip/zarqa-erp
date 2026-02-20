@@ -76,7 +76,7 @@
         ],
       },
       {
-        title: "HR & Penggajian",
+        title: "HR",
         url: "#",
         icon: UsersIcon,
         comingSoon: true,
