@@ -18,11 +18,12 @@
 
   let { items }: { items: NavItem[] } = $props();
 
-  // Cek apakah item atau salah satu sub-itemnya aktif
   function isGroupActive(item: NavItem): boolean {
-    if ($page.url.pathname === item.url) return true;
+    if (!item.items || item.items.length === 0) {
+      return $page.url.pathname === item.url;
+    }
     return (
-      item.items?.some((sub) => $page.url.pathname.startsWith(sub.url)) ?? false
+      item.items.some((sub) => $page.url.pathname.startsWith(sub.url)) ?? false
     );
   }
 </script>
@@ -32,11 +33,14 @@
   <Sidebar.Menu>
     {#each items as item}
       {#if !item.items || item.items.length === 0}
-        <!-- Menu tanpa submenu: langsung navigasi -->
+        <!-- Menu tanpa submenu -->
         <Sidebar.MenuItem>
           <Sidebar.MenuButton
             isActive={$page.url.pathname === item.url}
             tooltipContent={item.title}
+            class={$page.url.pathname === item.url
+              ? "bg-sidebar-primary text-sidebar-primary-foreground font-medium hover:bg-sidebar-primary hover:text-sidebar-primary-foreground"
+              : ""}
           >
             {#snippet child({ props })}
               <a href={item.url} {...props}>
@@ -47,21 +51,22 @@
           </Sidebar.MenuButton>
         </Sidebar.MenuItem>
       {:else}
-        <!-- Menu dengan submenu: collapsible -->
+        <!-- Menu dengan submenu -->
         <Collapsible.Root open={isGroupActive(item)} class="group/collapsible">
           <Sidebar.MenuItem>
             <div class="flex w-full items-center">
-              <!-- Klik judul/icon → navigasi ke url -->
               <Sidebar.MenuButton
                 isActive={isGroupActive(item)}
                 tooltipContent={item.title}
-                class="flex-1"
+                class="flex-1 {isGroupActive(item) && !item.comingSoon
+                  ? 'font-medium text-foreground'
+                  : ''}"
               >
                 {#snippet child({ props })}
                   <a
                     href={item.comingSoon ? undefined : item.url}
                     class:pointer-events-none={item.comingSoon}
-                    class:opacity-60={item.comingSoon}
+                    class:opacity-50={item.comingSoon}
                     {...props}
                   >
                     <item.icon />
@@ -76,12 +81,11 @@
                 {/snippet}
               </Sidebar.MenuButton>
 
-              <!-- Klik panah → toggle submenu -->
               <Collapsible.Trigger>
                 {#snippet child({ props })}
                   <button
                     {...props}
-                    class="flex h-8 w-8 items-center justify-center rounded-md hover:bg-sidebar-accent shrink-0"
+                    class="flex h-8 w-8 items-center justify-center rounded-md hover:bg-sidebar-accent shrink-0 text-muted-foreground"
                   >
                     <ChevronRightIcon
                       class="h-4 w-4 transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90"
@@ -91,13 +95,16 @@
               </Collapsible.Trigger>
             </div>
 
-            <!-- Sub menu items -->
             <Collapsible.Content>
               <Sidebar.MenuSub>
                 {#each item.items as sub}
+                  {@const subActive = $page.url.pathname === sub.url}
                   <Sidebar.MenuSubItem>
                     <Sidebar.MenuSubButton
-                      isActive={$page.url.pathname === sub.url}
+                      isActive={subActive}
+                      class={subActive
+                        ? "bg-sidebar-primary text-sidebar-primary-foreground font-medium hover:bg-sidebar-primary hover:text-sidebar-primary-foreground"
+                        : ""}
                     >
                       {#snippet child({ props })}
                         <a

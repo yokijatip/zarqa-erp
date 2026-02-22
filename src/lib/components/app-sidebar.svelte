@@ -20,7 +20,7 @@
       },
       {
         title: "Gudang",
-        url: "/dashboard",
+        url: "/gudang",
         icon: PackageIcon,
         isActive: true,
         items: [
@@ -76,7 +76,7 @@
         ],
       },
       {
-        title: "HR",
+        title: "HR & Penggajian",
         url: "#",
         icon: UsersIcon,
         comingSoon: true,
