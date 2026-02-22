@@ -9,6 +9,10 @@
   import * as Sheet from "$lib/components/ui/sheet/index.js";
   import * as Dialog from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
+  import StatCard from "$lib/components/StatCard.svelte";
+  import LayersIcon from "@lucide/svelte/icons/layers";
+  import BoxIcon from "@lucide/svelte/icons/box";
+  import AlertTriangleIcon from "@lucide/svelte/icons/alert-triangle";
 
   // ── State ──────────────────────────────────────────────────────────
   let stokList = $state<StokKain[]>([]);
@@ -243,45 +247,28 @@
 
 <!-- ── Stats Row ──────────────────────────────────────────────── -->
 <div class="mb-5 grid grid-cols-3 gap-4">
-  <div class="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
-    <p class="text-xs font-medium uppercase tracking-wider text-gray-400">
-      Total Jenis
-    </p>
-    <p class="mt-1.5 text-2xl font-bold text-gray-900">{totalJenis}</p>
-    <p class="text-xs text-gray-400">jenis kain terdaftar</p>
-  </div>
-  <div class="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
-    <p class="text-xs font-medium uppercase tracking-wider text-gray-400">
-      Total Stok
-    </p>
-    <p class="mt-1.5 text-2xl font-bold text-gray-900">
-      {totalYard.toLocaleString("id-ID")}
-    </p>
-    <p class="text-xs text-gray-400">yard tersedia</p>
-  </div>
-  <div
-    class="rounded-xl border {kritisCount > 0
-      ? 'border-red-200 bg-red-50'
-      : 'border-gray-100 bg-white'} p-4 shadow-sm"
-  >
-    <p
-      class="text-xs font-medium uppercase tracking-wider {kritisCount > 0
-        ? 'text-red-500'
-        : 'text-gray-400'}"
-    >
-      Kain Kritis
-    </p>
-    <p
-      class="mt-1.5 text-2xl font-bold {kritisCount > 0
-        ? 'text-red-700'
-        : 'text-gray-900'}"
-    >
-      {kritisCount}
-    </p>
-    <p class="text-xs {kritisCount > 0 ? 'text-red-500' : 'text-gray-400'}">
-      di bawah 100 yard
-    </p>
-  </div>
+  <StatCard
+    title="Total Jenis"
+    value={totalJenis}
+    icon={LayersIcon}
+    footerSubtext="jenis kain terdaftar"
+  />
+
+  <StatCard
+    title="Total Stok"
+    value={totalYard.toLocaleString("id-ID")}
+    icon={BoxIcon}
+    footerSubtext="yard tersedia"
+  />
+
+  <StatCard
+    title="Kain Kritis"
+    value={kritisCount}
+    icon={AlertTriangleIcon}
+    footerSubtext="di bawah 100 yard"
+    class={kritisCount > 0 ? "border-red-200 bg-red-50" : ""}
+    valueClass={kritisCount > 0 ? "text-red-700" : ""}
+  />
 </div>
 
 <!-- ── Filter & Sort Bar ──────────────────────────────────────── -->
@@ -324,12 +311,7 @@
     {/each}
   </div>
 
-  <Button
-    variant="outline"
-    size="sm"
-    onclick={load}
-    class="ml-auto"
-  >
+  <Button variant="outline" size="sm" onclick={load} class="ml-auto">
     <svg
       class="h-3.5 w-3.5 {loading ? 'animate-spin' : ''}"
       xmlns="http://www.w3.org/2000/svg"
@@ -403,7 +385,9 @@
   {:else}
     <table class="w-full border-collapse">
       <thead>
-        <tr class="border-b border-gray-100 bg-gray-50 text-xs font-semibold uppercase tracking-wider text-gray-400">
+        <tr
+          class="border-b border-gray-100 bg-gray-50 text-xs font-semibold uppercase tracking-wider text-gray-400"
+        >
           <th class="px-5 py-3 text-left">Nama Kain</th>
           <th class="px-5 py-3 text-right">Tersedia</th>
           <th class="px-5 py-3 text-right">Terpakai</th>
@@ -416,8 +400,9 @@
         {#each filteredList as kain}
           {@const st = statusKain(kain.stok_tersedia)}
           {@const pct = persen(kain.stok_tersedia, kain.stok_terpakai)}
-          <tr class="border-b border-gray-50 transition last:border-0 hover:bg-gray-50/50">
-
+          <tr
+            class="border-b border-gray-50 transition last:border-0 hover:bg-gray-50/50"
+          >
             <!-- Nama + Progress bar -->
             <td class="px-5 py-4">
               <p class="text-sm font-medium text-gray-800">{kain.nama_kain}</p>
@@ -434,7 +419,12 @@
 
             <!-- Tersedia -->
             <td class="px-5 py-4 text-right">
-              <p class="text-sm font-semibold tabular-nums {kain.stok_tersedia < 100 ? 'text-red-600' : 'text-gray-800'}">
+              <p
+                class="text-sm font-semibold tabular-nums {kain.stok_tersedia <
+                100
+                  ? 'text-red-600'
+                  : 'text-gray-800'}"
+              >
                 {kain.stok_tersedia.toLocaleString("id-ID")}
               </p>
               <p class="text-xs text-gray-400">yard</p>
@@ -450,20 +440,28 @@
 
             <!-- Status badge -->
             <td class="px-5 py-4 text-center">
-              <span class="inline-block rounded-full px-2.5 py-1 text-xs font-semibold {st.cls}">
+              <span
+                class="inline-block rounded-full px-2.5 py-1 text-xs font-semibold {st.cls}"
+              >
                 {st.label}
               </span>
             </td>
 
             <!-- Catatan -->
             <td class="px-5 py-4 max-w-45">
-              <p class="truncate text-xs text-gray-500">{kain.catatan ?? "—"}</p>
+              <p class="truncate text-xs text-gray-500">
+                {kain.catatan ?? "—"}
+              </p>
             </td>
 
             <!-- Action -->
             <td class="px-5 py-4">
               <div class="flex justify-end">
-                <Button variant="outline" size="sm" onclick={() => bukaRestock(kain)}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onclick={() => bukaRestock(kain)}
+                >
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
                     fill="none"
@@ -487,7 +485,9 @@
     </table>
 
     <!-- Footer -->
-    <div class="flex items-center justify-between border-t border-gray-100 bg-gray-50 px-5 py-3">
+    <div
+      class="flex items-center justify-between border-t border-gray-100 bg-gray-50 px-5 py-3"
+    >
       <p class="text-xs text-gray-400">
         Menampilkan {filteredList.length} dari {totalJenis} jenis kain
       </p>
@@ -697,7 +697,11 @@
     </div>
 
     <Sheet.Footer class="mt-6 gap-2 px-6">
-      <Button variant="outline" class="flex-1" onclick={() => (openRestock = false)}>
+      <Button
+        variant="outline"
+        class="flex-1"
+        onclick={() => (openRestock = false)}
+      >
         Batal
       </Button>
       <Button
