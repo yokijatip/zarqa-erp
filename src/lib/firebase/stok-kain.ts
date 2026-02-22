@@ -29,6 +29,7 @@ export async function addStokKain(data: StokKainInput): Promise<string> {
   const ref = await addDoc(collection(db, COL), {
     ...data,
     stok_terpakai: 0,
+    createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
   return ref.id;

@@ -28,6 +28,7 @@ export interface StokKain {
   stok_tersedia: number;
   stok_terpakai: number;
   catatan?: string;
+  createdAt?: Timestamp;
   updatedAt?: Timestamp;
 }
 
