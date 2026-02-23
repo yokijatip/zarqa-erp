@@ -2,7 +2,7 @@
 import {
   collection, doc, getDocs, getDoc,
   addDoc, updateDoc, serverTimestamp,
-  query, orderBy, onSnapshot,
+  query, orderBy, onSnapshot, deleteField,
   type Unsubscribe,
 } from 'firebase/firestore';
 import { db } from './config';
@@ -42,6 +42,15 @@ export async function restockKain(id: string, tambahYard: number, catatan?: stri
   await updateDoc(doc(db, COL, id), {
     stok_tersedia: kain.stok_tersedia + tambahYard,
     catatan: catatan ?? kain.catatan,
+    updatedAt: serverTimestamp(),
+  });
+}
+
+// Edit informasi kain (nama dan catatan saja, stok dikelola via restock/order)
+export async function updateStokKain(id: string, data: { nama_kain: string; catatan?: string }): Promise<void> {
+  await updateDoc(doc(db, COL, id), {
+    nama_kain: data.nama_kain,
+    catatan: data.catatan?.trim() ? data.catatan.trim() : deleteField(),
     updatedAt: serverTimestamp(),
   });
 }

@@ -4,6 +4,7 @@
     getStokKainList,
     addStokKain,
     restockKain,
+    updateStokKain,
   } from "$lib/firebase/stok-kain";
   import type { StokKain } from "$lib/types";
   import * as Sheet from "$lib/components/ui/sheet/index.js";
@@ -28,7 +29,9 @@
   // Sheet state
   let openTambah = $state(false);
   let openRestock = $state(false);
+  let openEdit = $state(false);
   let selectedKain = $state<StokKain | null>(null);
+  let editingKain = $state<StokKain | null>(null);
 
   // Form: tambah kain
   let fNama = $state("");
@@ -38,6 +41,10 @@
   // Form: restock
   let rYard = $state<number | "">("");
   let rCatatan = $state("");
+
+  // Form: edit kain
+  let eNama = $state("");
+  let eCatatan = $state("");
 
   // ── Derived ────────────────────────────────────────────────────────
   let totalYard = $derived(stokList.reduce((s, k) => s + k.stok_tersedia, 0));
@@ -170,6 +177,35 @@
     rYard = "";
     rCatatan = "";
     openRestock = true;
+  }
+
+  function bukaEdit(kain: StokKain) {
+    editingKain = kain;
+    eNama = kain.nama_kain;
+    eCatatan = kain.catatan ?? "";
+    openEdit = true;
+  }
+
+  async function submitEdit() {
+    if (!editingKain || !eNama.trim()) return;
+    saving = true;
+    try {
+      await updateStokKain(editingKain.id, {
+        nama_kain: eNama.trim(),
+        catatan: eCatatan.trim() || undefined,
+      });
+      const nama = eNama.trim();
+      await load();
+      openEdit = false;
+      editingKain = null;
+      eNama = "";
+      eCatatan = "";
+      showSuccess(`Kain "${nama}" berhasil diperbarui.`);
+    } catch {
+      showError("Gagal menyimpan perubahan kain.");
+    } finally {
+      saving = false;
+    }
   }
 
   onMount(load);
@@ -456,7 +492,27 @@
 
             <!-- Action -->
             <td class="px-5 py-4">
-              <div class="flex justify-end">
+              <div class="flex justify-end gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onclick={() => bukaEdit(kain)}
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke-width="2"
+                    stroke="currentColor"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125"
+                    />
+                  </svg>
+                  Edit
+                </Button>
                 <Button
                   variant="outline"
                   size="sm"
@@ -710,6 +766,102 @@
         class="flex-1"
       >
         {saving ? "Menyimpan..." : "Restock Sekarang"}
+      </Button>
+    </Sheet.Footer>
+  </Sheet.Content>
+</Sheet.Root>
+
+<!-- ── Sheet: Edit Kain ──────────────────────────────────────────── -->
+<Sheet.Root bind:open={openEdit}>
+  <Sheet.Content side="right" class="w-full max-w-md">
+    <Sheet.Header>
+      <Sheet.Title>Edit Kain</Sheet.Title>
+      <Sheet.Description>
+        Ubah nama dan catatan kain. Jumlah stok hanya bisa diubah lewat Restock.
+      </Sheet.Description>
+    </Sheet.Header>
+
+    <div class="mt-6 space-y-4 px-6">
+      <!-- Info stok saat ini (read-only) -->
+      {#if editingKain}
+        <div class="rounded-xl border border-gray-100 bg-gray-50 p-4">
+          <p class="text-xs font-medium uppercase tracking-wider text-gray-500">
+            Stok saat ini
+          </p>
+          <div class="mt-2 flex items-center gap-4 text-xs text-gray-500">
+            <span>
+              Tersedia:
+              <strong class="text-gray-700">
+                {editingKain.stok_tersedia.toLocaleString("id-ID")} yard
+              </strong>
+            </span>
+            <span>
+              Terpakai:
+              <strong class="text-gray-700">
+                {editingKain.stok_terpakai.toLocaleString("id-ID")} yard
+              </strong>
+            </span>
+          </div>
+          <span
+            class="mt-2 inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold {statusKain(
+              editingKain.stok_tersedia,
+            ).cls}"
+          >
+            {statusKain(editingKain.stok_tersedia).label}
+          </span>
+        </div>
+      {/if}
+
+      <!-- Nama Kain -->
+      <div>
+        <label
+          class="mb-1.5 block text-sm font-medium text-gray-700"
+          for="edit-nama-kain"
+        >
+          Nama Kain <span class="text-red-500">*</span>
+        </label>
+        <input
+          id="edit-nama-kain"
+          type="text"
+          bind:value={eNama}
+          placeholder="Nama kain..."
+          class="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none"
+        />
+      </div>
+
+      <!-- Catatan -->
+      <div>
+        <label
+          class="mb-1.5 block text-sm font-medium text-gray-700"
+          for="edit-catatan"
+        >
+          Catatan
+          <span class="text-xs font-normal text-gray-400">(opsional)</span>
+        </label>
+        <textarea
+          id="edit-catatan"
+          rows="3"
+          bind:value={eCatatan}
+          placeholder="Catatan tentang kain ini..."
+          class="w-full resize-none rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none"
+        ></textarea>
+      </div>
+    </div>
+
+    <Sheet.Footer class="mt-6 gap-2 px-6">
+      <Button
+        variant="outline"
+        class="flex-1"
+        onclick={() => (openEdit = false)}
+      >
+        Batal
+      </Button>
+      <Button
+        onclick={submitEdit}
+        disabled={saving || !eNama.trim()}
+        class="flex-1"
+      >
+        {saving ? "Menyimpan..." : "Simpan Perubahan"}
       </Button>
     </Sheet.Footer>
   </Sheet.Content>
