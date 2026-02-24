@@ -5,14 +5,18 @@
     addModelBaju,
     updateModelBaju,
     nonaktifkanModel,
+    aktifkanModel,
   } from "$lib/firebase/model-baju";
   import { getStokKainList } from "$lib/firebase/stok-kain";
   import { isAdmin } from "$lib/stores/auth.store";
   import type { ModelBaju, StokKain, UkuranBaju } from "$lib/types";
-  import * as Sheet from "$lib/components/ui/sheet/index.js";
+  import * as Dialog from "$lib/components/ui/dialog";
   import StatCard from "$lib/components/StatCard.svelte";
   import ShirtIcon from "@lucide/svelte/icons/shirt";
   import ArchiveIcon from "@lucide/svelte/icons/archive";
+  import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
+  import * as Select from "$lib/components/ui/select/index.js";
 
   const UKURAN_ORDER: UkuranBaju[] = ["S", "M", "L", "XL", "XXL"];
 
@@ -34,7 +38,7 @@
   let fDeskripsi = $state("");
   let fUkuran = $state<UkuranBaju[]>([]);
   let fKainList = $state<
-    { kain_id: string; nama_kain: string; yard_per_pcs: number | "" }[]
+    { kain_id: string; nama_kain: string; satuan: 'yard' | 'kg'; jumlah_per_ukuran: Partial<Record<UkuranBaju, number | "">> }[]
   >([]);
 
   // ── Derived ────────────────────────────────────────────────────────
@@ -55,7 +59,11 @@
   let canSubmit = $derived(
     fNama.trim() !== "" &&
       fUkuran.length > 0 &&
-      fKainList.every((k) => k.kain_id !== "" && Number(k.yard_per_pcs) > 0),
+      fKainList.every(
+        (k) =>
+          k.kain_id !== "" &&
+          fUkuran.every((u) => Number(k.jumlah_per_ukuran[u] ?? 0) > 0),
+      ),
   );
 
   // ── Helpers ────────────────────────────────────────────────────────
@@ -77,7 +85,7 @@
   function tambahKain() {
     fKainList = [
       ...fKainList,
-      { kain_id: "", nama_kain: "", yard_per_pcs: "" },
+      { kain_id: "", nama_kain: "", satuan: "yard", jumlah_per_ukuran: {} },
     ];
   }
 
@@ -89,6 +97,7 @@
     const kain = stokKainList.find((k) => k.id === kainId);
     fKainList[i].kain_id = kainId;
     fKainList[i].nama_kain = kain?.nama_kain ?? "";
+    fKainList[i].satuan = kain?.satuan ?? "yard";
   }
 
   function resetForm() {
@@ -112,7 +121,8 @@
     fKainList = model.kebutuhan_kain.map((k) => ({
       kain_id: k.kain_id,
       nama_kain: k.nama_kain,
-      yard_per_pcs: k.yard_per_pcs,
+      satuan: k.satuan ?? 'yard',
+      jumlah_per_ukuran: { ...(k.jumlah_per_ukuran ?? {}) } as Partial<Record<UkuranBaju, number | "">>,
     }));
     openForm = true;
   }
@@ -159,12 +169,15 @@
     try {
       const input = {
         nama_model: fNama.trim(),
-        deskripsi: fDeskripsi.trim() || undefined,
+        ...(fDeskripsi.trim() ? { deskripsi: fDeskripsi.trim() } : {}),
         ukuran_tersedia: fUkuran,
         kebutuhan_kain: fKainList.map((k) => ({
           kain_id: k.kain_id,
           nama_kain: k.nama_kain,
-          yard_per_pcs: Number(k.yard_per_pcs),
+          satuan: k.satuan,
+          jumlah_per_ukuran: Object.fromEntries(
+            fUkuran.map((u) => [u, Number(k.jumlah_per_ukuran[u] ?? 0)])
+          ) as Partial<Record<UkuranBaju, number>>,
         })),
       };
 
@@ -199,16 +212,26 @@
     }
   }
 
+  async function doAktifkan(id: string, nama: string) {
+    try {
+      await aktifkanModel(id);
+      await load();
+      showSuccess(`Model "${nama}" berhasil diaktifkan kembali.`);
+    } catch {
+      showError("Gagal mengaktifkan model.");
+    }
+  }
+
   onMount(load);
 </script>
 
 <!-- ── Toast ─────────────────────────────────────────────────────── -->
 {#if successMsg}
   <div
-    class="fixed bottom-5 right-5 z-50 flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 shadow-lg"
+    class="fixed right-5 top-5 z-9999 flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 shadow-lg"
   >
     <svg
-      class="h-4 w-4 text-green-600"
+      class="h-4 w-4 shrink-0 text-green-600"
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"
@@ -226,10 +249,10 @@
 {/if}
 {#if errorMsg}
   <div
-    class="fixed bottom-5 right-5 z-50 flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 shadow-lg"
+    class="fixed right-5 top-5 z-9999 flex max-w-sm items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 shadow-lg"
   >
     <svg
-      class="h-4 w-4 text-red-500"
+      class="mt-0.5 h-4 w-4 shrink-0 text-red-500"
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"
@@ -255,12 +278,8 @@
     </p>
   </div>
   {#if $isAdmin}
-    <button
-      onclick={bukaAdd}
-      class="flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 active:scale-95"
-    >
+    <Button onclick={bukaAdd}>
       <svg
-        class="h-4 w-4"
         xmlns="http://www.w3.org/2000/svg"
         fill="none"
         viewBox="0 0 24 24"
@@ -274,7 +293,7 @@
         />
       </svg>
       Tambah Model
-    </button>
+    </Button>
   {/if}
 </div>
 
@@ -355,10 +374,7 @@
   </button>
 
   <!-- Refresh -->
-  <button
-    onclick={load}
-    class="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 hover:bg-gray-50"
-  >
+  <Button variant="outline" size="sm" onclick={load} class="ml-auto">
     <svg
       class="h-3.5 w-3.5 {loading ? 'animate-spin' : ''}"
       xmlns="http://www.w3.org/2000/svg"
@@ -374,7 +390,7 @@
       />
     </svg>
     Refresh
-  </button>
+  </Button>
 </div>
 
 <!-- ── Content ────────────────────────────────────────────────────── -->
@@ -428,22 +444,16 @@
       <p class="text-sm font-medium text-gray-500">
         Model "{searchQuery}" tidak ditemukan
       </p>
-      <button
-        onclick={() => (searchQuery = "")}
-        class="text-xs text-blue-600 hover:underline">Hapus pencarian</button
-      >
+      <Button variant="link" size="sm" onclick={() => (searchQuery = "")}>
+        Hapus pencarian
+      </Button>
     {:else}
       <p class="text-sm font-medium text-gray-500">Belum ada model baju</p>
       <p class="text-xs text-gray-400">
         Mulai dengan menambahkan model baju pertama
       </p>
       {#if $isAdmin}
-        <button
-          onclick={bukaAdd}
-          class="mt-1 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
-        >
-          + Tambah Model
-        </button>
+        <Button onclick={bukaAdd} class="mt-1">+ Tambah Model</Button>
       {/if}
     {/if}
   </div>
@@ -513,17 +523,32 @@
               >
                 Kebutuhan Kain
               </p>
-              <div class="space-y-1">
+              <div class="space-y-1.5">
                 {#each model.kebutuhan_kain as kain}
-                  <div class="flex items-center justify-between text-xs">
-                    <div class="flex items-center gap-1.5">
-                      <span class="h-1.5 w-1.5 rounded-full bg-amber-400"
-                      ></span>
-                      <span class="text-gray-600">{kain.nama_kain}</span>
+                  {@const ukuranAda = UKURAN_ORDER.filter((u) => (kain.jumlah_per_ukuran ?? {})[u])}
+                  <div class="rounded-md bg-gray-50 px-2.5 py-2 text-xs">
+                    <!-- Nama kain + badge satuan -->
+                    <div class="mb-1.5 flex items-center justify-between">
+                      <div class="flex items-center gap-1.5">
+                        <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400"></span>
+                        <span class="font-semibold text-gray-700">{kain.nama_kain}</span>
+                      </div>
+                      <span class="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">{kain.satuan}</span>
                     </div>
-                    <span class="font-medium text-gray-500"
-                      >{kain.yard_per_pcs} yard/pcs</span
-                    >
+                    <!-- Mini table: header ukuran + nilai -->
+                    {#if ukuranAda.length > 0}
+                      <div
+                        class="grid text-center"
+                        style="grid-template-columns: repeat({ukuranAda.length}, 1fr)"
+                      >
+                        {#each ukuranAda as u}
+                          <span class="text-[10px] font-semibold text-gray-400">{u}</span>
+                        {/each}
+                        {#each ukuranAda as u}
+                          <span class="font-bold text-gray-700">{(kain.jumlah_per_ukuran ?? {})[u]}</span>
+                        {/each}
+                      </div>
+                    {/if}
                   </div>
                 {/each}
               </div>
@@ -560,25 +585,31 @@
                 Model tidak akan muncul di daftar order produksi.
               </p>
               <div class="flex gap-2">
-                <button
+                <Button
+                  variant="outline"
+                  size="sm"
+                  class="flex-1"
                   onclick={() => (konfirmasiId = null)}
-                  class="flex-1 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50"
                 >
                   Batal
-                </button>
-                <button
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  class="flex-1"
                   onclick={() => doNonaktifkan(model.id, model.nama_model)}
-                  class="flex-1 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700"
                 >
                   Ya, Nonaktifkan
-                </button>
+                </Button>
               </div>
             </div>
           {:else if $isAdmin}
             <div class="flex gap-2">
-              <button
+              <Button
+                variant="outline"
+                size="sm"
+                class="flex-1"
                 onclick={() => bukaEdit(model)}
-                class="flex flex-1 items-center justify-center gap-1 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:bg-gray-50"
               >
                 <svg
                   class="h-3.5 w-3.5"
@@ -595,11 +626,36 @@
                   />
                 </svg>
                 Edit
-              </button>
-              {#if !nonaktif}
-                <button
+              </Button>
+              {#if nonaktif}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  class="flex-1 border-green-200 bg-green-50 text-green-700 hover:bg-green-100 hover:text-green-800"
+                  onclick={() => doAktifkan(model.id, model.nama_model)}
+                >
+                  <svg
+                    class="h-3.5 w-3.5"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke-width="2"
+                    stroke="currentColor"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="m4.5 12.75 6 6 9-13.5"
+                    />
+                  </svg>
+                  Aktifkan
+                </Button>
+              {:else}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  class="flex-1 border-red-200 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700"
                   onclick={() => (konfirmasiId = model.id)}
-                  class="flex flex-1 items-center justify-center gap-1 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-600 transition hover:bg-red-100"
                 >
                   <svg
                     class="h-3.5 w-3.5"
@@ -616,7 +672,7 @@
                     />
                   </svg>
                   Nonaktifkan
-                </button>
+                </Button>
               {/if}
             </div>
           {/if}
@@ -634,21 +690,21 @@
 {/if}
 
 <!-- ── Sheet: Tambah / Edit Model ─────────────────────────────────── -->
-<Sheet.Root
+<Dialog.Root
   bind:open={openForm}
   onOpenChange={(o) => {
     if (!o) resetForm();
   }}
 >
-  <Sheet.Content side="right" class="flex w-full max-w-lg flex-col">
-    <Sheet.Header class="shrink-0 px-6 pt-6">
-      <Sheet.Title>{formTitle}</Sheet.Title>
-      <Sheet.Description>
+  <Dialog.Content class="flex max-h-[90vh] max-w-lg flex-col gap-0 p-0">
+    <Dialog.Header class="shrink-0 px-6 pt-6 pb-2">
+      <Dialog.Title>{formTitle}</Dialog.Title>
+      <Dialog.Description>
         {isEditing
           ? "Perbarui informasi model baju."
           : "Tambah model baju baru ke katalog produksi."}
-      </Sheet.Description>
-    </Sheet.Header>
+      </Dialog.Description>
+    </Dialog.Header>
 
     <!-- Scrollable body -->
     <div class="flex-1 overflow-y-auto px-6 py-5">
@@ -661,12 +717,11 @@
           >
             Nama Model <span class="text-red-500">*</span>
           </label>
-          <input
+          <Input
             id="nama-model"
             type="text"
             placeholder="Contoh: Gamis Syar'i Polos, Tunik Batik..."
             bind:value={fNama}
-            class="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
           />
         </div>
 
@@ -723,12 +778,14 @@
         <div>
           <div class="mb-2 flex items-center justify-between">
             <p class="text-sm font-medium text-gray-700">Kebutuhan Kain</p>
-            <button
-              type="button"
+            <Button
+              variant="outline"
+              size="sm"
               onclick={tambahKain}
               disabled={stokKainList.length === 0 ||
-                fKainList.length >= stokKainList.length}
-              class="flex items-center gap-1 rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-600 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-40"
+                fKainList.length >= stokKainList.length ||
+                fUkuran.length === 0}
+              class="border-blue-200 bg-blue-50 text-blue-600 hover:bg-blue-100 hover:text-blue-700"
             >
               <svg
                 class="h-3 w-3"
@@ -745,7 +802,7 @@
                 />
               </svg>
               Tambah Kain
-            </button>
+            </Button>
           </div>
 
           {#if stokKainList.length === 0}
@@ -782,10 +839,11 @@
                     <p class="text-xs font-semibold text-gray-500">
                       Kain #{i + 1}
                     </p>
-                    <button
-                      type="button"
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
                       onclick={() => hapusKain(i)}
-                      class="text-gray-400 hover:text-red-500 transition"
+                      class="text-gray-400 hover:text-red-500"
                       aria-label="Hapus kain"
                     >
                       <svg
@@ -802,42 +860,53 @@
                           d="M6 18 18 6M6 6l12 12"
                         />
                       </svg>
-                    </button>
+                    </Button>
                   </div>
-                  <div class="grid grid-cols-[1fr_auto] gap-2">
-                    <!-- Pilih Kain -->
-                    <select
-                      value={entry.kain_id}
-                      onchange={(e) => onKainSelect(i, e.currentTarget.value)}
-                      class="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                    >
-                      <option value="">— Pilih kain —</option>
+                  <!-- Pilih Kain -->
+                  <Select.Root
+                    type="single"
+                    value={entry.kain_id || undefined}
+                    onValueChange={(val) => onKainSelect(i, val)}
+                  >
+                    <Select.Trigger class="w-full">
+                      <span
+                        class={entry.kain_id
+                          ? "text-foreground"
+                          : "text-muted-foreground"}
+                      >
+                        {entry.kain_id ? entry.nama_kain : "— Pilih kain —"}
+                      </span>
+                    </Select.Trigger>
+                    <Select.Content preventScroll={false}>
                       {#each availableKain(i) as kain}
-                        <option value={kain.id}>{kain.nama_kain}</option>
+                        <Select.Item value={kain.id}>{kain.nama_kain}</Select.Item>
                       {/each}
                       {#if entry.kain_id && !availableKain(i).find((k) => k.id === entry.kain_id)}
-                        <option value={entry.kain_id}>{entry.nama_kain}</option>
+                        <Select.Item value={entry.kain_id}>{entry.nama_kain}</Select.Item>
                       {/if}
-                    </select>
-                    <!-- Yard per pcs -->
-                    <div class="flex items-center">
-                      <input
-                        type="number"
-                        min="0.1"
-                        step="0.1"
-                        placeholder="yard"
-                        bind:value={fKainList[i].yard_per_pcs}
-                        class="w-24 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                      />
+                    </Select.Content>
+                  </Select.Root>
+                  <!-- Yard per ukuran -->
+                  {#if fUkuran.length > 0}
+                    <div
+                      class="mt-2 grid gap-1.5"
+                      style="grid-template-columns: repeat({fUkuran.length}, 1fr)"
+                    >
+                      {#each fUkuran as u}
+                        <div class="text-center">
+                          <p class="mb-1 text-[10px] font-semibold text-gray-500">{u}</p>
+                          <Input
+                            type="number"
+                            min="0.1"
+                            step="0.1"
+                            placeholder={entry.satuan}
+                            bind:value={fKainList[i].jumlah_per_ukuran[u]}
+                            class="h-8 px-1 text-center text-xs"
+                          />
+                        </div>
+                      {/each}
                     </div>
-                  </div>
-                  {#if entry.kain_id && Number(entry.yard_per_pcs) > 0}
-                    <p class="mt-1.5 text-[11px] text-gray-400">
-                      {entry.nama_kain}:
-                      <span class="font-medium text-gray-600"
-                        >{entry.yard_per_pcs} yard/pcs</span
-                      >
-                    </p>
+                    <p class="mt-1 text-[10px] text-gray-400">{entry.satuan}/pcs per ukuran</p>
                   {/if}
                 </div>
               {/each}
@@ -845,50 +914,66 @@
           {/if}
         </div>
 
-        <!-- Info: total kebutuhan kain per pcs -->
-        {#if fKainList.some((k) => k.kain_id && Number(k.yard_per_pcs) > 0)}
+        <!-- Info: kebutuhan kain per ukuran -->
+        {#if fKainList.some((k) => k.kain_id && fUkuran.some((u) => Number(k.jumlah_per_ukuran[u] ?? 0) > 0))}
+
           <div class="rounded-xl border border-blue-100 bg-blue-50 p-4">
             <p
               class="mb-2 text-xs font-semibold uppercase tracking-wider text-blue-600"
             >
-              Kebutuhan per 1 PCS
+              Kebutuhan Kain per Ukuran
             </p>
-            <div class="space-y-1">
-              {#each fKainList.filter((k) => k.kain_id && Number(k.yard_per_pcs) > 0) as k}
-                <div class="flex justify-between text-xs">
-                  <span class="text-blue-700">{k.nama_kain}</span>
-                  <span class="font-semibold text-blue-800"
-                    >{k.yard_per_pcs} yard</span
-                  >
-                </div>
-              {/each}
+            <!-- Header -->
+            <div
+              class="mb-1 grid text-[10px] font-semibold text-blue-400"
+              style="grid-template-columns: 1fr {fUkuran.map(() => '2.5rem').join(' ')} 2rem"
+            >
+              <span>Kain</span>
+              {#each fUkuran as u}<span class="text-right">{u}</span>{/each}
+              <span class="text-right">Sat.</span>
             </div>
+            {#each fKainList.filter((k) => k.kain_id) as k}
+              <div
+                class="grid text-xs"
+                style="grid-template-columns: 1fr {fUkuran.map(() => '2.5rem').join(' ')} 2rem"
+              >
+                <span class="truncate text-blue-700">{k.nama_kain}</span>
+                {#each fUkuran as u}
+                  <span class="text-right font-semibold text-blue-800">
+                    {Number(k.jumlah_per_ukuran[u] ?? 0) > 0
+                      ? `${k.jumlah_per_ukuran[u]}`
+                      : "—"}
+                  </span>
+                {/each}
+                <span class="text-right text-blue-400">{k.satuan}</span>
+              </div>
+            {/each}
           </div>
         {/if}
       </div>
     </div>
 
     <!-- Footer -->
-    <Sheet.Footer class="shrink-0 gap-2 border-t border-gray-100 px-6 py-4">
-      <Sheet.Close>
-        <button
-          onclick={resetForm}
-          class="flex-1 rounded-lg border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
-        >
-          Batal
-        </button>
-      </Sheet.Close>
-      <button
+    <Dialog.Footer class="shrink-0 gap-2 border-t border-gray-100 px-6 py-4">
+      <Button
+        variant="outline"
+        onclick={() => {
+          resetForm();
+          openForm = false;
+        }}
+        class="">Batal</Button
+      >
+      <Button
         onclick={submitForm}
         disabled={saving || !canSubmit}
-        class="flex-1 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+        class="flex-1"
       >
         {#if saving}
           {isEditing ? "Menyimpan..." : "Menambahkan..."}
         {:else}
           {isEditing ? "Simpan Perubahan" : "Tambah Model"}
         {/if}
-      </button>
-    </Sheet.Footer>
-  </Sheet.Content>
-</Sheet.Root>
+      </Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>

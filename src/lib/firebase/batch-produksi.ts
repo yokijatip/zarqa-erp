@@ -1,12 +1,12 @@
 // src/lib/firebase/batch-produksi.ts
 import {
   collection, doc, getDocs, getDoc,
-  addDoc, updateDoc, serverTimestamp,
+  addDoc, updateDoc, deleteDoc, serverTimestamp,
   query, orderBy, where, onSnapshot,
   type Unsubscribe,
 } from 'firebase/firestore';
 import { db } from './config';
-import { kurangiStokKain } from './stok-kain';
+import { kurangiStokKain, kembalikanStokKain } from './stok-kain';
 import type { BatchProduksi, BatchProduksiInput, StatusBatch, RiwayatProses } from '$lib/types';
 
 const COL = 'batch_produksi';
@@ -19,7 +19,7 @@ export async function createBatchProduksi(
 ): Promise<string> {
   // Kurangi stok semua jenis kain yang dibutuhkan
   for (const kain of data.kain_digunakan) {
-    await kurangiStokKain(kain.kain_id, kain.yard_dipakai);
+    await kurangiStokKain(kain.kain_id, kain.jumlah_dipakai);
   }
 
   const totalPcs = data.detail_ukuran.reduce((sum, u) => sum + u.jumlah_pcs, 0);
@@ -88,6 +88,30 @@ export async function getRiwayatBatch(batchId: string): Promise<RiwayatProses[]>
   );
   const snap = await getDocs(q);
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as RiwayatProses);
+}
+
+// Hapus batch produksi + kembalikan stok kain
+// Hanya boleh untuk batch yang belum COMPLETED
+export async function deleteBatchProduksi(batchId: string): Promise<void> {
+  const batch = await getBatchById(batchId);
+  if (!batch) throw new Error('Batch tidak ditemukan');
+  if (batch.status === 'COMPLETED') {
+    throw new Error('Batch yang sudah selesai tidak dapat dihapus');
+  }
+
+  // Kembalikan stok kain yang sudah dipotong saat order dibuat
+  for (const kain of batch.kain_digunakan) {
+    await kembalikanStokKain(kain.kain_id, kain.jumlah_dipakai);
+  }
+
+  // Hapus semua riwayat_proses di sub-koleksi
+  const riwayatSnap = await getDocs(collection(db, COL, batchId, 'riwayat_proses'));
+  for (const d of riwayatSnap.docs) {
+    await deleteDoc(doc(db, COL, batchId, 'riwayat_proses', d.id));
+  }
+
+  // Hapus dokumen batch
+  await deleteDoc(doc(db, COL, batchId));
 }
 
 // Real-time listener semua batch aktif (untuk monitor produksi)

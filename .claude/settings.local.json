@@ -5,7 +5,20 @@
       "Bash(gh pr:*)",
       "Bash(tail:*)",
       "Bash(ls:*)",
-      "Bash(npx shadcn-svelte@latest add dialog:*)"
+      "Bash(npx shadcn-svelte@latest add dialog:*)",
+      "Bash(cd \"C:\\\\Dev\\\\Web\\\\zarqa-erp-web\" && npx shadcn-svelte@latest add select --yes 2>&1)",
+      "Bash(cd \"C:\\\\Dev\\\\Web\\\\zarqa-erp-web\" && echo \"n\" | npx shadcn-svelte@latest add select 2>&1 || npx shadcn-svelte@latest add select --overwrite 2>&1)",
+      "Bash(cd \"C:\\\\Dev\\\\Web\\\\zarqa-erp-web\" && printf 'y\\\\nn\\\\n' | npx shadcn-svelte@latest add select 2>&1)",
+      "Bash(cd \"C:\\\\Dev\\\\Web\\\\zarqa-erp-web\" && printf 'y\\\\ny\\\\nn\\\\n' | npx shadcn-svelte@latest add select 2>&1)",
+      "Bash(cd \"C:\\\\Dev\\\\Web\\\\zarqa-erp-web\" && npx shadcn-svelte@latest add select --help 2>&1)",
+      "Bash(cd \"C:\\\\Dev\\\\Web\\\\zarqa-erp-web\" && npm run check 2>&1)",
+      "Bash(grep:*)",
+      "Bash(node:*)",
+      "Bash(cd /c/Dev/Web/zarqa-erp-web && npm run check 2>&1)",
+      "Bash(find C:\\\\Dev\\\\Web\\\\zarqa-erp-web\\\\src\\\\routes\\\\\\(dashboard\\)\\\\order-produksi:*)",
+      "Bash(find C:\\\\Dev\\\\Web\\\\zarqa-erp-web\\\\src\\\\routes\\\\\\(dashboard\\)\\\\monitor-produksi:*)",
+      "Bash(npx shadcn-svelte@latest add:*)",
+      "Bash(npm run check:*)"
     ]
   }
 }

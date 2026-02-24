@@ -13,7 +13,7 @@ export type UserRole =
 
 export interface UserProfile {
   uid: string;
-  nama: string;
+  name: string;
   email: string;
   role: UserRole;
   createdAt?: Timestamp;
@@ -24,7 +24,7 @@ export interface UserProfile {
 export interface StokKain {
   id: string;
   nama_kain: string;
-  satuan: 'yard';
+  satuan: 'yard' | 'kg';
   stok_tersedia: number;
   stok_terpakai: number;
   catatan?: string;
@@ -41,7 +41,8 @@ export type UkuranBaju = 'S' | 'M' | 'L' | 'XL' | 'XXL';
 export interface KebutuhanKain {
   kain_id: string;
   nama_kain: string;
-  yard_per_pcs: number;
+  satuan: 'yard' | 'kg';
+  jumlah_per_ukuran: Partial<Record<UkuranBaju, number>>;
 }
 
 export interface ModelBaju {
@@ -77,7 +78,8 @@ export interface DetailUkuran {
 export interface KainDigunakan {
   kain_id: string;
   nama_kain: string;
-  yard_dipakai: number;
+  satuan: 'yard' | 'kg';
+  jumlah_dipakai: number;
 }
 
 export interface BatchProduksi {

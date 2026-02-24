@@ -18,6 +18,34 @@
 
   let { items }: { items: NavItem[] } = $props();
 
+  // Track open/closed state per group independently of navigation
+  let openMap = $state<Record<string, boolean>>(
+    Object.fromEntries(
+      items
+        .filter((item) => item.items && item.items.length > 0)
+        .map((item) => [
+          item.url,
+          $page.url.pathname === item.url ||
+            item.items!.some((sub) => $page.url.pathname.startsWith(sub.url)),
+        ])
+    )
+  );
+
+  // Auto-open a group when navigating into it (parent page or any sub-item), but never auto-close
+  $effect(() => {
+    const pathname = $page.url.pathname;
+    for (const item of items) {
+      if (item.items && item.items.length > 0) {
+        if (
+          pathname === item.url ||
+          item.items.some((sub) => pathname.startsWith(sub.url))
+        ) {
+          openMap[item.url] = true;
+        }
+      }
+    }
+  });
+
   function isGroupActive(item: NavItem): boolean {
     if (!item.items || item.items.length === 0) {
       return $page.url.pathname === item.url;
@@ -38,9 +66,7 @@
           <Sidebar.MenuButton
             isActive={$page.url.pathname === item.url}
             tooltipContent={item.title}
-            class={$page.url.pathname === item.url
-              ? "bg-sidebar-primary text-sidebar-primary-foreground font-medium hover:bg-sidebar-primary hover:text-sidebar-primary-foreground"
-              : ""}
+            class={$page.url.pathname === item.url ? "font-medium" : ""}
           >
             {#snippet child({ props })}
               <a href={item.url} {...props}>
@@ -52,11 +78,11 @@
         </Sidebar.MenuItem>
       {:else}
         <!-- Menu dengan submenu -->
-        <Collapsible.Root open={isGroupActive(item)} class="group/collapsible">
+        <Collapsible.Root bind:open={openMap[item.url]} class="group/collapsible">
           <Sidebar.MenuItem>
             <div class="flex w-full items-center">
               <Sidebar.MenuButton
-                isActive={isGroupActive(item)}
+                isActive={$page.url.pathname === item.url}
                 tooltipContent={item.title}
                 class="flex-1 {isGroupActive(item) && !item.comingSoon
                   ? 'font-medium text-foreground'
@@ -85,7 +111,7 @@
                 {#snippet child({ props })}
                   <button
                     {...props}
-                    class="flex h-8 w-8 items-center justify-center rounded-md hover:bg-sidebar-accent shrink-0 text-muted-foreground"
+                    class="nav-slide flex h-8 w-8 items-center justify-center rounded-md shrink-0 text-muted-foreground"
                   >
                     <ChevronRightIcon
                       class="h-4 w-4 transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90"
@@ -102,9 +128,7 @@
                   <Sidebar.MenuSubItem>
                     <Sidebar.MenuSubButton
                       isActive={subActive}
-                      class={subActive
-                        ? "bg-sidebar-primary text-sidebar-primary-foreground font-medium hover:bg-sidebar-primary hover:text-sidebar-primary-foreground"
-                        : ""}
+                      class={subActive ? "font-medium" : ""}
                     >
                       {#snippet child({ props })}
                         <a

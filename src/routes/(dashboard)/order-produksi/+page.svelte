@@ -14,7 +14,10 @@
     UkuranBaju,
   } from "$lib/types";
   import { STATUS_LABEL } from "$lib/types";
-  import * as Sheet from "$lib/components/ui/sheet/index.js";
+  import * as Dialog from "$lib/components/ui/dialog";
+  import * as Select from "$lib/components/ui/select/index.js";
+  import * as Table from "$lib/components/ui/table";
+  import { Button } from "$lib/components/ui/button";
   import StatCard from "$lib/components/StatCard.svelte";
   import ClipboardListIcon from "@lucide/svelte/icons/clipboard-list";
   import LoaderIcon from "@lucide/svelte/icons/loader";
@@ -83,7 +86,16 @@
       ? selectedModel.kebutuhan_kain.map((k) => ({
           kain_id: k.kain_id,
           nama_kain: k.nama_kain,
-          yard_dipakai: parseFloat((k.yard_per_pcs * totalPcs).toFixed(2)),
+          satuan: k.satuan,
+          jumlah_dipakai: parseFloat(
+            detailUkuran
+              .reduce(
+                (s, du) =>
+                  s + ((k.jumlah_per_ukuran ?? {})[du.ukuran] ?? 0) * du.jumlah_pcs,
+                0,
+              )
+              .toFixed(2),
+          ),
         }))
       : [],
   );
@@ -95,6 +107,10 @@
   );
   let selesaiCount = $derived(
     batchList.filter((b) => b.status === "COMPLETED").length,
+  );
+
+  let filterStatusLabel = $derived(
+    STATUS_OPTIONS.find((o) => o.value === filterStatus)?.label ?? "Semua Status",
   );
 
   let filteredList = $derived.by(() => {
@@ -145,8 +161,8 @@
   async function loadModels() {
     try {
       modelList = await getModelBajuList(true);
-    } catch {
-      // silent — tidak kritis
+    } catch (e) {
+      console.error("[loadModels] Gagal memuat model baju:", e);
     }
   }
 
@@ -162,13 +178,14 @@
     if (!canSubmit || !$currentUser) return;
     saving = true;
     try {
+      const catatanTrimmed = fCatatan.trim();
       await createBatchProduksi(
         {
           model_id: fModelId,
           nama_model: selectedModel!.nama_model,
           detail_ukuran: detailUkuran,
           kain_digunakan: kainDibutuhkan,
-          catatan_admin: fCatatan.trim() || undefined,
+          ...(catatanTrimmed ? { catatan_admin: catatanTrimmed } : {}),
         },
         $currentUser.uid,
       );
@@ -191,7 +208,7 @@
 <!-- ── Toast ─────────────────────────────────────────────────────── -->
 {#if successMsg}
   <div
-    class="fixed bottom-5 right-5 z-50 flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 shadow-lg"
+    class="fixed right-5 top-5 z-9999 flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 shadow-lg"
   >
     <svg
       class="h-4 w-4 text-green-600"
@@ -212,10 +229,10 @@
 {/if}
 {#if errorMsg}
   <div
-    class="fixed bottom-5 right-5 z-50 flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 shadow-lg"
+    class="fixed right-5 top-5 z-9999 flex max-w-sm items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 shadow-lg"
   >
     <svg
-      class="h-4 w-4 text-red-500"
+      class="mt-0.5 h-4 w-4 shrink-0 text-red-500"
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"
@@ -241,12 +258,8 @@
     </p>
   </div>
   {#if $isAdmin}
-    <button
-      onclick={bukaBuat}
-      class="flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 active:scale-95"
-    >
+    <Button onclick={bukaBuat}>
       <svg
-        class="h-4 w-4"
         xmlns="http://www.w3.org/2000/svg"
         fill="none"
         viewBox="0 0 24 24"
@@ -260,7 +273,7 @@
         />
       </svg>
       Buat Order
-    </button>
+    </Button>
   {/if}
 </div>
 
@@ -320,25 +333,32 @@
       type="text"
       placeholder="Cari nama model..."
       bind:value={searchQuery}
-      class="w-full rounded-lg border border-gray-200 bg-white py-2 pl-9 pr-4 text-sm text-gray-700 placeholder:text-gray-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
+      class="w-full rounded-lg border border-gray-200 bg-white py-2 pl-9 pr-4 text-sm text-gray-700 placeholder:text-gray-400 focus:outline-none"
     />
   </div>
 
   <!-- Status Filter -->
-  <select
-    bind:value={filterStatus}
-    class="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
+  <Select.Root
+    type="single"
+    value={filterStatus}
+    onValueChange={(val) => {
+      filterStatus = (val ?? "SEMUA") as StatusBatch | "SEMUA";
+    }}
   >
-    {#each STATUS_OPTIONS as opt}
-      <option value={opt.value}>{opt.label}</option>
-    {/each}
-  </select>
+    <Select.Trigger class="w-44">
+      <span class={filterStatus !== "SEMUA" ? "text-foreground" : "text-muted-foreground"}>
+        {filterStatusLabel}
+      </span>
+    </Select.Trigger>
+    <Select.Content preventScroll={false}>
+      {#each STATUS_OPTIONS as opt}
+        <Select.Item value={opt.value}>{opt.label}</Select.Item>
+      {/each}
+    </Select.Content>
+  </Select.Root>
 
   <!-- Refresh -->
-  <button
-    onclick={load}
-    class="ml-auto flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 hover:bg-gray-50"
-  >
+  <Button variant="outline" size="sm" onclick={load} class="ml-auto">
     <svg
       class="h-3.5 w-3.5 {loading ? 'animate-spin' : ''}"
       xmlns="http://www.w3.org/2000/svg"
@@ -354,7 +374,7 @@
       />
     </svg>
     Refresh
-  </button>
+  </Button>
 </div>
 
 <!-- ── Table ──────────────────────────────────────────────────────── -->
@@ -399,15 +419,16 @@
         <p class="text-sm font-medium text-gray-500">
           Tidak ada order yang cocok dengan filter
         </p>
-        <button
+        <Button
+          variant="link"
+          size="sm"
           onclick={() => {
             searchQuery = "";
             filterStatus = "SEMUA";
           }}
-          class="text-xs text-blue-600 hover:underline"
         >
           Hapus filter
-        </button>
+        </Button>
       {:else}
         <p class="text-sm font-medium text-gray-500">
           Belum ada order produksi
@@ -416,97 +437,72 @@
           Mulai dengan membuat order produksi pertama
         </p>
         {#if $isAdmin}
-          <button
-            onclick={bukaBuat}
-            class="mt-1 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
-          >
-            + Buat Order
-          </button>
+          <Button onclick={bukaBuat} class="mt-1">+ Buat Order</Button>
         {/if}
       {/if}
     </div>
   {:else}
-    <!-- Table Header -->
-    <div
-      class="grid grid-cols-[2fr_1fr_2fr_1fr_auto] gap-4 border-b border-gray-100 bg-gray-50 px-5 py-3 text-xs font-semibold uppercase tracking-wider text-gray-400"
-    >
-      <span>Model</span>
-      <span class="text-center">Total PCS</span>
-      <span>Status</span>
-      <span>Tanggal</span>
-      <span></span>
-    </div>
+    <Table.Root>
+      <Table.Header>
+        <Table.Row class="bg-gray-50 hover:bg-gray-50">
+          <Table.Head>Model</Table.Head>
+          <Table.Head class="text-center">Total PCS</Table.Head>
+          <Table.Head>Status</Table.Head>
+          <Table.Head>Tanggal</Table.Head>
+          <Table.Head></Table.Head>
+        </Table.Row>
+      </Table.Header>
+      <Table.Body>
+        {#each filteredList as batch}
+          <Table.Row
+            class="cursor-pointer"
+            onclick={() => goto(`/order-produksi/${batch.id}`)}
+            tabindex={0}
+            onkeydown={(e) => e.key === "Enter" && goto(`/order-produksi/${batch.id}`)}
+          >
+            <!-- Model + ukuran pills -->
+            <Table.Cell>
+              <p class="text-sm font-medium text-gray-800">{batch.nama_model}</p>
+              <div class="mt-1 flex flex-wrap gap-1">
+                {#each batch.detail_ukuran as du}
+                  <span class="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-500">
+                    {du.ukuran}: {du.jumlah_pcs}
+                  </span>
+                {/each}
+              </div>
+            </Table.Cell>
 
-    <!-- Rows -->
-    {#each filteredList as batch}
-      <div
-        class="grid cursor-pointer grid-cols-[2fr_1fr_2fr_1fr_auto] items-center gap-4 border-b border-gray-50 px-5 py-4 transition last:border-0 hover:bg-gray-50/60"
-        onclick={() => goto(`/order-produksi/${batch.id}`)}
-        role="row"
-        tabindex="0"
-        onkeydown={(e) =>
-          e.key === "Enter" && goto(`/order-produksi/${batch.id}`)}
-      >
-        <!-- Model + ukuran pills -->
-        <div>
-          <p class="text-sm font-medium text-gray-800">{batch.nama_model}</p>
-          <div class="mt-1 flex flex-wrap gap-1">
-            {#each batch.detail_ukuran as du}
-              <span
-                class="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-500"
-              >
-                {du.ukuran}: {du.jumlah_pcs}
+            <!-- Total PCS -->
+            <Table.Cell class="text-center">
+              <p class="text-sm font-semibold text-gray-800">{batch.total_pcs}</p>
+              <p class="text-xs text-gray-400">pcs</p>
+            </Table.Cell>
+
+            <!-- Status -->
+            <Table.Cell>
+              <span class="inline-flex rounded-full px-2.5 py-1 text-xs font-semibold {STATUS_STYLE[batch.status]}">
+                {STATUS_LABEL[batch.status]}
               </span>
-            {/each}
-          </div>
-        </div>
+            </Table.Cell>
 
-        <!-- Total PCS -->
-        <div class="text-center">
-          <p class="text-sm font-semibold text-gray-800">{batch.total_pcs}</p>
-          <p class="text-xs text-gray-400">pcs</p>
-        </div>
+            <!-- Tanggal -->
+            <Table.Cell>
+              <p class="text-xs text-gray-600">{formatDate(batch.createdAt)}</p>
+            </Table.Cell>
 
-        <!-- Status -->
-        <div>
-          <span
-            class="inline-flex rounded-full px-2.5 py-1 text-xs font-semibold {STATUS_STYLE[
-              batch.status
-            ]}"
-          >
-            {STATUS_LABEL[batch.status]}
-          </span>
-        </div>
-
-        <!-- Tanggal -->
-        <div>
-          <p class="text-xs text-gray-600">{formatDate(batch.createdAt)}</p>
-        </div>
-
-        <!-- Aksi -->
-        <div class="flex shrink-0 items-center">
-          <span
-            class="flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:bg-gray-50"
-          >
-            Detail
-            <svg
-              class="h-3 w-3"
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke-width="2"
-              stroke="currentColor"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                d="m8.25 4.5 7.5 7.5-7.5 7.5"
-              />
-            </svg>
-          </span>
-        </div>
-      </div>
-    {/each}
+            <!-- Aksi -->
+            <Table.Cell class="text-right">
+              <Button variant="outline" size="sm">
+                Detail
+                <svg class="h-3 w-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+                </svg>
+              </Button>
+            </Table.Cell>
+          </Table.Row>
+        {/each}
+      </Table.Body>
+    </Table.Root>
 
     <!-- Footer -->
     <div class="border-t border-gray-100 bg-gray-50 px-5 py-3">
@@ -518,14 +514,14 @@
 </div>
 
 <!-- ── Sheet: Buat Order ──────────────────────────────────────────── -->
-<Sheet.Root bind:open={openBuat}>
-  <Sheet.Content side="right" class="flex w-full max-w-md flex-col">
-    <Sheet.Header class="shrink-0 px-6 pt-6">
-      <Sheet.Title>Buat Order Produksi</Sheet.Title>
-      <Sheet.Description
-        >Pilih model dan tentukan jumlah pcs per ukuran.</Sheet.Description
-      >
-    </Sheet.Header>
+<Dialog.Root bind:open={openBuat}>
+  <Dialog.Content class="flex max-h-[90vh] max-w-md flex-col gap-0 p-0">
+    <Dialog.Header class="shrink-0 px-6 pt-6 pb-2">
+      <Dialog.Title>Buat Order Produksi</Dialog.Title>
+      <Dialog.Description>
+        Pilih model dan tentukan jumlah pcs per ukuran.
+      </Dialog.Description>
+    </Dialog.Header>
 
     <div class="flex-1 overflow-y-auto px-6 py-5">
       <div class="space-y-5">
@@ -542,20 +538,27 @@
               Belum ada model aktif. Tambahkan model baju terlebih dahulu.
             </p>
           {:else}
-            <select
-              id="model-select"
-              value={fModelId}
-              onchange={(e) => {
-                fModelId = e.currentTarget.value;
+            <Select.Root
+              type="single"
+              value={fModelId || undefined}
+              onValueChange={(val) => {
+                fModelId = val ?? "";
                 fJumlah = {};
               }}
-              class="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-800 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
             >
-              <option value="">— Pilih model —</option>
-              {#each modelList as model}
-                <option value={model.id}>{model.nama_model}</option>
-              {/each}
-            </select>
+              <Select.Trigger class="w-full">
+                <span class={fModelId ? "text-foreground" : "text-muted-foreground"}>
+                  {fModelId
+                    ? (modelList.find((m) => m.id === fModelId)?.nama_model ?? "— Pilih model —")
+                    : "— Pilih model —"}
+                </span>
+              </Select.Trigger>
+              <Select.Content preventScroll={false}>
+                {#each modelList as model}
+                  <Select.Item value={model.id}>{model.nama_model}</Select.Item>
+                {/each}
+              </Select.Content>
+            </Select.Root>
           {/if}
         </div>
 
@@ -565,13 +568,9 @@
             <p class="mb-2 text-sm font-medium text-gray-700">
               Jumlah Per Ukuran <span class="text-red-500">*</span>
             </p>
-            <div
-              class="grid gap-2"
-              style="grid-template-columns: repeat({selectedModel
-                .ukuran_tersedia.length}, minmax(0, 1fr))"
-            >
-              {#each UKURAN_ORDER.filter( (u) => selectedModel!.ukuran_tersedia.includes(u), ) as ukuran}
-                <div class="text-center">
+            <div class="flex flex-wrap gap-2">
+              {#each UKURAN_ORDER.filter((u) => selectedModel!.ukuran_tersedia.includes(u)) as ukuran}
+                <div class="w-16 text-center">
                   <label
                     class="mb-1 block text-xs font-semibold text-gray-600"
                     for="ukuran-{ukuran}"
@@ -584,13 +583,16 @@
                     min="0"
                     placeholder="0"
                     bind:value={fJumlah[ukuran]}
-                    class="w-full rounded-lg border border-gray-200 px-2 py-2 text-center text-sm text-gray-800 placeholder:text-gray-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    class="border-input bg-background placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-9 w-full rounded-md border px-3 py-1 text-center text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:ring-[3px]"
                   />
                 </div>
               {/each}
             </div>
+            <p class="mt-1.5 text-xs text-gray-400">
+              Kosongkan atau isi 0 untuk ukuran yang tidak diorder.
+            </p>
             {#if totalPcs > 0}
-              <p class="mt-2 text-xs text-gray-500">
+              <p class="mt-1 text-xs text-gray-500">
                 Total: <span class="font-semibold text-gray-800"
                   >{totalPcs} pcs</span
                 >
@@ -611,7 +613,7 @@
                   <div class="flex items-center justify-between text-sm">
                     <span class="text-gray-700">{kain.nama_kain}</span>
                     <span class="font-semibold text-amber-800"
-                      >{kain.yard_dipakai} yard</span
+                      >{kain.jumlah_dipakai} {kain.satuan}</span
                     >
                   </div>
                 {/each}
@@ -638,27 +640,23 @@
             rows="3"
             placeholder="Catatan khusus untuk order ini..."
             bind:value={fCatatan}
-            class="w-full resize-none rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
+            class="w-full resize-none rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none"
           ></textarea>
         </div>
       </div>
     </div>
 
-    <Sheet.Footer class="shrink-0 gap-2 border-t border-gray-100 px-6 py-4">
-      <Sheet.Close>
-        <button
-          class="flex-1 rounded-lg border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
-        >
-          Batal
-        </button>
-      </Sheet.Close>
-      <button
+    <Dialog.Footer class="shrink-0 gap-2 border-t border-gray-100 px-6 py-4">
+      <Button variant="outline" class="flex-1" onclick={() => (openBuat = false)}>
+        Batal
+      </Button>
+      <Button
         onclick={submitBuat}
         disabled={saving || !canSubmit}
-        class="flex-1 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+        class="flex-1"
       >
         {saving ? "Membuat..." : "Buat Order"}
-      </button>
-    </Sheet.Footer>
-  </Sheet.Content>
-</Sheet.Root>
+      </Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>

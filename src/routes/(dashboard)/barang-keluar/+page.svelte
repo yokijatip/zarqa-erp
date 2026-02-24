@@ -8,6 +8,10 @@
   import { currentUser, userRole } from "$lib/stores/auth.store";
   import type { StokBarangJadi, BarangKeluar, UkuranBaju } from "$lib/types";
   import * as Sheet from "$lib/components/ui/sheet/index.js";
+  import * as Select from "$lib/components/ui/select/index.js";
+  import * as Table from "$lib/components/ui/table";
+  import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
   import StatCard from "$lib/components/StatCard.svelte";
   import TruckIcon from "@lucide/svelte/icons/truck";
   import PackageCheckIcon from "@lucide/svelte/icons/package-check";
@@ -203,10 +207,10 @@
 <!-- ── Toast ─────────────────────────────────────────────────────── -->
 {#if successMsg}
   <div
-    class="fixed bottom-5 right-5 z-50 flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 shadow-lg"
+    class="fixed right-5 top-5 z-9999 flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 shadow-lg"
   >
     <svg
-      class="h-4 w-4 text-green-600"
+      class="h-4 w-4 shrink-0 text-green-600"
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"
@@ -224,10 +228,10 @@
 {/if}
 {#if errorMsg}
   <div
-    class="fixed bottom-5 right-5 z-50 flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 shadow-lg"
+    class="fixed right-5 top-5 z-9999 flex max-w-sm items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 shadow-lg"
   >
     <svg
-      class="h-4 w-4 text-red-500"
+      class="mt-0.5 h-4 w-4 shrink-0 text-red-500"
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"
@@ -253,10 +257,7 @@
     </p>
   </div>
   <div class="flex items-center gap-2">
-    <button
-      onclick={load}
-      class="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 hover:bg-gray-50"
-    >
+    <Button variant="outline" size="sm" onclick={load}>
       <svg
         class="h-3.5 w-3.5 {loading ? 'animate-spin' : ''}"
         xmlns="http://www.w3.org/2000/svg"
@@ -272,12 +273,9 @@
         />
       </svg>
       Refresh
-    </button>
+    </Button>
     {#if canCatat}
-      <button
-        onclick={bukaCatat}
-        class="flex items-center gap-1.5 rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-green-700 active:scale-95"
-      >
+      <Button onclick={bukaCatat}>
         <svg
           class="h-4 w-4"
           xmlns="http://www.w3.org/2000/svg"
@@ -293,7 +291,7 @@
           />
         </svg>
         Catat Keluar
-      </button>
+      </Button>
     {/if}
   </div>
 </div>
@@ -403,10 +401,9 @@
         <p class="text-sm font-medium text-gray-500">
           Tidak ada hasil untuk "{searchQuery}"
         </p>
-        <button
-          onclick={() => (searchQuery = "")}
-          class="text-xs text-green-600 hover:underline">Hapus pencarian</button
-        >
+        <Button variant="link" size="sm" onclick={() => (searchQuery = "")}>
+          Hapus pencarian
+        </Button>
       {:else}
         <p class="text-sm font-medium text-gray-500">
           Belum ada catatan barang keluar
@@ -415,62 +412,56 @@
           Mulai dengan mencatat pengiriman pertama
         </p>
         {#if canCatat}
-          <button
-            onclick={bukaCatat}
-            class="mt-1 rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-green-700"
-          >
-            + Catat Keluar
-          </button>
+          <Button onclick={bukaCatat} class="mt-1">+ Catat Keluar</Button>
         {/if}
       {/if}
     </div>
   {:else}
-    <!-- Table header -->
-    <div
-      class="grid grid-cols-[1fr_1fr_2fr_1fr_1fr] gap-4 border-b border-gray-100 bg-gray-50 px-5 py-3 text-xs font-semibold uppercase tracking-wider text-gray-400"
-    >
-      <span>Tanggal</span>
-      <span>Model</span>
-      <span>Detail Ukuran</span>
-      <span class="text-center">Total PCS</span>
-      <span>Tujuan</span>
-    </div>
-
-    <!-- Rows -->
-    {#each filteredRiwayat as r}
-      <div
-        class="grid grid-cols-[1fr_1fr_2fr_1fr_1fr] items-start gap-4 border-b border-gray-50 px-5 py-4 last:border-0 hover:bg-gray-50/50 transition"
-      >
-        <div>
-          <p class="text-sm text-gray-700">{formatDate(r.tanggal_keluar)}</p>
-          <p class="text-xs text-gray-400">
-            {formatDateTime(r.tanggal_keluar).split(",")[1]?.trim() ?? ""}
-          </p>
-        </div>
-        <div>
-          <p class="text-sm font-medium text-gray-800">{r.nama_model}</p>
-        </div>
-        <div class="flex flex-wrap gap-1">
-          {#each r.detail_keluar as d}
-            <span
-              class="rounded bg-green-100 px-1.5 py-0.5 text-[11px] font-medium text-green-700"
-            >
-              {d.ukuran}: {d.jumlah_pcs}
-            </span>
-          {/each}
-        </div>
-        <div class="text-center">
-          <p class="text-sm font-semibold text-gray-800">{r.total_pcs}</p>
-          <p class="text-xs text-gray-400">pcs</p>
-        </div>
-        <div>
-          <p class="text-sm font-medium text-gray-700">{r.tujuan}</p>
-          {#if r.keterangan}
-            <p class="mt-0.5 truncate text-xs text-gray-400">{r.keterangan}</p>
-          {/if}
-        </div>
-      </div>
-    {/each}
+    <Table.Root>
+      <Table.Header>
+        <Table.Row class="bg-gray-50 hover:bg-gray-50">
+          <Table.Head>Tanggal</Table.Head>
+          <Table.Head>Model</Table.Head>
+          <Table.Head>Detail Ukuran</Table.Head>
+          <Table.Head class="text-center">Total PCS</Table.Head>
+          <Table.Head>Tujuan</Table.Head>
+        </Table.Row>
+      </Table.Header>
+      <Table.Body>
+        {#each filteredRiwayat as r}
+          <Table.Row>
+            <Table.Cell>
+              <p class="text-sm text-gray-700">{formatDate(r.tanggal_keluar)}</p>
+              <p class="text-xs text-gray-400">
+                {formatDateTime(r.tanggal_keluar).split(",")[1]?.trim() ?? ""}
+              </p>
+            </Table.Cell>
+            <Table.Cell>
+              <p class="text-sm font-medium text-gray-800">{r.nama_model}</p>
+            </Table.Cell>
+            <Table.Cell>
+              <div class="flex flex-wrap gap-1">
+                {#each r.detail_keluar as d}
+                  <span class="rounded bg-green-100 px-1.5 py-0.5 text-[11px] font-medium text-green-700">
+                    {d.ukuran}: {d.jumlah_pcs}
+                  </span>
+                {/each}
+              </div>
+            </Table.Cell>
+            <Table.Cell class="text-center">
+              <p class="text-sm font-semibold text-gray-800">{r.total_pcs}</p>
+              <p class="text-xs text-gray-400">pcs</p>
+            </Table.Cell>
+            <Table.Cell>
+              <p class="text-sm font-medium text-gray-700">{r.tujuan}</p>
+              {#if r.keterangan}
+                <p class="mt-0.5 truncate text-xs text-gray-400">{r.keterangan}</p>
+              {/if}
+            </Table.Cell>
+          </Table.Row>
+        {/each}
+      </Table.Body>
+    </Table.Root>
 
     <!-- Footer -->
     <div
@@ -523,20 +514,27 @@
               </a>
             </div>
           {:else}
-            <select
-              id="model-keluar"
-              value={fModelId}
-              onchange={(e) => {
-                fModelId = e.currentTarget.value;
+            <Select.Root
+              type="single"
+              value={fModelId || undefined}
+              onValueChange={(val) => {
+                fModelId = val ?? "";
                 fJumlah = {};
               }}
-              class="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-800 focus:border-green-400 focus:outline-none focus:ring-2 focus:ring-green-100"
             >
-              <option value="">— Pilih model —</option>
-              {#each modelDenganStok as m}
-                <option value={m.model_id}>{m.nama_model}</option>
-              {/each}
-            </select>
+              <Select.Trigger class="w-full">
+                <span class={fModelId ? "text-foreground" : "text-muted-foreground"}>
+                  {fModelId
+                    ? (modelDenganStok.find((m) => m.model_id === fModelId)?.nama_model ?? "— Pilih model —")
+                    : "— Pilih model —"}
+                </span>
+              </Select.Trigger>
+              <Select.Content preventScroll={false}>
+                {#each modelDenganStok as m}
+                  <Select.Item value={m.model_id}>{m.nama_model}</Select.Item>
+                {/each}
+              </Select.Content>
+            </Select.Root>
           {/if}
         </div>
 
@@ -572,15 +570,13 @@
                       <p class="text-xs text-red-600">Melebihi stok!</p>
                     {/if}
                   </div>
-                  <input
+                  <Input
                     type="number"
                     min="0"
                     max={stokItem.stok_tersedia}
                     placeholder="0"
                     bind:value={fJumlah[ukuran]}
-                    class="w-20 rounded-lg border {melebihi
-                      ? 'border-red-300'
-                      : 'border-gray-200'} bg-white px-2 py-1.5 text-center text-sm text-gray-800 focus:border-green-400 focus:outline-none focus:ring-2 focus:ring-green-100"
+                    class="w-20 text-center {melebihi ? 'border-red-300' : ''}"
                   />
                 </div>
               {/each}
@@ -603,12 +599,11 @@
           >
             Tujuan Pengiriman <span class="text-red-500">*</span>
           </label>
-          <input
+          <Input
             id="tujuan-keluar"
             type="text"
             placeholder="Contoh: Toko Anisa, Reseller Jakarta..."
             bind:value={fTujuan}
-            class="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray-400 focus:border-green-400 focus:outline-none focus:ring-2 focus:ring-green-100"
           />
         </div>
 
@@ -634,20 +629,16 @@
     </div>
 
     <Sheet.Footer class="shrink-0 gap-2 border-t border-gray-100 px-6 py-4">
-      <Sheet.Close>
-        <button
-          class="flex-1 rounded-lg border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
-        >
-          Batal
-        </button>
-      </Sheet.Close>
-      <button
+      <Button variant="outline" class="flex-1" onclick={() => (openCatat = false)}>
+        Batal
+      </Button>
+      <Button
         onclick={submitCatat}
         disabled={saving || !canSubmit || adaYangMelebihi}
-        class="flex-1 rounded-lg bg-green-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
+        class="flex-1"
       >
         {saving ? "Menyimpan..." : "Catat Keluar"}
-      </button>
+      </Button>
     </Sheet.Footer>
   </Sheet.Content>
 </Sheet.Root>

@@ -320,7 +320,7 @@
       </p>
       <p class="mt-0.5 text-xs text-amber-700">
         {kainKritis
-          .map((k) => `${k.nama_kain} (${k.stok_tersedia} yard)`)
+          .map((k) => `${k.nama_kain} (${k.stok_tersedia} ${k.satuan})`)
           .join(" · ")}
       </p>
     </div>
@@ -755,7 +755,7 @@
                   ? 'font-semibold text-amber-600'
                   : 'text-gray-500'}"
               >
-                {kain.stok_tersedia.toLocaleString("id-ID")} yard{kritis
+                {kain.stok_tersedia.toLocaleString("id-ID")} {kain.satuan}{kritis
                   ? " ⚠"
                   : ""}
               </span>

@@ -121,7 +121,7 @@
   }: ComponentProps<typeof Sidebar.Root> = $props();
 
   const user = $derived({
-    name: $currentUser?.nama ?? "Admin",
+    name: $currentUser?.name ?? "Admin",
     email: $currentUser?.email ?? "",
     avatar: "",
   });

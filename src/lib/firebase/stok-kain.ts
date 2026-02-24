@@ -35,13 +35,14 @@ export async function addStokKain(data: StokKainInput): Promise<string> {
   return ref.id;
 }
 
-// Restock: tambah jumlah yard ke stok yang ada
-export async function restockKain(id: string, tambahYard: number, catatan?: string): Promise<void> {
+// Restock: tambah jumlah ke stok yang ada
+export async function restockKain(id: string, tambahJumlah: number, catatan?: string): Promise<void> {
   const kain = await getStokKainById(id);
   if (!kain) throw new Error('Kain tidak ditemukan');
+  const finalCatatan = catatan ?? kain.catatan;
   await updateDoc(doc(db, COL, id), {
-    stok_tersedia: kain.stok_tersedia + tambahYard,
-    catatan: catatan ?? kain.catatan,
+    stok_tersedia: kain.stok_tersedia + tambahJumlah,
+    ...(finalCatatan !== undefined ? { catatan: finalCatatan } : {}),
     updatedAt: serverTimestamp(),
   });
 }
@@ -56,13 +57,36 @@ export async function updateStokKain(id: string, data: { nama_kain: string; cata
 }
 
 // Kurangi stok (dipanggil saat order produksi dibuat)
-export async function kurangiStokKain(id: string, yard: number): Promise<void> {
+export async function kurangiStokKain(id: string, jumlah: number): Promise<void> {
   const kain = await getStokKainById(id);
   if (!kain) throw new Error('Kain tidak ditemukan');
-  if (kain.stok_tersedia < yard) throw new Error(`Stok kain "${kain.nama_kain}" tidak mencukupi`);
+  if (kain.stok_tersedia < jumlah) throw new Error(`Stok kain "${kain.nama_kain}" tidak mencukupi`);
   await updateDoc(doc(db, COL, id), {
-    stok_tersedia: kain.stok_tersedia - yard,
-    stok_terpakai: kain.stok_terpakai + yard,
+    stok_tersedia: kain.stok_tersedia - jumlah,
+    stok_terpakai: kain.stok_terpakai + jumlah,
+    updatedAt: serverTimestamp(),
+  });
+}
+
+// Kembalikan stok kain (dipanggil saat order produksi dibatalkan/dihapus)
+export async function kembalikanStokKain(id: string, jumlah: number): Promise<void> {
+  const kain = await getStokKainById(id);
+  if (!kain) return; // kain mungkin sudah dihapus, abaikan
+  await updateDoc(doc(db, COL, id), {
+    stok_tersedia: kain.stok_tersedia + jumlah,
+    stok_terpakai: Math.max(0, kain.stok_terpakai - jumlah),
+    updatedAt: serverTimestamp(),
+  });
+}
+
+// Kurangi stok secara manual (koreksi admin)
+// Hanya mengurangi stok_tersedia, tidak menambah stok_terpakai
+export async function kurangiStokManual(id: string, jumlah: number): Promise<void> {
+  const kain = await getStokKainById(id);
+  if (!kain) throw new Error('Kain tidak ditemukan');
+  if (kain.stok_tersedia < jumlah) throw new Error(`Stok kain "${kain.nama_kain}" tidak mencukupi (tersedia: ${kain.stok_tersedia})`);
+  await updateDoc(doc(db, COL, id), {
+    stok_tersedia: kain.stok_tersedia - jumlah,
     updatedAt: serverTimestamp(),
   });
 }

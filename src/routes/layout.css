@@ -33,7 +33,7 @@
   --sidebar-foreground: oklch(0.129 0.042 264.695);
   --sidebar-primary: oklch(0.208 0.042 265.755);
   --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-accent: oklch(0.968 0.007 247.896);
+  --sidebar-accent: oklch(0.908 0.013 255.508);
   --sidebar-accent-foreground: oklch(0.208 0.042 265.755);
   --sidebar-border: oklch(0.929 0.013 255.508);
   --sidebar-ring: oklch(0.704 0.04 256.788);
@@ -118,4 +118,25 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* Sidebar nav: slide-in background from left on hover */
+.nav-slide {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+.nav-slide::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background-color: var(--sidebar-accent);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: -1;
+}
+.nav-slide:hover::before {
+  transform: scaleX(1);
 }

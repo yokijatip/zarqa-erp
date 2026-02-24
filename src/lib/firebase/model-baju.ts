@@ -47,3 +47,8 @@ export async function updateModelBaju(id: string, data: Partial<ModelBajuInput>)
 export async function nonaktifkanModel(id: string): Promise<void> {
   await updateDoc(doc(db, COL, id), { aktif: false });
 }
+
+// Aktifkan kembali model baju
+export async function aktifkanModel(id: string): Promise<void> {
+  await updateDoc(doc(db, COL, id), { aktif: true });
+}

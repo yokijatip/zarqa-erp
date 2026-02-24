@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { goto } from "$app/navigation";
   import { getStokBarangJadi } from "$lib/firebase/barang-jadi";
   import type { StokBarangJadi, UkuranBaju } from "$lib/types";
+  import { Button } from "$lib/components/ui/button";
   import StatCard from "$lib/components/StatCard.svelte";
   import ShirtIcon from "@lucide/svelte/icons/shirt";
   import PackageIcon from "@lucide/svelte/icons/package";
@@ -100,10 +102,10 @@
 <!-- ── Error Toast ─────────────────────────────────────────────────── -->
 {#if errorMsg}
   <div
-    class="fixed bottom-5 right-5 z-50 flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 shadow-lg"
+    class="fixed right-5 top-5 z-9999 flex max-w-sm items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 shadow-lg"
   >
     <svg
-      class="h-4 w-4 text-red-500"
+      class="mt-0.5 h-4 w-4 shrink-0 text-red-500"
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"
@@ -137,10 +139,7 @@
         })}
       </span>
     {/if}
-    <button
-      onclick={load}
-      class="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 hover:bg-gray-50"
-    >
+    <Button variant="outline" size="sm" onclick={load}>
       <svg
         class="h-3.5 w-3.5 {loading ? 'animate-spin' : ''}"
         xmlns="http://www.w3.org/2000/svg"
@@ -156,7 +155,7 @@
         />
       </svg>
       Refresh
-    </button>
+    </Button>
   </div>
 </div>
 
@@ -225,12 +224,9 @@
     />
   </div>
   {#if searchQuery}
-    <button
-      onclick={() => (searchQuery = "")}
-      class="text-xs text-gray-400 hover:text-gray-600"
-    >
+    <Button variant="link" size="sm" onclick={() => (searchQuery = "")}>
       Hapus
-    </button>
+    </Button>
   {/if}
 </div>
 
@@ -285,10 +281,9 @@
       <p class="text-sm font-medium text-gray-500">
         Model "{searchQuery}" tidak ditemukan
       </p>
-      <button
-        onclick={() => (searchQuery = "")}
-        class="text-xs text-teal-600 hover:underline">Hapus pencarian</button
-      >
+      <Button variant="link" size="sm" onclick={() => (searchQuery = "")}>
+        Hapus pencarian
+      </Button>
     {:else}
       <p class="text-sm font-medium text-gray-500">
         Belum ada stok barang jadi
@@ -296,12 +291,9 @@
       <p class="text-xs text-gray-400">
         Stok akan terisi otomatis saat batch produksi selesai
       </p>
-      <a
-        href="/order-produksi"
-        class="mt-1 rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-      >
+      <Button variant="outline" class="mt-1" onclick={() => goto('/order-produksi')}>
         Lihat Order Produksi →
-      </a>
+      </Button>
     {/if}
   </div>
 {:else}

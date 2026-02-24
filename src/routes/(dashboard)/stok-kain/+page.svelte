@@ -5,11 +5,13 @@
     addStokKain,
     restockKain,
     updateStokKain,
+    kurangiStokManual,
   } from "$lib/firebase/stok-kain";
   import type { StokKain } from "$lib/types";
-  import * as Sheet from "$lib/components/ui/sheet/index.js";
   import * as Dialog from "$lib/components/ui/dialog";
+  import * as Table from "$lib/components/ui/table";
   import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
   import StatCard from "$lib/components/StatCard.svelte";
   import LayersIcon from "@lucide/svelte/icons/layers";
   import BoxIcon from "@lucide/svelte/icons/box";
@@ -29,25 +31,33 @@
   // Sheet state
   let openTambah = $state(false);
   let openRestock = $state(false);
+  let openKurangi = $state(false);
   let openEdit = $state(false);
   let selectedKain = $state<StokKain | null>(null);
+  let kurangiKain = $state<StokKain | null>(null);
   let editingKain = $state<StokKain | null>(null);
 
   // Form: tambah kain
   let fNama = $state("");
+  let fSatuan = $state<'yard' | 'kg'>('yard');
   let fStok = $state<number | "">("");
   let fCatatan = $state("");
 
   // Form: restock
-  let rYard = $state<number | "">("");
+  let rJumlah = $state<number | "">("");
   let rCatatan = $state("");
+
+  // Form: kurangi stok
+  let kJumlah = $state<number | "">("");
+  let kCatatan = $state("");
 
   // Form: edit kain
   let eNama = $state("");
   let eCatatan = $state("");
 
   // ── Derived ────────────────────────────────────────────────────────
-  let totalYard = $derived(stokList.reduce((s, k) => s + k.stok_tersedia, 0));
+  let totalYard = $derived(stokList.filter((k) => k.satuan === 'yard').reduce((s, k) => s + k.stok_tersedia, 0));
+  let totalKg = $derived(stokList.filter((k) => k.satuan === 'kg').reduce((s, k) => s + k.stok_tersedia, 0));
   let totalJenis = $derived(stokList.length);
   let kritisCount = $derived(
     stokList.filter((k) => k.stok_tersedia < 100).length,
@@ -124,7 +134,7 @@
     try {
       await addStokKain({
         nama_kain: fNama.trim(),
-        satuan: "yard",
+        satuan: fSatuan,
         stok_tersedia: Number(fStok),
         ...(fCatatan.trim() ? { catatan: fCatatan.trim() } : {}),
       });
@@ -132,6 +142,7 @@
       await load();
       openTambah = false;
       fNama = "";
+      fSatuan = "yard";
       fStok = "";
       fCatatan = "";
       showSuccess(`Kain "${namaKain}" berhasil ditambahkan.`);
@@ -143,21 +154,23 @@
   }
 
   async function submitRestock() {
-    if (!selectedKain || rYard === "" || Number(rYard) <= 0) return;
+    if (!selectedKain || rJumlah === "" || Number(rJumlah) <= 0) return;
     saving = true;
     try {
       await restockKain(
         selectedKain.id,
-        Number(rYard),
+        Number(rJumlah),
         rCatatan.trim() || undefined,
       );
       const nama = selectedKain.nama_kain;
+      const satuan = selectedKain.satuan;
+      const jumlah = Number(rJumlah);
       await load();
       openRestock = false;
       selectedKain = null;
-      rYard = "";
+      rJumlah = "";
       rCatatan = "";
-      showSuccess(`Restock ${nama} sebesar ${rYard} yard berhasil.`);
+      showSuccess(`Restock ${nama} sebesar ${jumlah} ${satuan} berhasil.`);
     } catch {
       showError("Gagal melakukan restock.");
     } finally {
@@ -174,9 +187,37 @@
 
   function bukaRestock(kain: StokKain) {
     selectedKain = kain;
-    rYard = "";
+    rJumlah = "";
     rCatatan = "";
     openRestock = true;
+  }
+
+  function bukaKurangi(kain: StokKain) {
+    kurangiKain = kain;
+    kJumlah = "";
+    kCatatan = "";
+    openKurangi = true;
+  }
+
+  async function submitKurangi() {
+    if (!kurangiKain || kJumlah === "" || Number(kJumlah) <= 0) return;
+    saving = true;
+    try {
+      await kurangiStokManual(kurangiKain.id, Number(kJumlah));
+      const nama = kurangiKain.nama_kain;
+      const satuan = kurangiKain.satuan;
+      const jumlah = Number(kJumlah);
+      await load();
+      openKurangi = false;
+      kurangiKain = null;
+      kJumlah = "";
+      kCatatan = "";
+      showSuccess(`Stok ${nama} dikurangi ${jumlah} ${satuan}.`);
+    } catch (e: unknown) {
+      showError(e instanceof Error ? e.message : "Gagal mengurangi stok.");
+    } finally {
+      saving = false;
+    }
   }
 
   function bukaEdit(kain: StokKain) {
@@ -214,10 +255,10 @@
 <!-- ── Toast Notification ──────────────────────────────────────── -->
 {#if successMsg}
   <div
-    class="fixed bottom-5 right-5 z-50 flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 shadow-lg"
+    class="fixed right-5 top-5 z-9999 flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 shadow-lg"
   >
     <svg
-      class="h-4 w-4 text-green-600"
+      class="h-4 w-4 shrink-0 text-green-600"
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"
@@ -235,10 +276,10 @@
 {/if}
 {#if errorMsg}
   <div
-    class="fixed bottom-5 right-5 z-50 flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 shadow-lg"
+    class="fixed right-5 top-5 z-9999 flex max-w-sm items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 shadow-lg"
   >
     <svg
-      class="h-4 w-4 text-red-500"
+      class="mt-0.5 h-4 w-4 shrink-0 text-red-500"
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"
@@ -282,7 +323,7 @@
 </div>
 
 <!-- ── Stats Row ──────────────────────────────────────────────── -->
-<div class="mb-5 grid grid-cols-3 gap-4">
+<div class="mb-5 grid grid-cols-2 gap-4 lg:grid-cols-4">
   <StatCard
     title="Total Jenis"
     value={totalJenis}
@@ -291,17 +332,23 @@
   />
 
   <StatCard
-    title="Total Stok"
+    title="Total Yard"
     value={totalYard.toLocaleString("id-ID")}
     icon={BoxIcon}
     footerSubtext="yard tersedia"
   />
 
   <StatCard
+    title="Total Kg"
+    value={totalKg.toLocaleString("id-ID")}
+    icon={BoxIcon}
+    footerSubtext="kg tersedia"
+  />
+  <StatCard
     title="Kain Kritis"
     value={kritisCount}
     icon={AlertTriangleIcon}
-    footerSubtext="di bawah 100 yard"
+    footerSubtext="di bawah ambang batas"
     class={kritisCount > 0 ? "border-red-200 bg-red-50" : ""}
     valueClass={kritisCount > 0 ? "text-red-700" : ""}
   />
@@ -419,28 +466,24 @@
       {/if}
     </div>
   {:else}
-    <table class="w-full border-collapse">
-      <thead>
-        <tr
-          class="border-b border-gray-100 bg-gray-50 text-xs font-semibold uppercase tracking-wider text-gray-400"
-        >
-          <th class="px-5 py-3 text-left">Nama Kain</th>
-          <th class="px-5 py-3 text-right">Tersedia</th>
-          <th class="px-5 py-3 text-right">Terpakai</th>
-          <th class="px-5 py-3 text-center">Status</th>
-          <th class="px-5 py-3 text-left">Catatan</th>
-          <th class="px-5 py-3"></th>
-        </tr>
-      </thead>
-      <tbody>
+    <Table.Root>
+      <Table.Header>
+        <Table.Row class="bg-gray-50 hover:bg-gray-50">
+          <Table.Head>Nama Kain</Table.Head>
+          <Table.Head class="text-right">Tersedia</Table.Head>
+          <Table.Head class="text-right">Terpakai</Table.Head>
+          <Table.Head class="text-center">Status</Table.Head>
+          <Table.Head>Catatan</Table.Head>
+          <Table.Head></Table.Head>
+        </Table.Row>
+      </Table.Header>
+      <Table.Body>
         {#each filteredList as kain}
           {@const st = statusKain(kain.stok_tersedia)}
           {@const pct = persen(kain.stok_tersedia, kain.stok_terpakai)}
-          <tr
-            class="border-b border-gray-50 transition last:border-0 hover:bg-gray-50/50"
-          >
+          <Table.Row>
             <!-- Nama + Progress bar -->
-            <td class="px-5 py-4">
+            <Table.Cell>
               <p class="text-sm font-medium text-gray-800">{kain.nama_kain}</p>
               <div class="mt-1.5 flex items-center gap-2">
                 <div class="h-1.5 w-24 shrink-0 rounded-full bg-gray-100">
@@ -451,47 +494,46 @@
                 </div>
                 <span class="text-[10px] text-gray-400">{pct.toFixed(0)}%</span>
               </div>
-            </td>
+            </Table.Cell>
 
             <!-- Tersedia -->
-            <td class="px-5 py-4 text-right">
+            <Table.Cell class="text-right">
               <p
-                class="text-sm font-semibold tabular-nums {kain.stok_tersedia <
-                100
+                class="text-sm font-semibold tabular-nums {kain.stok_tersedia < 100
                   ? 'text-red-600'
                   : 'text-gray-800'}"
               >
                 {kain.stok_tersedia.toLocaleString("id-ID")}
               </p>
-              <p class="text-xs text-gray-400">yard</p>
-            </td>
+              <p class="text-xs text-gray-400">{kain.satuan}</p>
+            </Table.Cell>
 
             <!-- Terpakai -->
-            <td class="px-5 py-4 text-right">
+            <Table.Cell class="text-right">
               <p class="text-sm tabular-nums text-gray-600">
                 {kain.stok_terpakai.toLocaleString("id-ID")}
               </p>
-              <p class="text-xs text-gray-400">yard</p>
-            </td>
+              <p class="text-xs text-gray-400">{kain.satuan}</p>
+            </Table.Cell>
 
             <!-- Status badge -->
-            <td class="px-5 py-4 text-center">
+            <Table.Cell class="text-center">
               <span
                 class="inline-block rounded-full px-2.5 py-1 text-xs font-semibold {st.cls}"
               >
                 {st.label}
               </span>
-            </td>
+            </Table.Cell>
 
             <!-- Catatan -->
-            <td class="px-5 py-4 max-w-45">
+            <Table.Cell class="max-w-45">
               <p class="truncate text-xs text-gray-500">
                 {kain.catatan ?? "—"}
               </p>
-            </td>
+            </Table.Cell>
 
             <!-- Action -->
-            <td class="px-5 py-4">
+            <Table.Cell class="text-right">
               <div class="flex justify-end gap-2">
                 <Button
                   variant="outline"
@@ -516,6 +558,27 @@
                 <Button
                   variant="outline"
                   size="sm"
+                  onclick={() => bukaKurangi(kain)}
+                  class="border-orange-200 text-orange-600 hover:bg-orange-50 hover:text-orange-700"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke-width="2.5"
+                    stroke="currentColor"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M5 12h14"
+                    />
+                  </svg>
+                  Kurangi
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
                   onclick={() => bukaRestock(kain)}
                 >
                   <svg
@@ -534,11 +597,11 @@
                   Restock
                 </Button>
               </div>
-            </td>
-          </tr>
+            </Table.Cell>
+          </Table.Row>
         {/each}
-      </tbody>
-    </table>
+      </Table.Body>
+    </Table.Root>
 
     <!-- Footer -->
     <div
@@ -547,11 +610,14 @@
       <p class="text-xs text-gray-400">
         Menampilkan {filteredList.length} dari {totalJenis} jenis kain
       </p>
-      <p class="text-xs text-gray-400">
-        Total tersedia: <span class="font-semibold text-gray-700"
-          >{totalYard.toLocaleString("id-ID")} yard</span
-        >
-      </p>
+      <div class="flex flex-wrap gap-3 text-xs text-gray-400">
+        {#if totalYard > 0}
+          <span>Yard: <span class="font-semibold text-gray-700">{totalYard.toLocaleString("id-ID")}</span></span>
+        {/if}
+        {#if totalKg > 0}
+          <span>Kg: <span class="font-semibold text-gray-700">{totalKg.toLocaleString("id-ID")}</span></span>
+        {/if}
+      </div>
     </div>
   {/if}
 </div>
@@ -584,32 +650,47 @@
         />
       </div>
 
-      <!-- Stok Awal + Satuan -->
-      <div class="grid grid-cols-2 gap-3">
-        <div>
-          <label
-            class="mb-1.5 block text-sm font-medium text-gray-700"
-            for="stok-awal"
+      <!-- Satuan -->
+      <div>
+        <p class="mb-1.5 text-sm font-medium text-gray-700">Satuan <span class="text-red-500">*</span></p>
+        <div class="flex gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant={fSatuan === 'yard' ? 'default' : 'outline'}
+            onclick={() => (fSatuan = 'yard')}
+            class="flex-1"
           >
-            Stok Awal <span class="text-red-500">*</span>
-          </label>
-          <input
-            id="stok-awal"
-            type="number"
-            min="1"
-            placeholder="0"
-            bind:value={fStok}
-            class="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none"
-          />
-        </div>
-        <div>
-          <p class="mb-1.5 block text-sm font-medium text-gray-700">Satuan</p>
-          <div
-            class="flex h-10.5 items-center gap-2 rounded-lg border border-gray-100 bg-gray-50 px-3 text-sm text-gray-400"
+            Yard
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={fSatuan === 'kg' ? 'default' : 'outline'}
+            onclick={() => (fSatuan = 'kg')}
+            class="flex-1"
           >
-            Yard (tetap)
-          </div>
+            Kilogram (kg)
+          </Button>
         </div>
+      </div>
+
+      <!-- Stok Awal -->
+      <div>
+        <label
+          class="mb-1.5 block text-sm font-medium text-gray-700"
+          for="stok-awal"
+        >
+          Stok Awal ({fSatuan}) <span class="text-red-500">*</span>
+        </label>
+        <input
+          id="stok-awal"
+          type="number"
+          min="1"
+          placeholder="0"
+          bind:value={fStok}
+          class="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none"
+        />
       </div>
 
       <!-- Catatan -->
@@ -663,17 +744,15 @@
   </Dialog.Content>
 </Dialog.Root>
 
-<!-- ── Sheet: Restock ────────────────────────────────────────────── -->
-<Sheet.Root bind:open={openRestock}>
-  <Sheet.Content side="right" class="w-full max-w-md">
-    <Sheet.Header>
-      <Sheet.Title>Restock Kain</Sheet.Title>
-      <Sheet.Description
-        >Tambah stok kain yang sudah terdaftar.</Sheet.Description
-      >
-    </Sheet.Header>
+<!-- ── Dialog: Restock ───────────────────────────────────────────── -->
+<Dialog.Root bind:open={openRestock}>
+  <Dialog.Content class="max-w-md">
+    <Dialog.Header>
+      <Dialog.Title>Restock Kain</Dialog.Title>
+      <Dialog.Description>Tambah stok kain yang sudah terdaftar.</Dialog.Description>
+    </Dialog.Header>
 
-    <div class="mt-6 space-y-4 px-6">
+    <div class="space-y-4">
       <!-- Info kain -->
       {#if selectedKain}
         <div class="rounded-xl border border-gray-100 bg-gray-50 p-4">
@@ -684,22 +763,10 @@
             {selectedKain.nama_kain}
           </p>
           <div class="mt-2 flex items-center gap-4 text-xs text-gray-500">
-            <span
-              >Saat ini: <strong class="text-gray-700"
-                >{selectedKain.stok_tersedia.toLocaleString("id-ID")} yard</strong
-              ></span
-            >
-            <span
-              >Terpakai: <strong class="text-gray-700"
-                >{selectedKain.stok_terpakai.toLocaleString("id-ID")} yard</strong
-              ></span
-            >
+            <span>Saat ini: <strong class="text-gray-700">{selectedKain.stok_tersedia.toLocaleString("id-ID")} {selectedKain.satuan}</strong></span>
+            <span>Terpakai: <strong class="text-gray-700">{selectedKain.stok_terpakai.toLocaleString("id-ID")} {selectedKain.satuan}</strong></span>
           </div>
-          <span
-            class="mt-2 inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold {statusKain(
-              selectedKain.stok_tersedia,
-            ).cls}"
-          >
+          <span class="mt-2 inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold {statusKain(selectedKain.stok_tersedia).cls}">
             {statusKain(selectedKain.stok_tersedia).label}
           </span>
         </div>
@@ -707,40 +774,28 @@
 
       <!-- Jumlah Restock -->
       <div>
-        <label
-          class="mb-1.5 block text-sm font-medium text-gray-700"
-          for="restock-yard"
-        >
-          Tambah Stok (yard) <span class="text-red-500">*</span>
+        <label class="mb-1.5 block text-sm font-medium text-gray-700" for="restock-jumlah">
+          Tambah Stok ({selectedKain?.satuan ?? 'unit'}) <span class="text-red-500">*</span>
         </label>
         <input
-          id="restock-yard"
+          id="restock-jumlah"
           type="number"
           min="1"
           placeholder="0"
-          bind:value={rYard}
+          bind:value={rJumlah}
           class="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none"
         />
-        {#if selectedKain && rYard !== "" && Number(rYard) > 0}
+        {#if selectedKain && rJumlah !== "" && Number(rJumlah) > 0}
           <p class="mt-1.5 text-xs text-green-600">
-            Stok setelah restock: <strong
-              >{(selectedKain.stok_tersedia + Number(rYard)).toLocaleString(
-                "id-ID",
-              )} yard</strong
-            >
+            Stok setelah restock: <strong>{(selectedKain.stok_tersedia + Number(rJumlah)).toLocaleString("id-ID")} {selectedKain.satuan}</strong>
           </p>
         {/if}
       </div>
 
       <!-- Catatan -->
       <div>
-        <label
-          class="mb-1.5 block text-sm font-medium text-gray-700"
-          for="catatan-restock"
-        >
-          Catatan <span class="text-xs font-normal text-gray-400"
-            >(opsional)</span
-          >
+        <label class="mb-1.5 block text-sm font-medium text-gray-700" for="catatan-restock">
+          Catatan <span class="text-xs font-normal text-gray-400">(opsional)</span>
         </label>
         <textarea
           id="catatan-restock"
@@ -752,20 +807,113 @@
       </div>
     </div>
 
+    <Dialog.Footer class="gap-2">
+      <Button variant="outline" onclick={() => (openRestock = false)}>Batal</Button>
+      <Button onclick={submitRestock} disabled={saving || rJumlah === "" || Number(rJumlah) <= 0}>
+        {saving ? "Menyimpan..." : "Restock Sekarang"}
+      </Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
+
+<!-- ── Sheet: Kurangi Stok ──────────────────────────────────────── -->
+<Sheet.Root bind:open={openKurangi}>
+  <Sheet.Content side="right" class="w-full max-w-md">
+    <Sheet.Header>
+      <Sheet.Title>Kurangi Stok</Sheet.Title>
+      <Sheet.Description>
+        Koreksi stok kain jika ada kesalahan input atau pengurangan fisik.
+      </Sheet.Description>
+    </Sheet.Header>
+
+    <div class="mt-6 space-y-4 px-6">
+      <!-- Info kain -->
+      {#if kurangiKain}
+        <div class="rounded-xl border border-orange-100 bg-orange-50 p-4">
+          <p class="text-xs font-medium uppercase tracking-wider text-orange-500">
+            Kain yang dikurangi
+          </p>
+          <p class="mt-1 text-base font-semibold text-gray-800">
+            {kurangiKain.nama_kain}
+          </p>
+          <div class="mt-2 flex items-center gap-4 text-xs text-gray-500">
+            <span>
+              Stok saat ini:
+              <strong class="text-gray-700">
+                {kurangiKain.stok_tersedia.toLocaleString("id-ID")} {kurangiKain.satuan}
+              </strong>
+            </span>
+          </div>
+        </div>
+      {/if}
+
+      <!-- Jumlah dikurangi -->
+      <div>
+        <label
+          class="mb-1.5 block text-sm font-medium text-gray-700"
+          for="kurangi-jumlah"
+        >
+          Jumlah yang Dikurangi ({kurangiKain?.satuan ?? 'unit'})
+          <span class="text-red-500">*</span>
+        </label>
+        <input
+          id="kurangi-jumlah"
+          type="number"
+          min="1"
+          max={kurangiKain?.stok_tersedia ?? undefined}
+          placeholder="0"
+          bind:value={kJumlah}
+          class="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none"
+        />
+        {#if kurangiKain && kJumlah !== "" && Number(kJumlah) > 0}
+          {#if Number(kJumlah) > kurangiKain.stok_tersedia}
+            <p class="mt-1.5 text-xs text-red-500">
+              Melebihi stok tersedia ({kurangiKain.stok_tersedia} {kurangiKain.satuan})
+            </p>
+          {:else}
+            <p class="mt-1.5 text-xs text-orange-600">
+              Stok setelah dikurangi:
+              <strong>
+                {(kurangiKain.stok_tersedia - Number(kJumlah)).toLocaleString("id-ID")} {kurangiKain.satuan}
+              </strong>
+            </p>
+          {/if}
+        {/if}
+      </div>
+
+      <!-- Catatan -->
+      <div>
+        <label
+          class="mb-1.5 block text-sm font-medium text-gray-700"
+          for="catatan-kurangi"
+        >
+          Alasan / Catatan
+          <span class="text-xs font-normal text-gray-400">(opsional)</span>
+        </label>
+        <textarea
+          id="catatan-kurangi"
+          rows="3"
+          placeholder="Contoh: Koreksi input salah, kain rusak/hilang..."
+          bind:value={kCatatan}
+          class="w-full resize-none rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none"
+        ></textarea>
+      </div>
+    </div>
+
     <Sheet.Footer class="mt-6 gap-2 px-6">
       <Button
         variant="outline"
         class="flex-1"
-        onclick={() => (openRestock = false)}
+        onclick={() => (openKurangi = false)}
       >
         Batal
       </Button>
       <Button
-        onclick={submitRestock}
-        disabled={saving || rYard === "" || Number(rYard) <= 0}
-        class="flex-1"
+        onclick={submitKurangi}
+        disabled={saving || kJumlah === "" || Number(kJumlah) <= 0 || (kurangiKain != null && Number(kJumlah) > kurangiKain.stok_tersedia)}
+        class="flex-1 bg-orange-500 hover:bg-orange-600"
       >
-        {saving ? "Menyimpan..." : "Restock Sekarang"}
+        {saving ? "Menyimpan..." : "Kurangi Stok"}
       </Button>
     </Sheet.Footer>
   </Sheet.Content>
@@ -792,16 +940,20 @@
             <span>
               Tersedia:
               <strong class="text-gray-700">
-                {editingKain.stok_tersedia.toLocaleString("id-ID")} yard
+                {editingKain.stok_tersedia.toLocaleString("id-ID")} {editingKain.satuan}
               </strong>
             </span>
             <span>
               Terpakai:
               <strong class="text-gray-700">
-                {editingKain.stok_terpakai.toLocaleString("id-ID")} yard
+                {editingKain.stok_terpakai.toLocaleString("id-ID")} {editingKain.satuan}
               </strong>
             </span>
           </div>
+          <p class="mt-1.5 text-[11px] text-gray-400">
+            Satuan: <span class="font-semibold text-gray-600 uppercase">{editingKain.satuan}</span>
+            · Tidak dapat diubah setelah dibuat
+          </p>
           <span
             class="mt-2 inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold {statusKain(
               editingKain.stok_tersedia,

@@ -52,7 +52,7 @@
       ],
       total_pcs: 100,
       kain_digunakan: [
-        { kain_id: "k1", nama_kain: "Katun Premium", yard_dipakai: 200 },
+        { kain_id: "k1", nama_kain: "Katun Premium", satuan: "yard", jumlah_dipakai: 200 },
       ],
       status: "CUTTING_IN_PROGRESS",
       dibuat_oleh: "admin",
@@ -69,7 +69,7 @@
       ],
       total_pcs: 70,
       kain_digunakan: [
-        { kain_id: "k2", nama_kain: "Batik Sogan", yard_dipakai: 140 },
+        { kain_id: "k2", nama_kain: "Batik Sogan", satuan: "yard", jumlah_dipakai: 140 },
       ],
       status: "JAHIT_IN_PROGRESS",
       dibuat_oleh: "admin",
@@ -86,7 +86,7 @@
       ],
       total_pcs: 60,
       kain_digunakan: [
-        { kain_id: "k1", nama_kain: "Katun Premium", yard_dipakai: 120 },
+        { kain_id: "k1", nama_kain: "Katun Premium", satuan: "yard", jumlah_dipakai: 120 },
       ],
       status: "STEAM_IN_PROGRESS",
       dibuat_oleh: "admin",
@@ -102,7 +102,7 @@
       ],
       total_pcs: 60,
       kain_digunakan: [
-        { kain_id: "k4", nama_kain: "Jersey", yard_dipakai: 120 },
+        { kain_id: "k4", nama_kain: "Jersey", satuan: "yard", jumlah_dipakai: 120 },
       ],
       status: "PENDING_CUTTING",
       dibuat_oleh: "admin",
@@ -119,7 +119,7 @@
       ],
       total_pcs: 60,
       kain_digunakan: [
-        { kain_id: "k5", nama_kain: "Balotelly", yard_dipakai: 180 },
+        { kain_id: "k5", nama_kain: "Balotelly", satuan: "yard", jumlah_dipakai: 180 },
       ],
       status: "JAHIT_DONE",
       dibuat_oleh: "admin",
@@ -135,7 +135,7 @@
       ],
       total_pcs: 80,
       kain_digunakan: [
-        { kain_id: "k1", nama_kain: "Katun Premium", yard_dipakai: 160 },
+        { kain_id: "k1", nama_kain: "Katun Premium", satuan: "yard", jumlah_dipakai: 160 },
       ],
       status: "COMPLETED",
       dibuat_oleh: "admin",
@@ -151,7 +151,7 @@
       ],
       total_pcs: 60,
       kain_digunakan: [
-        { kain_id: "k2", nama_kain: "Batik Sogan", yard_dipakai: 120 },
+        { kain_id: "k2", nama_kain: "Batik Sogan", satuan: "yard", jumlah_dipakai: 120 },
       ],
       status: "COMPLETED",
       dibuat_oleh: "admin",
@@ -167,7 +167,7 @@
       ],
       total_pcs: 70,
       kain_digunakan: [
-        { kain_id: "k1", nama_kain: "Katun Premium", yard_dipakai: 140 },
+        { kain_id: "k1", nama_kain: "Katun Premium", satuan: "yard", jumlah_dipakai: 140 },
       ],
       status: "COMPLETED",
       dibuat_oleh: "admin",
@@ -184,7 +184,7 @@
       ],
       total_pcs: 60,
       kain_digunakan: [
-        { kain_id: "k4", nama_kain: "Jersey", yard_dipakai: 120 },
+        { kain_id: "k4", nama_kain: "Jersey", satuan: "yard", jumlah_dipakai: 120 },
       ],
       status: "CUTTING_DONE",
       dibuat_oleh: "admin",
@@ -200,7 +200,7 @@
       ],
       total_pcs: 50,
       kain_digunakan: [
-        { kain_id: "k5", nama_kain: "Balotelly", yard_dipakai: 150 },
+        { kain_id: "k5", nama_kain: "Balotelly", satuan: "yard", jumlah_dipakai: 150 },
       ],
       status: "STEAM_DONE",
       dibuat_oleh: "admin",
@@ -216,7 +216,7 @@
       ],
       total_pcs: 70,
       kain_digunakan: [
-        { kain_id: "k1", nama_kain: "Katun Premium", yard_dipakai: 140 },
+        { kain_id: "k1", nama_kain: "Katun Premium", satuan: "yard", jumlah_dipakai: 140 },
       ],
       status: "PENDING_CUTTING",
       dibuat_oleh: "admin",
@@ -232,7 +232,7 @@
       ],
       total_pcs: 50,
       kain_digunakan: [
-        { kain_id: "k2", nama_kain: "Batik Sogan", yard_dipakai: 100 },
+        { kain_id: "k2", nama_kain: "Batik Sogan", satuan: "yard", jumlah_dipakai: 100 },
       ],
       status: "JAHIT_IN_PROGRESS",
       dibuat_oleh: "admin",
@@ -1385,7 +1385,7 @@
                 ? 'font-semibold text-amber-600'
                 : 'text-gray-500'}"
             >
-              {kain.stok_tersedia.toLocaleString("id-ID")} yard{kritis
+              {kain.stok_tersedia.toLocaleString("id-ID")} {kain.satuan}{kritis
                 ? " ⚠"
                 : ""}
             </span>
