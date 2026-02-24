@@ -17,7 +17,6 @@
     UserRole,
   } from "$lib/types";
   import { STATUS_LABEL } from "$lib/types";
-  import * as Sheet from "$lib/components/ui/sheet/index.js";
   import * as Dialog from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -141,7 +140,6 @@
     developer: "Developer",
   };
 
-  // Which roles can update which statuses
   const ALLOWED_ROLES: Partial<Record<StatusBatch, UserRole[]>> = {
     PENDING_CUTTING: ["kepala_cutting", "admin_gudang", "developer"],
     CUTTING_IN_PROGRESS: ["kepala_cutting", "admin_gudang", "developer"],
@@ -186,8 +184,8 @@
 
   let canDelete = $derived.by(() => {
     if (!batch || !$userRole) return false;
-    if (batch.status === 'COMPLETED') return false;
-    return ($userRole === 'admin_gudang' || $userRole === 'developer');
+    if (batch.status === "COMPLETED") return false;
+    return $userRole === "admin_gudang" || $userRole === "developer";
   });
 
   let totalMasukForm = $derived(fPcsBerhasil + fPcsReject);
@@ -266,20 +264,27 @@
   }
 
   async function submitUpdate() {
+    // ── FIX: guard semua nullable sebelum dipakai ──────────────────
     if (!canUpdate || !$currentUser || !batch || !nextStatus || !formValid)
       return;
+
+    // Snapshot nilai batch sebelum async agar TypeScript tidak null
+    const snapshotBatch = batch;
+    const snapshotNextStatus = nextStatus;
+
     saving = true;
     try {
       const catatanTrimmed = fCatatan.trim();
       const namaPencatat =
         $currentUser.name || $currentUser.email || $currentUser.uid;
+
       await updateStatusBatch(
-        batch.id,
-        nextStatus,
+        snapshotBatch.id,
+        snapshotNextStatus,
         $currentUser.uid,
         namaPencatat,
         {
-          status_dari: batch.status,
+          status_dari: snapshotBatch.status,
           pcs_berhasil: fPcsBerhasil,
           pcs_reject: fPcsReject,
           ...(catatanTrimmed ? { catatan: catatanTrimmed } : {}),
@@ -287,24 +292,21 @@
       );
 
       // Jika batch selesai → tambahkan ke stok barang jadi
-      // Gunakan fPcsBerhasil (bukan total asli) sebagai dasar jumlah yang masuk
-      if (nextStatus === "COMPLETED" && fPcsBerhasil > 0) {
-        const ratio = fPcsBerhasil / batch.total_pcs;
-        // Distribusikan pcs berhasil ke tiap ukuran secara proporsional
+      if (snapshotNextStatus === "COMPLETED" && fPcsBerhasil > 0) {
+        const ratio = fPcsBerhasil / snapshotBatch.total_pcs;
         let sisa = fPcsBerhasil;
-        const detailBerhasil = batch.detail_ukuran.map((du, idx) => {
-          // Ukuran terakhir dapat sisa agar total tepat
-          const isLast = idx === batch.detail_ukuran.length - 1;
-          const jumlah = isLast
-            ? sisa
-            : Math.round(du.jumlah_pcs * ratio);
-          sisa -= jumlah;
-          return { ukuran: du.ukuran, jumlah_pcs: Math.max(0, jumlah) };
-        }).filter(du => du.jumlah_pcs > 0);
+        const detailBerhasil = snapshotBatch.detail_ukuran
+          .map((du, idx) => {
+            const isLast = idx === snapshotBatch.detail_ukuran.length - 1;
+            const jumlah = isLast ? sisa : Math.round(du.jumlah_pcs * ratio);
+            sisa -= jumlah;
+            return { ukuran: du.ukuran, jumlah_pcs: Math.max(0, jumlah) };
+          })
+          .filter((du) => du.jumlah_pcs > 0);
 
         await tambahStokBarangJadi(
-          batch.model_id,
-          batch.nama_model,
+          snapshotBatch.model_id,
+          snapshotBatch.nama_model,
           detailBerhasil,
         );
       }
@@ -312,9 +314,9 @@
       await load();
       openUpdate = false;
       showSuccess(
-        nextStatus === "COMPLETED"
+        snapshotNextStatus === "COMPLETED"
           ? `Batch selesai! ${fPcsBerhasil} pcs ditambahkan ke stok barang jadi.`
-          : `Status diperbarui ke "${STATUS_LABEL[nextStatus]}".`,
+          : `Status diperbarui ke "${STATUS_LABEL[snapshotNextStatus]}".`,
       );
     } catch (e: any) {
       showError(e?.message ?? "Gagal memperbarui status.");
@@ -328,9 +330,9 @@
     deletingSaving = true;
     try {
       await deleteBatchProduksi(batch.id);
-      goto('/order-produksi');
+      goto("/order-produksi");
     } catch (e: unknown) {
-      showError(e instanceof Error ? e.message : 'Gagal menghapus batch.');
+      showError(e instanceof Error ? e.message : "Gagal menghapus batch.");
       openHapus = false;
     } finally {
       deletingSaving = false;
@@ -343,7 +345,7 @@
 <!-- ── Toast ─────────────────────────────────────────────────────── -->
 {#if successMsg}
   <div
-    class="fixed right-5 top-5 z-9999 flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 shadow-lg"
+    class="fixed right-5 top-5 z-[9999] flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 shadow-lg"
   >
     <svg
       class="h-4 w-4 shrink-0 text-green-600"
@@ -364,7 +366,7 @@
 {/if}
 {#if errorMsg}
   <div
-    class="fixed right-5 top-5 z-9999 flex max-w-sm items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 shadow-lg"
+    class="fixed right-5 top-5 z-[9999] flex max-w-sm items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 shadow-lg"
   >
     <svg
       class="mt-0.5 h-4 w-4 shrink-0 text-red-500"
@@ -550,7 +552,7 @@
     </div>
   </div>
 
-  <!-- Action Banner (if canUpdate) -->
+  <!-- Action Banner -->
   {#if canUpdate && nextStage && currentStage}
     <div
       class="mb-5 flex items-center justify-between rounded-xl border {currentStage.border} {currentStage.bg} px-5 py-4"
@@ -618,7 +620,7 @@
                 : 'bg-gray-100'}"
           ></div>
           <p
-            class="text-center text-[9px] leading-tight font-medium {done ||
+            class="text-center text-[9px] font-medium leading-tight {done ||
             current
               ? s.text
               : 'text-gray-300'}"
@@ -686,7 +688,6 @@
 
   <!-- Detail: Ukuran + Kain -->
   <div class="mb-5 grid grid-cols-1 gap-5 lg:grid-cols-2">
-    <!-- Ukuran Breakdown -->
     <div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
       <p class="mb-4 text-sm font-semibold text-gray-800">Breakdown Ukuran</p>
       <div class="space-y-3">
@@ -717,11 +718,10 @@
       </div>
     </div>
 
-    <!-- Kain Digunakan -->
     <div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
       <p class="mb-4 text-sm font-semibold text-gray-800">Kain Digunakan</p>
       {#if batch.kain_digunakan.length === 0}
-        <p class="text-sm text-gray-400 italic">Tidak ada data kain.</p>
+        <p class="italic text-sm text-gray-400">Tidak ada data kain.</p>
       {:else}
         <div class="space-y-2">
           {#each batch.kain_digunakan as kain}
@@ -733,7 +733,7 @@
                 <span class="text-sm text-gray-700">{kain.nama_kain}</span>
               </div>
               <span class="text-sm font-semibold text-gray-800"
-                >{kain.jumlah_dipakai} {kain.satuan ?? 'yard'}</span
+                >{kain.jumlah_dipakai} {kain.satuan ?? "yard"}</span
               >
             </div>
           {/each}
@@ -795,7 +795,6 @@
         {#each riwayat as r, i}
           {@const rStage = STAGE_MAP[r.status_ke]}
           <div class="flex gap-4">
-            <!-- Dot + line -->
             <div class="flex flex-col items-center">
               <div
                 class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full {rStage?.bg ??
@@ -817,12 +816,11 @@
                 </svg>
               </div>
               {#if i < riwayat.length - 1}
-                <div class="mt-1 w-px flex-1 bg-gray-200 min-h-6"></div>
+                <div class="mt-1 min-h-6 w-px flex-1 bg-gray-200"></div>
               {/if}
             </div>
 
-            <!-- Content -->
-            <div class="pb-5 flex-1 min-w-0">
+            <div class="min-w-0 flex-1 pb-5">
               <div class="flex flex-wrap items-center gap-2">
                 <p class="text-sm font-semibold text-gray-800">
                   {STATUS_LABEL[r.status_dari]}
@@ -878,186 +876,176 @@
   </div>
 {/if}
 
-<!-- ── Sheet: Perbarui Status ─────────────────────────────────────── -->
-<Sheet.Root bind:open={openUpdate}>
-  <Sheet.Content side="right" class="flex w-full max-w-md flex-col">
-    <Sheet.Header class="shrink-0 px-6 pt-6">
-      <Sheet.Title>{actionLabel}</Sheet.Title>
-      <Sheet.Description>
+<!-- ── Dialog: Perbarui Status ────────────────────────────────────── -->
+<Dialog.Root bind:open={openUpdate}>
+  <Dialog.Content class="max-w-md">
+    <Dialog.Header>
+      <Dialog.Title>{actionLabel}</Dialog.Title>
+      <Dialog.Description>
         Catat hasil produksi untuk memperbarui status batch.
-      </Sheet.Description>
-    </Sheet.Header>
+      </Dialog.Description>
+    </Dialog.Header>
 
     {#if batch && nextStatus && currentStage && nextStage}
-      <div class="flex-1 overflow-y-auto px-6 py-5">
-        <div class="space-y-5">
-          <!-- Status transition info -->
-          <div
-            class="flex items-center gap-3 rounded-xl border border-gray-100 bg-gray-50 p-4"
+      <div class="max-h-[60vh] space-y-5 overflow-y-auto pr-1">
+        <!-- Status transition -->
+        <div
+          class="flex items-center gap-3 rounded-xl border border-gray-100 bg-gray-50 p-4"
+        >
+          <div class="text-center">
+            <span
+              class="inline-block rounded-full px-2.5 py-1 text-xs font-semibold {currentStage.bg} {currentStage.text}"
+            >
+              {STATUS_LABEL[batch.status]}
+            </span>
+          </div>
+          <svg
+            class="h-4 w-4 shrink-0 text-gray-400"
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke-width="2"
+            stroke="currentColor"
           >
-            <div class="text-center">
-              <span
-                class="inline-block rounded-full px-2.5 py-1 text-xs font-semibold {currentStage.bg} {currentStage.text}"
-              >
-                {STATUS_LABEL[batch.status]}
-              </span>
-            </div>
-            <svg
-              class="h-4 w-4 shrink-0 text-gray-400"
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke-width="2"
-              stroke="currentColor"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3"
-              />
-            </svg>
-            <div class="text-center">
-              <span
-                class="inline-block rounded-full px-2.5 py-1 text-xs font-semibold {nextStage.bg} {nextStage.text}"
-              >
-                {STATUS_LABEL[nextStatus]}
-              </span>
-            </div>
-          </div>
-
-          <!-- Total PCS info -->
-          <div class="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3">
-            <p class="text-xs text-blue-700">
-              Total batch: <span class="font-bold text-blue-900"
-                >{batch.total_pcs} pcs</span
-              >
-              <span class="mx-1">·</span>
-              Model: <span class="font-semibold">{batch.nama_model}</span>
-            </p>
-          </div>
-
-          <!-- PCS Berhasil -->
-          <div>
-            <label
-              class="mb-1.5 block text-sm font-medium text-gray-700"
-              for="pcs-berhasil"
-            >
-              PCS Berhasil <span class="text-red-500">*</span>
-            </label>
-            <Input
-              id="pcs-berhasil"
-              type="number"
-              min="0"
-              max={batch.total_pcs}
-              bind:value={fPcsBerhasil}
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3"
             />
-            <p class="mt-1 text-xs text-gray-400">
-              Jumlah pcs yang berhasil diproses di tahap ini
-            </p>
+          </svg>
+          <div class="text-center">
+            <span
+              class="inline-block rounded-full px-2.5 py-1 text-xs font-semibold {nextStage.bg} {nextStage.text}"
+            >
+              {STATUS_LABEL[nextStatus]}
+            </span>
           </div>
+        </div>
 
-          <!-- PCS Reject -->
-          <div>
-            <label
-              class="mb-1.5 block text-sm font-medium text-gray-700"
-              for="pcs-reject"
+        <!-- Total PCS info -->
+        <div class="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3">
+          <p class="text-xs text-blue-700">
+            Total batch: <span class="font-bold text-blue-900"
+              >{batch.total_pcs} pcs</span
             >
-              PCS Reject
-            </label>
-            <Input
-              id="pcs-reject"
-              type="number"
-              min="0"
-              max={batch.total_pcs}
-              bind:value={fPcsReject}
-            />
-            <p class="mt-1 text-xs text-gray-400">
-              Jumlah pcs yang gagal / cacat (dicatat sebagai loss)
-            </p>
-          </div>
+            <span class="mx-1">·</span>
+            Model: <span class="font-semibold">{batch.nama_model}</span>
+          </p>
+        </div>
 
-          <!-- Validasi total -->
-          {#if totalMasukForm > 0}
-            <div
-              class="rounded-lg border {sisaBelumInput < 0
-                ? 'border-red-200 bg-red-50'
-                : 'border-gray-100 bg-gray-50'} px-4 py-3"
-            >
-              <div class="flex justify-between text-xs">
-                <span class="text-gray-500">Total diinput</span>
-                <span
-                  class="font-semibold {sisaBelumInput < 0
-                    ? 'text-red-700'
-                    : 'text-gray-800'}">{totalMasukForm} pcs</span
-                >
-              </div>
-              <div class="flex justify-between text-xs mt-1">
-                <span class="text-gray-500">Sisa belum terinput</span>
-                <span
-                  class="font-semibold {sisaBelumInput < 0
-                    ? 'text-red-700'
-                    : 'text-gray-600'}">{sisaBelumInput} pcs</span
-                >
-              </div>
-              {#if sisaBelumInput < 0}
-                <p class="mt-1.5 text-xs font-medium text-red-600">
-                  Total melebihi jumlah batch ({batch.total_pcs} pcs)
-                </p>
-              {/if}
-            </div>
-          {/if}
+        <!-- PCS Berhasil -->
+        <div>
+          <label
+            class="mb-1.5 block text-sm font-medium text-gray-700"
+            for="pcs-berhasil"
+          >
+            PCS Berhasil <span class="text-red-500">*</span>
+          </label>
+          <Input
+            id="pcs-berhasil"
+            type="number"
+            min="0"
+            max={batch.total_pcs}
+            bind:value={fPcsBerhasil}
+          />
+          <p class="mt-1 text-xs text-gray-400">
+            Jumlah pcs yang berhasil diproses di tahap ini
+          </p>
+        </div>
 
-          {#if nextStatus === "COMPLETED"}
-            <div class="rounded-xl border border-green-200 bg-green-50 p-4">
-              <p class="text-xs font-semibold text-green-700">
-                Info: Batch Akan Ditandai Selesai
-              </p>
-              <p class="mt-1 text-xs text-green-600">
-                {fPcsBerhasil} pcs akan otomatis ditambahkan ke stok Barang Jadi.
-              </p>
-            </div>
-          {/if}
+        <!-- PCS Reject -->
+        <div>
+          <label
+            class="mb-1.5 block text-sm font-medium text-gray-700"
+            for="pcs-reject"
+          >
+            PCS Reject
+          </label>
+          <Input
+            id="pcs-reject"
+            type="number"
+            min="0"
+            max={batch.total_pcs}
+            bind:value={fPcsReject}
+          />
+          <p class="mt-1 text-xs text-gray-400">
+            Jumlah pcs yang gagal / cacat (dicatat sebagai loss)
+          </p>
+        </div>
 
-          <!-- Catatan -->
-          <div>
-            <label
-              class="mb-1.5 block text-sm font-medium text-gray-700"
-              for="catatan-update"
-            >
-              Catatan <span class="text-xs font-normal text-gray-400"
-                >(opsional)</span
+        <!-- Validasi total -->
+        {#if totalMasukForm > 0}
+          <div
+            class="rounded-lg border {sisaBelumInput < 0
+              ? 'border-red-200 bg-red-50'
+              : 'border-gray-100 bg-gray-50'} px-4 py-3"
+          >
+            <div class="flex justify-between text-xs">
+              <span class="text-gray-500">Total diinput</span>
+              <span
+                class="font-semibold {sisaBelumInput < 0
+                  ? 'text-red-700'
+                  : 'text-gray-800'}">{totalMasukForm} pcs</span
               >
-            </label>
-            <textarea
-              id="catatan-update"
-              rows="3"
-              placeholder="Kendala, keterangan tambahan, dll..."
-              bind:value={fCatatan}
-              class="w-full resize-none rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none"
-            ></textarea>
+            </div>
+            <div class="mt-1 flex justify-between text-xs">
+              <span class="text-gray-500">Sisa belum terinput</span>
+              <span
+                class="font-semibold {sisaBelumInput < 0
+                  ? 'text-red-700'
+                  : 'text-gray-600'}">{sisaBelumInput} pcs</span
+              >
+            </div>
+            {#if sisaBelumInput < 0}
+              <p class="mt-1.5 text-xs font-medium text-red-600">
+                Total melebihi jumlah batch ({batch.total_pcs} pcs)
+              </p>
+            {/if}
           </div>
+        {/if}
+
+        {#if nextStatus === "COMPLETED"}
+          <div class="rounded-xl border border-green-200 bg-green-50 p-4">
+            <p class="text-xs font-semibold text-green-700">
+              Info: Batch Akan Ditandai Selesai
+            </p>
+            <p class="mt-1 text-xs text-green-600">
+              {fPcsBerhasil} pcs akan otomatis ditambahkan ke stok Barang Jadi.
+            </p>
+          </div>
+        {/if}
+
+        <!-- Catatan -->
+        <div>
+          <label
+            class="mb-1.5 block text-sm font-medium text-gray-700"
+            for="catatan-update"
+          >
+            Catatan <span class="text-xs font-normal text-gray-400"
+              >(opsional)</span
+            >
+          </label>
+          <textarea
+            id="catatan-update"
+            rows="3"
+            placeholder="Kendala, keterangan tambahan, dll..."
+            bind:value={fCatatan}
+            class="w-full resize-none rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none"
+          ></textarea>
         </div>
       </div>
 
-      <Sheet.Footer class="shrink-0 gap-2 border-t border-gray-100 px-6 py-4">
-        <Button
-          variant="outline"
-          class="flex-1"
-          onclick={() => (openUpdate = false)}
-        >
+      <Dialog.Footer class="gap-2">
+        <Button variant="outline" onclick={() => (openUpdate = false)}>
           Batal
         </Button>
-        <Button
-          onclick={submitUpdate}
-          disabled={saving || !formValid}
-          class="flex-1"
-        >
+        <Button onclick={submitUpdate} disabled={saving || !formValid}>
           {saving ? "Menyimpan..." : actionLabel}
         </Button>
-      </Sheet.Footer>
+      </Dialog.Footer>
     {/if}
-  </Sheet.Content>
-</Sheet.Root>
+  </Dialog.Content>
+</Dialog.Root>
 
 <!-- ── Dialog: Konfirmasi Hapus ──────────────────────────────────── -->
 <Dialog.Root bind:open={openHapus}>
@@ -1090,11 +1078,22 @@
       <Button
         onclick={submitHapus}
         disabled={deletingSaving}
-        class="bg-red-600 hover:bg-red-700 text-white"
+        class="bg-red-600 text-white hover:bg-red-700"
       >
         {#if deletingSaving}
-          <svg class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+          <svg
+            class="h-4 w-4 animate-spin"
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke-width="2"
+            stroke="currentColor"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"
+            />
           </svg>
           Menghapus...
         {:else}

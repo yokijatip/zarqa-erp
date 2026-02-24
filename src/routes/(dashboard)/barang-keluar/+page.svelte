@@ -7,7 +7,7 @@
   } from "$lib/firebase/barang-jadi";
   import { currentUser, userRole } from "$lib/stores/auth.store";
   import type { StokBarangJadi, BarangKeluar, UkuranBaju } from "$lib/types";
-  import * as Sheet from "$lib/components/ui/sheet/index.js";
+  import * as Dialog from "$lib/components/ui/dialog";
   import * as Select from "$lib/components/ui/select/index.js";
   import * as Table from "$lib/components/ui/table";
   import { Button } from "$lib/components/ui/button";
@@ -179,13 +179,14 @@
     if (!canSubmit || !$currentUser || adaYangMelebihi) return;
     saving = true;
     try {
+      const keteranganTrimmed = fKeterangan.trim();
       await catatBarangKeluar(
         {
           model_id: fModelId,
           nama_model: selectedModelData!.nama_model,
           detail_keluar: detailKeluar,
           tujuan: fTujuan.trim(),
-          keterangan: fKeterangan.trim() || undefined,
+          ...(keteranganTrimmed ? { keterangan: keteranganTrimmed } : {}),
         },
         $currentUser.uid,
       );
@@ -207,7 +208,7 @@
 <!-- ── Toast ─────────────────────────────────────────────────────── -->
 {#if successMsg}
   <div
-    class="fixed right-5 top-5 z-9999 flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 shadow-lg"
+    class="fixed right-5 top-5 z-[9999] flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 shadow-lg"
   >
     <svg
       class="h-4 w-4 shrink-0 text-green-600"
@@ -228,7 +229,7 @@
 {/if}
 {#if errorMsg}
   <div
-    class="fixed right-5 top-5 z-9999 flex max-w-sm items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 shadow-lg"
+    class="fixed right-5 top-5 z-[9999] flex max-w-sm items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 shadow-lg"
   >
     <svg
       class="mt-0.5 h-4 w-4 shrink-0 text-red-500"
@@ -431,7 +432,9 @@
         {#each filteredRiwayat as r}
           <Table.Row>
             <Table.Cell>
-              <p class="text-sm text-gray-700">{formatDate(r.tanggal_keluar)}</p>
+              <p class="text-sm text-gray-700">
+                {formatDate(r.tanggal_keluar)}
+              </p>
               <p class="text-xs text-gray-400">
                 {formatDateTime(r.tanggal_keluar).split(",")[1]?.trim() ?? ""}
               </p>
@@ -442,7 +445,9 @@
             <Table.Cell>
               <div class="flex flex-wrap gap-1">
                 {#each r.detail_keluar as d}
-                  <span class="rounded bg-green-100 px-1.5 py-0.5 text-[11px] font-medium text-green-700">
+                  <span
+                    class="rounded bg-green-100 px-1.5 py-0.5 text-[11px] font-medium text-green-700"
+                  >
                     {d.ukuran}: {d.jumlah_pcs}
                   </span>
                 {/each}
@@ -455,7 +460,9 @@
             <Table.Cell>
               <p class="text-sm font-medium text-gray-700">{r.tujuan}</p>
               {#if r.keterangan}
-                <p class="mt-0.5 truncate text-xs text-gray-400">{r.keterangan}</p>
+                <p class="mt-0.5 truncate text-xs text-gray-400">
+                  {r.keterangan}
+                </p>
               {/if}
             </Table.Cell>
           </Table.Row>
@@ -479,166 +486,163 @@
   {/if}
 </div>
 
-<!-- ── Sheet: Catat Barang Keluar ─────────────────────────────────── -->
-<Sheet.Root bind:open={openCatat}>
-  <Sheet.Content side="right" class="flex w-full max-w-md flex-col">
-    <Sheet.Header class="shrink-0 px-6 pt-6">
-      <Sheet.Title>Catat Barang Keluar</Sheet.Title>
-      <Sheet.Description
-        >Rekam pengiriman barang jadi ke tujuan.</Sheet.Description
-      >
-    </Sheet.Header>
+<!-- ── Dialog: Catat Barang Keluar ───────────────────────────────── -->
+<Dialog.Root bind:open={openCatat}>
+  <Dialog.Content class="max-w-md">
+    <Dialog.Header>
+      <Dialog.Title>Catat Barang Keluar</Dialog.Title>
+      <Dialog.Description>
+        Rekam pengiriman barang jadi ke tujuan.
+      </Dialog.Description>
+    </Dialog.Header>
 
-    <div class="flex-1 overflow-y-auto px-6 py-5">
-      <div class="space-y-5">
-        <!-- Pilih Model -->
-        <div>
-          <label
-            class="mb-1.5 block text-sm font-medium text-gray-700"
-            for="model-keluar"
+    <div class="max-h-[60vh] space-y-5 overflow-y-auto px-1 pb-1">
+      <!-- Pilih Model -->
+      <div>
+        <label
+          class="mb-1.5 block text-sm font-medium text-gray-700"
+          for="model-keluar"
+        >
+          Model Baju <span class="text-red-500">*</span>
+        </label>
+        {#if modelDenganStok.length === 0}
+          <div class="rounded-lg border border-amber-100 bg-amber-50 px-4 py-3">
+            <p class="text-sm text-amber-700">
+              Tidak ada barang jadi yang tersedia.
+            </p>
+            <a
+              href="/barang-jadi"
+              class="mt-1 block text-xs font-medium text-amber-600 hover:underline"
+            >
+              Lihat stok barang jadi →
+            </a>
+          </div>
+        {:else}
+          <Select.Root
+            type="single"
+            value={fModelId || undefined}
+            onValueChange={(val) => {
+              fModelId = val ?? "";
+              fJumlah = {};
+            }}
           >
-            Model Baju <span class="text-red-500">*</span>
-          </label>
-          {#if modelDenganStok.length === 0}
-            <div
-              class="rounded-lg border border-amber-100 bg-amber-50 px-4 py-3"
-            >
-              <p class="text-sm text-amber-700">
-                Tidak ada barang jadi yang tersedia.
-              </p>
-              <a
-                href="/barang-jadi"
-                class="mt-1 block text-xs font-medium text-amber-600 hover:underline"
+            <Select.Trigger class="w-full">
+              <span
+                class={fModelId ? "text-foreground" : "text-muted-foreground"}
               >
-                Lihat stok barang jadi →
-              </a>
-            </div>
-          {:else}
-            <Select.Root
-              type="single"
-              value={fModelId || undefined}
-              onValueChange={(val) => {
-                fModelId = val ?? "";
-                fJumlah = {};
-              }}
-            >
-              <Select.Trigger class="w-full">
-                <span class={fModelId ? "text-foreground" : "text-muted-foreground"}>
-                  {fModelId
-                    ? (modelDenganStok.find((m) => m.model_id === fModelId)?.nama_model ?? "— Pilih model —")
-                    : "— Pilih model —"}
-                </span>
-              </Select.Trigger>
-              <Select.Content preventScroll={false}>
-                {#each modelDenganStok as m}
-                  <Select.Item value={m.model_id}>{m.nama_model}</Select.Item>
-                {/each}
-              </Select.Content>
-            </Select.Root>
+                {fModelId
+                  ? (modelDenganStok.find((m) => m.model_id === fModelId)
+                      ?.nama_model ?? "— Pilih model —")
+                  : "— Pilih model —"}
+              </span>
+            </Select.Trigger>
+            <Select.Content preventScroll={false}>
+              {#each modelDenganStok as m}
+                <Select.Item value={m.model_id}>{m.nama_model}</Select.Item>
+              {/each}
+            </Select.Content>
+          </Select.Root>
+        {/if}
+      </div>
+
+      <!-- Stok info + input per ukuran -->
+      {#if selectedModelData}
+        <div>
+          <p class="mb-2 text-sm font-medium text-gray-700">
+            Jumlah Per Ukuran <span class="text-red-500">*</span>
+          </p>
+          <div class="space-y-2">
+            {#each UKURAN_ORDER.filter( (u) => selectedModelData!.stok.some((i) => i.ukuran === u), ) as ukuran}
+              {@const stokItem = selectedModelData.stok.find(
+                (i) => i.ukuran === ukuran,
+              )!}
+              {@const melebihi = melebihiStok(ukuran)}
+              <div
+                class="flex items-center gap-3 rounded-lg border {melebihi
+                  ? 'border-red-200 bg-red-50'
+                  : 'border-gray-100 bg-gray-50'} px-3 py-2"
+              >
+                <div
+                  class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-xs font-bold text-gray-700 shadow-sm"
+                >
+                  {ukuran}
+                </div>
+                <div class="flex-1">
+                  <p class="text-xs text-gray-500">
+                    Tersedia: <span class="font-semibold text-gray-700"
+                      >{stokItem.stok_tersedia} pcs</span
+                    >
+                  </p>
+                  {#if melebihi}
+                    <p class="text-xs text-red-600">Melebihi stok!</p>
+                  {/if}
+                </div>
+                <Input
+                  type="number"
+                  min="0"
+                  max={stokItem.stok_tersedia}
+                  placeholder="0"
+                  bind:value={fJumlah[ukuran]}
+                  class="w-20 text-center {melebihi ? 'border-red-300' : ''}"
+                />
+              </div>
+            {/each}
+          </div>
+          {#if totalPcs > 0}
+            <p class="mt-2 text-xs text-gray-500">
+              Total keluar: <span class="font-semibold text-gray-800"
+                >{totalPcs} pcs</span
+              >
+            </p>
           {/if}
         </div>
+      {/if}
 
-        <!-- Stok info + input per ukuran -->
-        {#if selectedModelData}
-          <div>
-            <p class="mb-2 text-sm font-medium text-gray-700">
-              Jumlah Per Ukuran <span class="text-red-500">*</span>
-            </p>
-            <div class="space-y-2">
-              {#each UKURAN_ORDER.filter( (u) => selectedModelData!.stok.some((i) => i.ukuran === u), ) as ukuran}
-                {@const stokItem = selectedModelData.stok.find(
-                  (i) => i.ukuran === ukuran,
-                )!}
-                {@const melebihi = melebihiStok(ukuran)}
-                <div
-                  class="flex items-center gap-3 rounded-lg border {melebihi
-                    ? 'border-red-200 bg-red-50'
-                    : 'border-gray-100 bg-gray-50'} px-3 py-2"
-                >
-                  <div
-                    class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-xs font-bold text-gray-700 shadow-sm"
-                  >
-                    {ukuran}
-                  </div>
-                  <div class="flex-1">
-                    <p class="text-xs text-gray-500">
-                      Tersedia: <span class="font-semibold text-gray-700"
-                        >{stokItem.stok_tersedia} pcs</span
-                      >
-                    </p>
-                    {#if melebihi}
-                      <p class="text-xs text-red-600">Melebihi stok!</p>
-                    {/if}
-                  </div>
-                  <Input
-                    type="number"
-                    min="0"
-                    max={stokItem.stok_tersedia}
-                    placeholder="0"
-                    bind:value={fJumlah[ukuran]}
-                    class="w-20 text-center {melebihi ? 'border-red-300' : ''}"
-                  />
-                </div>
-              {/each}
-            </div>
-            {#if totalPcs > 0}
-              <p class="mt-2 text-xs text-gray-500">
-                Total keluar: <span class="font-semibold text-gray-800"
-                  >{totalPcs} pcs</span
-                >
-              </p>
-            {/if}
-          </div>
-        {/if}
+      <!-- Tujuan -->
+      <div>
+        <label
+          class="mb-1.5 block text-sm font-medium text-gray-700"
+          for="tujuan-keluar"
+        >
+          Tujuan Pengiriman <span class="text-red-500">*</span>
+        </label>
+        <Input
+          id="tujuan-keluar"
+          type="text"
+          placeholder="Contoh: Toko Anisa, Reseller Jakarta..."
+          bind:value={fTujuan}
+        />
+      </div>
 
-        <!-- Tujuan -->
-        <div>
-          <label
-            class="mb-1.5 block text-sm font-medium text-gray-700"
-            for="tujuan-keluar"
-          >
-            Tujuan Pengiriman <span class="text-red-500">*</span>
-          </label>
-          <Input
-            id="tujuan-keluar"
-            type="text"
-            placeholder="Contoh: Toko Anisa, Reseller Jakarta..."
-            bind:value={fTujuan}
-          />
-        </div>
-
-        <!-- Keterangan -->
-        <div>
-          <label
-            class="mb-1.5 block text-sm font-medium text-gray-700"
-            for="keterangan-keluar"
-          >
-            Keterangan <span class="text-xs font-normal text-gray-400"
-              >(opsional)</span
-            >
-          </label>
-          <textarea
-            id="keterangan-keluar"
-            rows="3"
-            placeholder="Catatan tambahan pengiriman..."
-            bind:value={fKeterangan}
-            class="w-full resize-none rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray-400 focus:border-green-400 focus:outline-none focus:ring-2 focus:ring-green-100"
-          ></textarea>
-        </div>
+      <!-- Keterangan -->
+      <div>
+        <label
+          class="mb-1.5 block text-sm font-medium text-gray-700"
+          for="keterangan-keluar"
+        >
+          Keterangan
+          <span class="text-xs font-normal text-gray-400">(opsional)</span>
+        </label>
+        <textarea
+          id="keterangan-keluar"
+          rows="3"
+          placeholder="Catatan tambahan pengiriman..."
+          bind:value={fKeterangan}
+          class="w-full resize-none rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray-400 focus:border-green-400 focus:outline-none focus:ring-2 focus:ring-green-100"
+        ></textarea>
       </div>
     </div>
 
-    <Sheet.Footer class="shrink-0 gap-2 border-t border-gray-100 px-6 py-4">
-      <Button variant="outline" class="flex-1" onclick={() => (openCatat = false)}>
+    <Dialog.Footer class="gap-2">
+      <Button variant="outline" onclick={() => (openCatat = false)}>
         Batal
       </Button>
       <Button
         onclick={submitCatat}
         disabled={saving || !canSubmit || adaYangMelebihi}
-        class="flex-1"
       >
         {saving ? "Menyimpan..." : "Catat Keluar"}
       </Button>
-    </Sheet.Footer>
-  </Sheet.Content>
-</Sheet.Root>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>

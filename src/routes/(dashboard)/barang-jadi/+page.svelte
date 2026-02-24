@@ -12,11 +12,18 @@
 
   const UKURAN_ORDER: UkuranBaju[] = ["S", "M", "L", "XL", "XXL"];
 
+  // Threshold stok kritis per ukuran
+  const KRITIS_THRESHOLD = 5;
+  const LOW_THRESHOLD = 15;
+
   // ── State ──────────────────────────────────────────────────────────
   let stokList = $state<StokBarangJadi[]>([]);
   let loading = $state(true);
   let errorMsg = $state<string | null>(null);
   let searchQuery = $state("");
+  let sortBy = $state<"kritis" | "terbanyak" | "nama" | "keluar">("kritis");
+  let filterStatus = $state<"semua" | "kritis" | "low" | "kosong">("semua");
+  let lastLoaded = $state<Date | null>(null);
 
   // ── Derived ────────────────────────────────────────────────────────
   let grouped = $derived.by(() => {
@@ -40,15 +47,63 @@
           UKURAN_ORDER.indexOf(a.ukuran) - UKURAN_ORDER.indexOf(b.ukuran),
       );
     }
-    return [...map.values()].sort((a, b) =>
-      a.nama_model.localeCompare(b.nama_model),
-    );
+    return [...map.values()];
   });
 
+  type GroupedModel = (typeof grouped)[number];
+
+  function getTotalTersedia(g: GroupedModel) {
+    return g.items.reduce((s, i) => s + i.stok_tersedia, 0);
+  }
+  function getStatusModel(
+    g: GroupedModel,
+  ): "kosong" | "kritis" | "low" | "aman" {
+    const total = getTotalTersedia(g);
+    if (total === 0) return "kosong";
+    const hasKritis = g.items.some(
+      (i) => i.stok_tersedia > 0 && i.stok_tersedia <= KRITIS_THRESHOLD,
+    );
+    if (hasKritis) return "kritis";
+    const hasLow = g.items.some(
+      (i) => i.stok_tersedia > 0 && i.stok_tersedia <= LOW_THRESHOLD,
+    );
+    if (hasLow) return "low";
+    return "aman";
+  }
+
   let filteredGrouped = $derived.by(() => {
-    if (!searchQuery.trim()) return grouped;
-    const q = searchQuery.toLowerCase().trim();
-    return grouped.filter((g) => g.nama_model.toLowerCase().includes(q));
+    let list = grouped;
+
+    // Search
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase().trim();
+      list = list.filter((g) => g.nama_model.toLowerCase().includes(q));
+    }
+
+    // Filter status
+    if (filterStatus !== "semua") {
+      list = list.filter((g) => getStatusModel(g) === filterStatus);
+    }
+
+    // Sort
+    const sorted = [...list];
+    if (sortBy === "kritis") {
+      const order = { kosong: 0, kritis: 1, low: 2, aman: 3 };
+      sorted.sort(
+        (a, b) => order[getStatusModel(a)] - order[getStatusModel(b)],
+      );
+    } else if (sortBy === "terbanyak") {
+      sorted.sort((a, b) => getTotalTersedia(b) - getTotalTersedia(a));
+    } else if (sortBy === "nama") {
+      sorted.sort((a, b) => a.nama_model.localeCompare(b.nama_model));
+    } else if (sortBy === "keluar") {
+      sorted.sort(
+        (a, b) =>
+          b.items.reduce((s, i) => s + i.total_keluar, 0) -
+          a.items.reduce((s, i) => s + i.total_keluar, 0),
+      );
+    }
+    return sorted;
   });
 
   let totalModel = $derived(grouped.length);
@@ -56,16 +111,75 @@
     stokList.reduce((s, i) => s + i.stok_tersedia, 0),
   );
   let totalMasuk = $derived(stokList.reduce((s, i) => s + i.total_masuk, 0));
-  let totalKeluar = $derived(stokList.reduce((s, i) => s + i.total_keluar, 0));
   let modelKosong = $derived(
     grouped.filter((g) => g.items.every((i) => i.stok_tersedia === 0)).length,
   );
-  let lastLoaded = $state<Date | null>(null);
+  let modelKritis = $derived(
+    grouped.filter((g) => getStatusModel(g) === "kritis").length,
+  );
 
   // ── Helpers ────────────────────────────────────────────────────────
-  function totalTersediaModel(items: StokBarangJadi[]): number {
-    return items.reduce((s, i) => s + i.stok_tersedia, 0);
+  function getUkuranStatus(
+    item: StokBarangJadi,
+  ): "kosong" | "kritis" | "low" | "aman" {
+    if (item.stok_tersedia === 0) return "kosong";
+    if (item.stok_tersedia <= KRITIS_THRESHOLD) return "kritis";
+    if (item.stok_tersedia <= LOW_THRESHOLD) return "low";
+    return "aman";
   }
+
+  const STATUS_STYLE = {
+    kosong: {
+      card: "bg-gray-50 border-gray-200",
+      badge: "bg-gray-100 text-gray-500",
+      label: "Habis",
+      dot: "bg-gray-300",
+      num: "text-gray-400",
+      bar: "bg-gray-300",
+      ukuran: "bg-gray-100 text-gray-500",
+    },
+    kritis: {
+      card: "bg-red-50/60 border-red-200",
+      badge: "bg-red-100 text-red-600",
+      label: "Kritis",
+      dot: "bg-red-500",
+      num: "text-red-600",
+      bar: "bg-red-400",
+      ukuran: "bg-red-100 text-red-700",
+    },
+    low: {
+      card: "bg-amber-50/40 border-amber-200",
+      badge: "bg-amber-100 text-amber-600",
+      label: "Menipis",
+      dot: "bg-amber-400",
+      num: "text-amber-600",
+      bar: "bg-amber-400",
+      ukuran: "bg-amber-100 text-amber-700",
+    },
+    aman: {
+      card: "bg-white border-gray-100",
+      badge: "bg-teal-100 text-teal-700",
+      label: "Aman",
+      dot: "bg-teal-400",
+      num: "text-gray-900",
+      bar: "bg-teal-400",
+      ukuran: "bg-teal-100 text-teal-700",
+    },
+  };
+
+  const MODEL_HEADER_STYLE = {
+    kosong: "border-gray-100 bg-gray-50",
+    kritis: "border-red-100 bg-red-50",
+    low: "border-amber-100 bg-amber-50",
+    aman: "border-gray-100 bg-gray-50",
+  };
+
+  const MODEL_NAME_STYLE = {
+    kosong: "text-gray-500",
+    kritis: "text-red-700",
+    low: "text-amber-700",
+    aman: "text-gray-800",
+  };
 
   function formatDate(ts: any): string {
     if (!ts) return "—";
@@ -102,7 +216,7 @@
 <!-- ── Error Toast ─────────────────────────────────────────────────── -->
 {#if errorMsg}
   <div
-    class="fixed right-5 top-5 z-9999 flex max-w-sm items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 shadow-lg"
+    class="fixed right-5 top-5 z-[9999] flex max-w-sm items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 shadow-lg"
   >
     <svg
       class="mt-0.5 h-4 w-4 shrink-0 text-red-500"
@@ -188,20 +302,101 @@
       icon={PackageIcon}
       footerSubtext="pcs dari produksi"
     />
-    <StatCard
-      title="Stok Habis"
-      value={modelKosong}
-      icon={PackageXIcon}
-      footerSubtext="model tanpa stok"
-      class={modelKosong > 0 ? "border-amber-100 bg-amber-50" : ""}
-      valueClass={modelKosong > 0 ? "text-amber-700" : ""}
-    />
+    <!-- Stat kritis: klik langsung filter -->
+    <button
+      onclick={() => {
+        filterStatus =
+          modelKritis > 0 ? "kritis" : modelKosong > 0 ? "kosong" : "semua";
+      }}
+      class="group rounded-xl border text-left shadow-sm transition {modelKritis >
+      0
+        ? 'border-red-200 bg-red-50 hover:bg-red-100'
+        : modelKosong > 0
+          ? 'border-amber-100 bg-amber-50 hover:bg-amber-100'
+          : 'border-gray-100 bg-white hover:bg-gray-50'} p-4"
+    >
+      <div class="flex items-start justify-between">
+        <p
+          class="text-xs font-medium uppercase tracking-wider {modelKritis > 0
+            ? 'text-red-500'
+            : modelKosong > 0
+              ? 'text-amber-500'
+              : 'text-gray-400'}"
+        >
+          Perlu Perhatian
+        </p>
+        <PackageXIcon
+          class="h-4 w-4 {modelKritis > 0
+            ? 'text-red-400'
+            : modelKosong > 0
+              ? 'text-amber-400'
+              : 'text-gray-300'}"
+        />
+      </div>
+      <p
+        class="mt-1.5 text-2xl font-bold {modelKritis > 0
+          ? 'text-red-700'
+          : modelKosong > 0
+            ? 'text-amber-600'
+            : 'text-gray-900'}"
+      >
+        {modelKritis + modelKosong}
+      </p>
+      <p
+        class="text-xs {modelKritis > 0
+          ? 'text-red-500'
+          : modelKosong > 0
+            ? 'text-amber-500'
+            : 'text-gray-400'}"
+      >
+        {modelKritis} kritis · {modelKosong} habis
+        {#if modelKritis + modelKosong > 0}
+          <span class="ml-1 opacity-60 group-hover:opacity-100">→ filter</span>
+        {/if}
+      </p>
+    </button>
   {/if}
 </div>
 
-<!-- ── Search ──────────────────────────────────────────────────────── -->
-<div class="mb-4 flex items-center gap-3">
-  <div class="relative flex-1">
+<!-- ── Alert Banner jika ada yang kritis ──────────────────────────── -->
+{#if !loading && modelKritis > 0}
+  <div
+    class="mb-4 flex items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3"
+  >
+    <svg
+      class="h-4 w-4 shrink-0 text-red-500"
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke-width="2"
+      stroke="currentColor"
+    >
+      <path
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z"
+      />
+    </svg>
+    <p class="flex-1 text-sm text-red-700">
+      <span class="font-semibold">{modelKritis} model</span> memiliki ukuran
+      dengan stok ≤{KRITIS_THRESHOLD} pcs — segera rencanakan produksi ulang.
+    </p>
+    <button
+      onclick={() => {
+        filterStatus = "kritis";
+        sortBy = "kritis";
+      }}
+      class="shrink-0 rounded-lg bg-red-100 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-200 transition"
+    >
+      Lihat Semua
+    </button>
+  </div>
+{/if}
+
+<!-- ── Filter & Sort Bar ──────────────────────────────────────────── -->
+<div class="mb-4 flex flex-wrap items-center gap-3">
+  <!-- Search -->
+  <div class="relative min-w-48 flex-1">
     <svg
       class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400"
       xmlns="http://www.w3.org/2000/svg"
@@ -223,16 +418,44 @@
       class="w-full rounded-lg border border-gray-200 bg-white py-2 pl-9 pr-4 text-sm text-gray-700 placeholder:text-gray-400 focus:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-100"
     />
   </div>
-  {#if searchQuery}
-    <Button variant="link" size="sm" onclick={() => (searchQuery = "")}>
-      Hapus
-    </Button>
-  {/if}
+
+  <!-- Filter Status -->
+  <div class="flex items-center gap-1.5 flex-wrap">
+    {#each [["semua", "Semua"], ["kritis", "🔴 Kritis"], ["low", "🟡 Menipis"], ["kosong", "⚫ Habis"]] as const as [val, lbl]}
+      <button
+        onclick={() => (filterStatus = val)}
+        class="rounded-full border px-3 py-1 text-xs font-medium transition {filterStatus ===
+        val
+          ? 'border-gray-800 bg-gray-800 text-white'
+          : 'border-gray-200 bg-white text-gray-500 hover:border-gray-300 hover:text-gray-700'}"
+      >
+        {lbl}
+        {#if val !== "semua"}
+          <span class="ml-1 opacity-60">
+            ({grouped.filter((g) => getStatusModel(g) === val).length})
+          </span>
+        {/if}
+      </button>
+    {/each}
+  </div>
+
+  <!-- Sort -->
+  <div class="flex items-center gap-1.5 ml-auto">
+    <span class="text-xs text-gray-400">Urutkan:</span>
+    {#each [["kritis", "Kritis Dulu"], ["terbanyak", "Terbanyak"], ["keluar", "Paling Laku"], ["nama", "A–Z"]] as const as [val, lbl]}
+      <Button
+        size="sm"
+        variant={sortBy === val ? "default" : "outline"}
+        onclick={() => (sortBy = val)}
+      >
+        {lbl}
+      </Button>
+    {/each}
+  </div>
 </div>
 
 <!-- ── Content ────────────────────────────────────────────────────── -->
 {#if loading}
-  <!-- Skeleton -->
   <div class="space-y-4">
     {#each Array(3) as _}
       <div
@@ -255,7 +478,6 @@
     {/each}
   </div>
 {:else if filteredGrouped.length === 0}
-  <!-- Empty state -->
   <div
     class="flex flex-col items-center justify-center gap-3 rounded-xl border border-gray-100 bg-white py-16 shadow-sm"
   >
@@ -277,12 +499,19 @@
         />
       </svg>
     </div>
-    {#if searchQuery}
+    {#if searchQuery || filterStatus !== "semua"}
       <p class="text-sm font-medium text-gray-500">
-        Model "{searchQuery}" tidak ditemukan
+        Tidak ada model yang cocok
       </p>
-      <Button variant="link" size="sm" onclick={() => (searchQuery = "")}>
-        Hapus pencarian
+      <Button
+        variant="link"
+        size="sm"
+        onclick={() => {
+          searchQuery = "";
+          filterStatus = "semua";
+        }}
+      >
+        Reset filter
       </Button>
     {:else}
       <p class="text-sm font-medium text-gray-500">
@@ -291,131 +520,204 @@
       <p class="text-xs text-gray-400">
         Stok akan terisi otomatis saat batch produksi selesai
       </p>
-      <Button variant="outline" class="mt-1" onclick={() => goto('/order-produksi')}>
+      <Button
+        variant="outline"
+        class="mt-1"
+        onclick={() => goto("/order-produksi")}
+      >
         Lihat Order Produksi →
       </Button>
     {/if}
   </div>
 {:else}
-  <!-- Model cards -->
   <div class="space-y-4">
     {#each filteredGrouped as group}
-      {@const totalGrup = totalTersediaModel(group.items)}
+      {@const statusModel = getStatusModel(group)}
+      {@const st = STATUS_STYLE[statusModel]}
+      {@const totalGrup = getTotalTersedia(group)}
       {@const totalMasukG = group.items.reduce((s, i) => s + i.total_masuk, 0)}
       {@const totalKeluarG = group.items.reduce(
         (s, i) => s + i.total_keluar,
         0,
       )}
-      {@const kosong = totalGrup === 0}
+      {@const pctSisa =
+        totalMasukG > 0 ? Math.round((totalGrup / totalMasukG) * 100) : 0}
+      {@const ukuranKritis = group.items.filter(
+        (i) => getUkuranStatus(i) === "kritis",
+      ).length}
+      {@const ukuranLow = group.items.filter(
+        (i) => getUkuranStatus(i) === "low",
+      ).length}
 
       <div
-        class="overflow-hidden rounded-xl border {kosong
-          ? 'border-amber-100'
-          : 'border-gray-100'} bg-white shadow-sm"
+        class="overflow-hidden rounded-xl border {statusModel === 'kritis'
+          ? 'border-red-200'
+          : statusModel === 'low'
+            ? 'border-amber-200'
+            : statusModel === 'kosong'
+              ? 'border-gray-200'
+              : 'border-gray-100'} bg-white shadow-sm"
       >
-        <!-- Model header -->
-        <div
-          class="flex items-center justify-between border-b {kosong
-            ? 'border-amber-100 bg-amber-50'
-            : 'border-gray-100 bg-gray-50'} px-5 py-3"
-        >
-          <div class="flex items-center gap-2">
-            {#if kosong}
-              <span class="h-2 w-2 rounded-full bg-amber-400"></span>
-            {:else}
-              <span class="h-2 w-2 rounded-full bg-teal-400"></span>
-            {/if}
-            <p
-              class="text-sm font-semibold {kosong
-                ? 'text-amber-700'
-                : 'text-gray-800'}"
-            >
-              {group.nama_model}
-            </p>
+        <!-- ── Model Header ── -->
+        <div class="border-b {MODEL_HEADER_STYLE[statusModel]} px-5 py-3">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <!-- Kiri: nama + badges -->
+            <div class="flex items-center gap-2.5">
+              <span class="h-2.5 w-2.5 shrink-0 rounded-full {st.dot}"></span>
+              <p class="text-sm font-semibold {MODEL_NAME_STYLE[statusModel]}">
+                {group.nama_model}
+              </p>
+              <!-- Status badge -->
+              <span
+                class="rounded-full px-2 py-0.5 text-[11px] font-semibold {st.badge}"
+              >
+                {st.label}
+              </span>
+              <!-- Ukuran kritis/low badges -->
+              {#if ukuranKritis > 0}
+                <span
+                  class="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-medium text-red-600"
+                >
+                  {ukuranKritis} ukuran kritis
+                </span>
+              {/if}
+              {#if ukuranLow > 0}
+                <span
+                  class="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-600"
+                >
+                  {ukuranLow} ukuran menipis
+                </span>
+              {/if}
+            </div>
+
+            <!-- Kanan: ringkasan angka -->
+            <div class="flex items-center gap-4 text-xs text-gray-500">
+              <div class="text-right">
+                <p
+                  class="font-semibold {statusModel === 'kosong'
+                    ? 'text-gray-400'
+                    : statusModel === 'kritis'
+                      ? 'text-red-600'
+                      : statusModel === 'low'
+                        ? 'text-amber-600'
+                        : 'text-teal-700'} text-base leading-tight"
+                >
+                  {totalGrup}
+                </p>
+                <p>pcs tersedia</p>
+              </div>
+              <div class="h-8 w-px bg-gray-200"></div>
+              <div class="text-right">
+                <p class="font-semibold text-gray-700">{totalMasukG}</p>
+                <p>masuk</p>
+              </div>
+              <div class="text-right">
+                <p class="font-semibold text-gray-700">{totalKeluarG}</p>
+                <p>keluar</p>
+              </div>
+              <div class="text-right">
+                <p class="font-semibold text-gray-700">{pctSisa}%</p>
+                <p>sisa</p>
+              </div>
+            </div>
           </div>
-          <div class="flex items-center gap-4 text-xs">
-            <span class="text-gray-400">
-              Tersedia: <span
-                class="font-semibold {kosong
-                  ? 'text-amber-600'
-                  : 'text-gray-700'}">{totalGrup} pcs</span
-              >
-            </span>
-            <span class="text-gray-400">
-              Masuk: <span class="font-semibold text-gray-700"
-                >{totalMasukG}</span
-              >
-            </span>
-            <span class="text-gray-400">
-              Keluar: <span class="font-semibold text-gray-700"
-                >{totalKeluarG}</span
-              >
-            </span>
+
+          <!-- Progress bar total model -->
+          <div class="mt-2.5 flex items-center gap-2">
+            <div class="h-1.5 flex-1 rounded-full bg-gray-200">
+              <div
+                class="h-1.5 rounded-full transition-all {st.bar}"
+                style="width: {pctSisa}%"
+              ></div>
+            </div>
+            <span class="text-[10px] text-gray-400">{pctSisa}% stok awal</span>
           </div>
         </div>
 
-        <!-- Ukuran grid -->
+        <!-- ── Ukuran Grid ── -->
         <div
-          class="grid divide-x divide-gray-100"
+          class="grid divide-x divide-gray-100 grid-cols-{Math.min(
+            group.items.length,
+            5,
+          )}"
           style="grid-template-columns: repeat({group.items
             .length}, minmax(0, 1fr))"
         >
           {#each group.items as item}
-            {@const habis = item.stok_tersedia === 0}
-            <div class="p-4 {habis ? 'bg-amber-50/40' : ''}">
-              <!-- Ukuran badge -->
-              <div class="mb-2 flex items-center justify-between">
+            {@const uStatus = getUkuranStatus(item)}
+            {@const uSt = STATUS_STYLE[uStatus]}
+            {@const pct =
+              item.total_masuk > 0
+                ? Math.round((item.stok_tersedia / item.total_masuk) * 100)
+                : 0}
+
+            <div class="p-4 {uStatus !== 'aman' ? uSt.card.split(' ')[0] : ''}">
+              <!-- Ukuran badge + status -->
+              <div class="mb-2.5 flex items-center justify-between gap-1">
                 <span
-                  class="flex h-7 w-7 items-center justify-center rounded-full {habis
-                    ? 'bg-amber-100 text-amber-700'
-                    : 'bg-teal-100 text-teal-700'} text-xs font-bold"
+                  class="flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold {uSt.ukuran}"
                 >
                   {item.ukuran}
                 </span>
-                {#if habis}
+                {#if uStatus !== "aman"}
                   <span
-                    class="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-600"
-                    >Habis</span
+                    class="rounded-full px-1.5 py-0.5 text-[10px] font-semibold {uSt.badge}"
                   >
+                    {uSt.label}
+                  </span>
                 {/if}
               </div>
-              <!-- Stok number -->
-              <p
-                class="text-xl font-bold {habis
-                  ? 'text-amber-600'
-                  : 'text-gray-900'}"
-              >
+
+              <!-- Stok besar -->
+              <p class="text-2xl font-bold leading-none {uSt.num}">
                 {item.stok_tersedia}
               </p>
-              <p class="text-[11px] text-gray-400">pcs tersedia</p>
+              <p class="mt-0.5 text-[11px] text-gray-400">pcs tersedia</p>
+
               <!-- Mini stats -->
-              <div class="mt-2 space-y-0.5 text-[11px] text-gray-400">
-                <p>
-                  Masuk: <span class="text-gray-600">{item.total_masuk}</span>
+              <div
+                class="mt-2 space-y-0.5 text-[11px] text-gray-400 border-t border-gray-100 pt-2"
+              >
+                <p class="flex justify-between">
+                  <span>Masuk</span>
+                  <span class="font-medium text-gray-600"
+                    >{item.total_masuk}</span
+                  >
                 </p>
-                <p>
-                  Keluar: <span class="text-gray-600">{item.total_keluar}</span>
+                <p class="flex justify-between">
+                  <span>Keluar</span>
+                  <span class="font-medium text-gray-600"
+                    >{item.total_keluar}</span
+                  >
                 </p>
               </div>
-              <!-- Progress bar -->
+
+              <!-- Progress bar per ukuran -->
               {#if item.total_masuk > 0}
-                {@const pct = Math.round(
-                  (item.stok_tersedia / item.total_masuk) * 100,
-                )}
-                <div class="mt-2 h-1 w-full rounded-full bg-gray-100">
+                <div class="mt-2 h-1.5 w-full rounded-full bg-gray-100">
                   <div
-                    class="h-1 rounded-full {habis
-                      ? 'bg-amber-300'
-                      : 'bg-teal-400'}"
+                    class="h-1.5 rounded-full {uSt.bar}"
                     style="width: {pct}%"
                   ></div>
                 </div>
                 <p class="mt-0.5 text-[10px] text-gray-400">{pct}% sisa</p>
               {/if}
+
+              <!-- Threshold warning -->
+              {#if uStatus === "kritis" && item.stok_tersedia > 0}
+                <p class="mt-1.5 text-[10px] font-medium text-red-500">
+                  ≤ {KRITIS_THRESHOLD} pcs!
+                </p>
+              {:else if uStatus === "low"}
+                <p class="mt-1.5 text-[10px] font-medium text-amber-500">
+                  ≤ {LOW_THRESHOLD} pcs
+                </p>
+              {/if}
+
               <!-- Last update -->
               {#if item.updatedAt}
                 <p class="mt-1.5 text-[10px] text-gray-300">
-                  Update: {formatDate(item.updatedAt)}
+                  {formatDate(item.updatedAt)}
                 </p>
               {/if}
             </div>
@@ -434,18 +736,27 @@
         >{filteredGrouped.length}</span
       >
       dari {totalModel} model
+      {#if filterStatus !== "semua"}
+        <button
+          onclick={() => (filterStatus = "semua")}
+          class="ml-1.5 text-teal-600 hover:underline"
+        >
+          (reset filter)
+        </button>
+      {/if}
     </p>
-    <div class="flex gap-4 text-xs text-gray-400">
-      <span
-        >Total tersedia: <span class="font-semibold text-teal-700"
+    <div class="flex flex-wrap gap-4 text-xs text-gray-400">
+      <span>
+        Tersedia: <span class="font-semibold text-teal-700"
           >{totalTersedia.toLocaleString("id-ID")} pcs</span
-        ></span
-      >
-      <span
-        >Total keluar: <span class="font-semibold text-gray-700"
-          >{totalKeluar.toLocaleString("id-ID")} pcs</span
-        ></span
-      >
+        >
+      </span>
+      {#if modelKritis > 0}
+        <span class="font-medium text-red-500">{modelKritis} model kritis</span>
+      {/if}
+      {#if modelKosong > 0}
+        <span class="font-medium text-gray-400">{modelKosong} model habis</span>
+      {/if}
     </div>
   </div>
 {/if}

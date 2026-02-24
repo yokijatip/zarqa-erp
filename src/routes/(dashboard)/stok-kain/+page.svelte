@@ -11,7 +11,6 @@
   import * as Dialog from "$lib/components/ui/dialog";
   import * as Table from "$lib/components/ui/table";
   import { Button } from "$lib/components/ui/button";
-  import { Input } from "$lib/components/ui/input";
   import StatCard from "$lib/components/StatCard.svelte";
   import LayersIcon from "@lucide/svelte/icons/layers";
   import BoxIcon from "@lucide/svelte/icons/box";
@@ -28,7 +27,7 @@
     "tersedia_asc",
   );
 
-  // Sheet state
+  // Dialog state
   let openTambah = $state(false);
   let openRestock = $state(false);
   let openKurangi = $state(false);
@@ -39,7 +38,7 @@
 
   // Form: tambah kain
   let fNama = $state("");
-  let fSatuan = $state<'yard' | 'kg'>('yard');
+  let fSatuan = $state<"yard" | "kg">("yard");
   let fStok = $state<number | "">("");
   let fCatatan = $state("");
 
@@ -56,8 +55,16 @@
   let eCatatan = $state("");
 
   // ── Derived ────────────────────────────────────────────────────────
-  let totalYard = $derived(stokList.filter((k) => k.satuan === 'yard').reduce((s, k) => s + k.stok_tersedia, 0));
-  let totalKg = $derived(stokList.filter((k) => k.satuan === 'kg').reduce((s, k) => s + k.stok_tersedia, 0));
+  let totalYard = $derived(
+    stokList
+      .filter((k) => k.satuan === "yard")
+      .reduce((s, k) => s + k.stok_tersedia, 0),
+  );
+  let totalKg = $derived(
+    stokList
+      .filter((k) => k.satuan === "kg")
+      .reduce((s, k) => s + k.stok_tersedia, 0),
+  );
   let totalJenis = $derived(stokList.length);
   let kritisCount = $derived(
     stokList.filter((k) => k.stok_tersedia < 100).length,
@@ -180,6 +187,7 @@
 
   function bukaTambah() {
     fNama = "";
+    fSatuan = "yard";
     fStok = "";
     fCatatan = "";
     openTambah = true;
@@ -255,7 +263,7 @@
 <!-- ── Toast Notification ──────────────────────────────────────── -->
 {#if successMsg}
   <div
-    class="fixed right-5 top-5 z-9999 flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 shadow-lg"
+    class="fixed right-5 top-5 z-[9999] flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 shadow-lg"
   >
     <svg
       class="h-4 w-4 shrink-0 text-green-600"
@@ -276,7 +284,7 @@
 {/if}
 {#if errorMsg}
   <div
-    class="fixed right-5 top-5 z-9999 flex max-w-sm items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 shadow-lg"
+    class="fixed right-5 top-5 z-[9999] flex max-w-sm items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 shadow-lg"
   >
     <svg
       class="mt-0.5 h-4 w-4 shrink-0 text-red-500"
@@ -330,14 +338,12 @@
     icon={LayersIcon}
     footerSubtext="jenis kain terdaftar"
   />
-
   <StatCard
     title="Total Yard"
     value={totalYard.toLocaleString("id-ID")}
     icon={BoxIcon}
     footerSubtext="yard tersedia"
   />
-
   <StatCard
     title="Total Kg"
     value={totalKg.toLocaleString("id-ID")}
@@ -356,7 +362,6 @@
 
 <!-- ── Filter & Sort Bar ──────────────────────────────────────── -->
 <div class="mb-4 flex flex-wrap items-center gap-3">
-  <!-- Search -->
   <div class="relative min-w-48 flex-1">
     <svg
       class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400"
@@ -380,7 +385,6 @@
     />
   </div>
 
-  <!-- Sort -->
   <div class="flex items-center gap-1.5">
     <span class="text-xs text-gray-500">Urutkan:</span>
     {#each [["tersedia_asc", "Kritis Dulu"], ["tersedia_desc", "Terbanyak"], ["nama", "A–Z"]] as const as [val, lbl]}
@@ -482,7 +486,6 @@
           {@const st = statusKain(kain.stok_tersedia)}
           {@const pct = persen(kain.stok_tersedia, kain.stok_terpakai)}
           <Table.Row>
-            <!-- Nama + Progress bar -->
             <Table.Cell>
               <p class="text-sm font-medium text-gray-800">{kain.nama_kain}</p>
               <div class="mt-1.5 flex items-center gap-2">
@@ -496,10 +499,10 @@
               </div>
             </Table.Cell>
 
-            <!-- Tersedia -->
             <Table.Cell class="text-right">
               <p
-                class="text-sm font-semibold tabular-nums {kain.stok_tersedia < 100
+                class="text-sm font-semibold tabular-nums {kain.stok_tersedia <
+                100
                   ? 'text-red-600'
                   : 'text-gray-800'}"
               >
@@ -508,7 +511,6 @@
               <p class="text-xs text-gray-400">{kain.satuan}</p>
             </Table.Cell>
 
-            <!-- Terpakai -->
             <Table.Cell class="text-right">
               <p class="text-sm tabular-nums text-gray-600">
                 {kain.stok_terpakai.toLocaleString("id-ID")}
@@ -516,7 +518,6 @@
               <p class="text-xs text-gray-400">{kain.satuan}</p>
             </Table.Cell>
 
-            <!-- Status badge -->
             <Table.Cell class="text-center">
               <span
                 class="inline-block rounded-full px-2.5 py-1 text-xs font-semibold {st.cls}"
@@ -525,14 +526,12 @@
               </span>
             </Table.Cell>
 
-            <!-- Catatan -->
             <Table.Cell class="max-w-45">
               <p class="truncate text-xs text-gray-500">
                 {kain.catatan ?? "—"}
               </p>
             </Table.Cell>
 
-            <!-- Action -->
             <Table.Cell class="text-right">
               <div class="flex justify-end gap-2">
                 <Button
@@ -603,7 +602,6 @@
       </Table.Body>
     </Table.Root>
 
-    <!-- Footer -->
     <div
       class="flex items-center justify-between border-t border-gray-100 bg-gray-50 px-5 py-3"
     >
@@ -612,10 +610,18 @@
       </p>
       <div class="flex flex-wrap gap-3 text-xs text-gray-400">
         {#if totalYard > 0}
-          <span>Yard: <span class="font-semibold text-gray-700">{totalYard.toLocaleString("id-ID")}</span></span>
+          <span
+            >Yard: <span class="font-semibold text-gray-700"
+              >{totalYard.toLocaleString("id-ID")}</span
+            ></span
+          >
         {/if}
         {#if totalKg > 0}
-          <span>Kg: <span class="font-semibold text-gray-700">{totalKg.toLocaleString("id-ID")}</span></span>
+          <span
+            >Kg: <span class="font-semibold text-gray-700"
+              >{totalKg.toLocaleString("id-ID")}</span
+            ></span
+          >
         {/if}
       </div>
     </div>
@@ -633,7 +639,6 @@
     </Dialog.Header>
 
     <div class="space-y-4">
-      <!-- Nama Kain -->
       <div>
         <label
           class="mb-1.5 block text-sm font-medium text-gray-700"
@@ -650,15 +655,16 @@
         />
       </div>
 
-      <!-- Satuan -->
       <div>
-        <p class="mb-1.5 text-sm font-medium text-gray-700">Satuan <span class="text-red-500">*</span></p>
+        <p class="mb-1.5 text-sm font-medium text-gray-700">
+          Satuan <span class="text-red-500">*</span>
+        </p>
         <div class="flex gap-2">
           <Button
             type="button"
             size="sm"
-            variant={fSatuan === 'yard' ? 'default' : 'outline'}
-            onclick={() => (fSatuan = 'yard')}
+            variant={fSatuan === "yard" ? "default" : "outline"}
+            onclick={() => (fSatuan = "yard")}
             class="flex-1"
           >
             Yard
@@ -666,8 +672,8 @@
           <Button
             type="button"
             size="sm"
-            variant={fSatuan === 'kg' ? 'default' : 'outline'}
-            onclick={() => (fSatuan = 'kg')}
+            variant={fSatuan === "kg" ? "default" : "outline"}
+            onclick={() => (fSatuan = "kg")}
             class="flex-1"
           >
             Kilogram (kg)
@@ -675,7 +681,6 @@
         </div>
       </div>
 
-      <!-- Stok Awal -->
       <div>
         <label
           class="mb-1.5 block text-sm font-medium text-gray-700"
@@ -693,7 +698,6 @@
         />
       </div>
 
-      <!-- Catatan -->
       <div>
         <label
           class="mb-1.5 block text-sm font-medium text-gray-700"
@@ -749,33 +753,51 @@
   <Dialog.Content class="max-w-md">
     <Dialog.Header>
       <Dialog.Title>Restock Kain</Dialog.Title>
-      <Dialog.Description>Tambah stok kain yang sudah terdaftar.</Dialog.Description>
+      <Dialog.Description>
+        Tambah stok kain yang sudah terdaftar.
+      </Dialog.Description>
     </Dialog.Header>
 
     <div class="space-y-4">
-      <!-- Info kain -->
       {#if selectedKain}
         <div class="rounded-xl border border-gray-100 bg-gray-50 p-4">
-          <p class="text-xs font-medium text-gray-500 uppercase tracking-wider">
+          <p class="text-xs font-medium uppercase tracking-wider text-gray-500">
             Kain yang di-restock
           </p>
           <p class="mt-1 text-base font-semibold text-gray-800">
             {selectedKain.nama_kain}
           </p>
           <div class="mt-2 flex items-center gap-4 text-xs text-gray-500">
-            <span>Saat ini: <strong class="text-gray-700">{selectedKain.stok_tersedia.toLocaleString("id-ID")} {selectedKain.satuan}</strong></span>
-            <span>Terpakai: <strong class="text-gray-700">{selectedKain.stok_terpakai.toLocaleString("id-ID")} {selectedKain.satuan}</strong></span>
+            <span
+              >Saat ini: <strong class="text-gray-700"
+                >{selectedKain.stok_tersedia.toLocaleString("id-ID")}
+                {selectedKain.satuan}</strong
+              ></span
+            >
+            <span
+              >Terpakai: <strong class="text-gray-700"
+                >{selectedKain.stok_terpakai.toLocaleString("id-ID")}
+                {selectedKain.satuan}</strong
+              ></span
+            >
           </div>
-          <span class="mt-2 inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold {statusKain(selectedKain.stok_tersedia).cls}">
+          <span
+            class="mt-2 inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold {statusKain(
+              selectedKain.stok_tersedia,
+            ).cls}"
+          >
             {statusKain(selectedKain.stok_tersedia).label}
           </span>
         </div>
       {/if}
 
-      <!-- Jumlah Restock -->
       <div>
-        <label class="mb-1.5 block text-sm font-medium text-gray-700" for="restock-jumlah">
-          Tambah Stok ({selectedKain?.satuan ?? 'unit'}) <span class="text-red-500">*</span>
+        <label
+          class="mb-1.5 block text-sm font-medium text-gray-700"
+          for="restock-jumlah"
+        >
+          Tambah Stok ({selectedKain?.satuan ?? "unit"})
+          <span class="text-red-500">*</span>
         </label>
         <input
           id="restock-jumlah"
@@ -787,15 +809,23 @@
         />
         {#if selectedKain && rJumlah !== "" && Number(rJumlah) > 0}
           <p class="mt-1.5 text-xs text-green-600">
-            Stok setelah restock: <strong>{(selectedKain.stok_tersedia + Number(rJumlah)).toLocaleString("id-ID")} {selectedKain.satuan}</strong>
+            Stok setelah restock: <strong
+              >{(selectedKain.stok_tersedia + Number(rJumlah)).toLocaleString(
+                "id-ID",
+              )}
+              {selectedKain.satuan}</strong
+            >
           </p>
         {/if}
       </div>
 
-      <!-- Catatan -->
       <div>
-        <label class="mb-1.5 block text-sm font-medium text-gray-700" for="catatan-restock">
-          Catatan <span class="text-xs font-normal text-gray-400">(opsional)</span>
+        <label
+          class="mb-1.5 block text-sm font-medium text-gray-700"
+          for="catatan-restock"
+        >
+          Catatan
+          <span class="text-xs font-normal text-gray-400">(opsional)</span>
         </label>
         <textarea
           id="catatan-restock"
@@ -808,29 +838,35 @@
     </div>
 
     <Dialog.Footer class="gap-2">
-      <Button variant="outline" onclick={() => (openRestock = false)}>Batal</Button>
-      <Button onclick={submitRestock} disabled={saving || rJumlah === "" || Number(rJumlah) <= 0}>
+      <Button variant="outline" onclick={() => (openRestock = false)}>
+        Batal
+      </Button>
+      <Button
+        onclick={submitRestock}
+        disabled={saving || rJumlah === "" || Number(rJumlah) <= 0}
+      >
         {saving ? "Menyimpan..." : "Restock Sekarang"}
       </Button>
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>
 
-<!-- ── Sheet: Kurangi Stok ──────────────────────────────────────── -->
-<Sheet.Root bind:open={openKurangi}>
-  <Sheet.Content side="right" class="w-full max-w-md">
-    <Sheet.Header>
-      <Sheet.Title>Kurangi Stok</Sheet.Title>
-      <Sheet.Description>
+<!-- ── Dialog: Kurangi Stok ─────────────────────────────────────── -->
+<Dialog.Root bind:open={openKurangi}>
+  <Dialog.Content class="max-w-md">
+    <Dialog.Header>
+      <Dialog.Title>Kurangi Stok</Dialog.Title>
+      <Dialog.Description>
         Koreksi stok kain jika ada kesalahan input atau pengurangan fisik.
-      </Sheet.Description>
-    </Sheet.Header>
+      </Dialog.Description>
+    </Dialog.Header>
 
-    <div class="mt-6 space-y-4 px-6">
-      <!-- Info kain -->
+    <div class="space-y-4">
       {#if kurangiKain}
         <div class="rounded-xl border border-orange-100 bg-orange-50 p-4">
-          <p class="text-xs font-medium uppercase tracking-wider text-orange-500">
+          <p
+            class="text-xs font-medium uppercase tracking-wider text-orange-500"
+          >
             Kain yang dikurangi
           </p>
           <p class="mt-1 text-base font-semibold text-gray-800">
@@ -840,20 +876,20 @@
             <span>
               Stok saat ini:
               <strong class="text-gray-700">
-                {kurangiKain.stok_tersedia.toLocaleString("id-ID")} {kurangiKain.satuan}
+                {kurangiKain.stok_tersedia.toLocaleString("id-ID")}
+                {kurangiKain.satuan}
               </strong>
             </span>
           </div>
         </div>
       {/if}
 
-      <!-- Jumlah dikurangi -->
       <div>
         <label
           class="mb-1.5 block text-sm font-medium text-gray-700"
           for="kurangi-jumlah"
         >
-          Jumlah yang Dikurangi ({kurangiKain?.satuan ?? 'unit'})
+          Jumlah yang Dikurangi ({kurangiKain?.satuan ?? "unit"})
           <span class="text-red-500">*</span>
         </label>
         <input
@@ -868,20 +904,23 @@
         {#if kurangiKain && kJumlah !== "" && Number(kJumlah) > 0}
           {#if Number(kJumlah) > kurangiKain.stok_tersedia}
             <p class="mt-1.5 text-xs text-red-500">
-              Melebihi stok tersedia ({kurangiKain.stok_tersedia} {kurangiKain.satuan})
+              Melebihi stok tersedia ({kurangiKain.stok_tersedia}
+              {kurangiKain.satuan})
             </p>
           {:else}
             <p class="mt-1.5 text-xs text-orange-600">
               Stok setelah dikurangi:
               <strong>
-                {(kurangiKain.stok_tersedia - Number(kJumlah)).toLocaleString("id-ID")} {kurangiKain.satuan}
+                {(kurangiKain.stok_tersedia - Number(kJumlah)).toLocaleString(
+                  "id-ID",
+                )}
+                {kurangiKain.satuan}
               </strong>
             </p>
           {/if}
         {/if}
       </div>
 
-      <!-- Catatan -->
       <div>
         <label
           class="mb-1.5 block text-sm font-medium text-gray-700"
@@ -900,37 +939,35 @@
       </div>
     </div>
 
-    <Sheet.Footer class="mt-6 gap-2 px-6">
-      <Button
-        variant="outline"
-        class="flex-1"
-        onclick={() => (openKurangi = false)}
-      >
+    <Dialog.Footer class="gap-2">
+      <Button variant="outline" onclick={() => (openKurangi = false)}>
         Batal
       </Button>
       <Button
         onclick={submitKurangi}
-        disabled={saving || kJumlah === "" || Number(kJumlah) <= 0 || (kurangiKain != null && Number(kJumlah) > kurangiKain.stok_tersedia)}
-        class="flex-1 bg-orange-500 hover:bg-orange-600"
+        disabled={saving ||
+          kJumlah === "" ||
+          Number(kJumlah) <= 0 ||
+          (kurangiKain != null && Number(kJumlah) > kurangiKain.stok_tersedia)}
+        class="bg-orange-500 hover:bg-orange-600"
       >
         {saving ? "Menyimpan..." : "Kurangi Stok"}
       </Button>
-    </Sheet.Footer>
-  </Sheet.Content>
-</Sheet.Root>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
 
-<!-- ── Sheet: Edit Kain ──────────────────────────────────────────── -->
-<Sheet.Root bind:open={openEdit}>
-  <Sheet.Content side="right" class="w-full max-w-md">
-    <Sheet.Header>
-      <Sheet.Title>Edit Kain</Sheet.Title>
-      <Sheet.Description>
+<!-- ── Dialog: Edit Kain ─────────────────────────────────────────── -->
+<Dialog.Root bind:open={openEdit}>
+  <Dialog.Content class="max-w-md">
+    <Dialog.Header>
+      <Dialog.Title>Edit Kain</Dialog.Title>
+      <Dialog.Description>
         Ubah nama dan catatan kain. Jumlah stok hanya bisa diubah lewat Restock.
-      </Sheet.Description>
-    </Sheet.Header>
+      </Dialog.Description>
+    </Dialog.Header>
 
-    <div class="mt-6 space-y-4 px-6">
-      <!-- Info stok saat ini (read-only) -->
+    <div class="space-y-4">
       {#if editingKain}
         <div class="rounded-xl border border-gray-100 bg-gray-50 p-4">
           <p class="text-xs font-medium uppercase tracking-wider text-gray-500">
@@ -940,18 +977,22 @@
             <span>
               Tersedia:
               <strong class="text-gray-700">
-                {editingKain.stok_tersedia.toLocaleString("id-ID")} {editingKain.satuan}
+                {editingKain.stok_tersedia.toLocaleString("id-ID")}
+                {editingKain.satuan}
               </strong>
             </span>
             <span>
               Terpakai:
               <strong class="text-gray-700">
-                {editingKain.stok_terpakai.toLocaleString("id-ID")} {editingKain.satuan}
+                {editingKain.stok_terpakai.toLocaleString("id-ID")}
+                {editingKain.satuan}
               </strong>
             </span>
           </div>
           <p class="mt-1.5 text-[11px] text-gray-400">
-            Satuan: <span class="font-semibold text-gray-600 uppercase">{editingKain.satuan}</span>
+            Satuan: <span class="font-semibold uppercase text-gray-600"
+              >{editingKain.satuan}</span
+            >
             · Tidak dapat diubah setelah dibuat
           </p>
           <span
@@ -964,7 +1005,6 @@
         </div>
       {/if}
 
-      <!-- Nama Kain -->
       <div>
         <label
           class="mb-1.5 block text-sm font-medium text-gray-700"
@@ -981,7 +1021,6 @@
         />
       </div>
 
-      <!-- Catatan -->
       <div>
         <label
           class="mb-1.5 block text-sm font-medium text-gray-700"
@@ -1000,21 +1039,13 @@
       </div>
     </div>
 
-    <Sheet.Footer class="mt-6 gap-2 px-6">
-      <Button
-        variant="outline"
-        class="flex-1"
-        onclick={() => (openEdit = false)}
-      >
+    <Dialog.Footer class="gap-2">
+      <Button variant="outline" onclick={() => (openEdit = false)}>
         Batal
       </Button>
-      <Button
-        onclick={submitEdit}
-        disabled={saving || !eNama.trim()}
-        class="flex-1"
-      >
+      <Button onclick={submitEdit} disabled={saving || !eNama.trim()}>
         {saving ? "Menyimpan..." : "Simpan Perubahan"}
       </Button>
-    </Sheet.Footer>
-  </Sheet.Content>
-</Sheet.Root>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
