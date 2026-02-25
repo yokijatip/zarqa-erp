@@ -183,6 +183,7 @@
         {
           model_id: fModelId,
           nama_model: selectedModel!.nama_model,
+          ...(selectedModel!.nama_warna ? { nama_warna: selectedModel!.nama_warna, kode_hex_warna: selectedModel!.kode_hex_warna } : {}),
           detail_ukuran: detailUkuran,
           kain_digunakan: kainDibutuhkan,
           ...(catatanTrimmed ? { catatan_admin: catatanTrimmed } : {}),
@@ -462,7 +463,15 @@
           >
             <!-- Model + ukuran pills -->
             <Table.Cell>
-              <p class="text-sm font-medium text-gray-800">{batch.nama_model}</p>
+              <div class="flex items-center gap-2">
+                <p class="text-sm font-medium text-gray-800">{batch.nama_model}</p>
+                {#if batch.nama_warna}
+                  <span class="inline-flex items-center gap-1 rounded-full bg-gray-100 px-1.5 py-0.5 text-[11px] font-medium text-gray-600 shrink-0">
+                    <span class="inline-block h-2 w-2 rounded-full shrink-0" style="background-color: {batch.kode_hex_warna}"></span>
+                    {batch.nama_warna}
+                  </span>
+                {/if}
+              </div>
               <div class="mt-1 flex flex-wrap gap-1">
                 {#each batch.detail_ukuran as du}
                   <span class="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-500">
@@ -547,15 +556,33 @@
               }}
             >
               <Select.Trigger class="w-full">
-                <span class={fModelId ? "text-foreground" : "text-muted-foreground"}>
-                  {fModelId
-                    ? (modelList.find((m) => m.id === fModelId)?.nama_model ?? "— Pilih model —")
-                    : "— Pilih model —"}
-                </span>
+                {#if selectedModel}
+                  <span class="flex items-center gap-2">
+                    {selectedModel.nama_model}
+                    {#if selectedModel.nama_warna}
+                      <span class="inline-flex items-center gap-1 rounded-full bg-gray-100 px-1.5 py-0.5 text-[11px] font-medium text-gray-600">
+                        <span class="inline-block h-2.5 w-2.5 rounded-full shrink-0" style="background-color: {selectedModel.kode_hex_warna}"></span>
+                        {selectedModel.nama_warna}
+                      </span>
+                    {/if}
+                  </span>
+                {:else}
+                  <span class="text-muted-foreground">— Pilih model —</span>
+                {/if}
               </Select.Trigger>
               <Select.Content preventScroll={false}>
                 {#each modelList as model}
-                  <Select.Item value={model.id}>{model.nama_model}</Select.Item>
+                  <Select.Item value={model.id}>
+                    <span class="flex items-center justify-between gap-2 w-full">
+                      {model.nama_model}
+                      {#if model.nama_warna}
+                        <span class="inline-flex items-center gap-1 rounded-full bg-gray-100 px-1.5 py-0.5 text-[11px] font-medium text-gray-600 shrink-0">
+                          <span class="inline-block h-2 w-2 rounded-full shrink-0" style="background-color: {model.kode_hex_warna}"></span>
+                          {model.nama_warna}
+                        </span>
+                      {/if}
+                    </span>
+                  </Select.Item>
                 {/each}
               </Select.Content>
             </Select.Root>

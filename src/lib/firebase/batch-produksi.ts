@@ -7,7 +7,7 @@ import {
 } from 'firebase/firestore';
 import { db } from './config';
 import { kurangiStokKain, kembalikanStokKain } from './stok-kain';
-import type { BatchProduksi, BatchProduksiInput, StatusBatch, RiwayatProses } from '$lib/types';
+import type { BatchProduksi, BatchProduksiInput, StatusBatch, RiwayatProses, PenugasanWorker } from '$lib/types';
 
 const COL = 'batch_produksi';
 
@@ -52,22 +52,39 @@ export async function getBatchById(id: string): Promise<BatchProduksi | null> {
   return { id: snap.id, ...snap.data() } as BatchProduksi;
 }
 
+// Field penugasan yang diupdate berdasarkan status tujuan
+const PENUGASAN_KEY: Partial<Record<StatusBatch, 'cutting' | 'jahit' | 'steam'>> = {
+  CUTTING_IN_PROGRESS: 'cutting',
+  JAHIT_IN_PROGRESS:   'jahit',
+  STEAM_IN_PROGRESS:   'steam',
+};
+
 // Update status batch + catat riwayat
+// penugasan: worker yang ditugaskan (hanya untuk transisi ke *_IN_PROGRESS)
 export async function updateStatusBatch(
   batchId: string,
   statusBaru: StatusBatch,
   updatedByUid: string,
   updatedByNama: string,
-  riwayat: Omit<RiwayatProses, 'status_ke' | 'updated_by_uid' | 'updated_by_nama' | 'timestamp'>
+  riwayat: Omit<RiwayatProses, 'status_ke' | 'updated_by_uid' | 'updated_by_nama' | 'timestamp'>,
+  penugasan?: PenugasanWorker
 ): Promise<void> {
   const batch = await getBatchById(batchId);
   if (!batch) throw new Error('Batch tidak ditemukan');
 
-  // Update status di dokumen utama
-  await updateDoc(doc(db, COL, batchId), {
+  // Bangun payload update dokumen utama
+  const updatePayload: Record<string, unknown> = {
     status: statusBaru,
     updatedAt: serverTimestamp(),
-  });
+  };
+
+  // Jika ada penugasan dan status tujuan memiliki key yang sesuai, simpan ke field
+  const penugasanKey = PENUGASAN_KEY[statusBaru];
+  if (penugasan && penugasanKey) {
+    updatePayload[`penugasan.${penugasanKey}`] = penugasan;
+  }
+
+  await updateDoc(doc(db, COL, batchId), updatePayload);
 
   // Catat riwayat di sub-koleksi
   await addDoc(collection(db, COL, batchId, 'riwayat_proses'), {

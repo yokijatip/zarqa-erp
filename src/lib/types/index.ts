@@ -9,15 +9,31 @@ export type UserRole =
   | 'kepala_jahit'
   | 'kepala_steam'
   | 'kepala_keluar'
-  | 'developer';
+  | 'developer'
+  | 'owner'
+  | 'hr';
 
 export interface UserProfile {
   uid: string;
   name: string;
   email: string;
   role: UserRole;
+  tipe_akun?: 'permanent' | 'temporary';
+  tanggal_expired?: Timestamp;
   createdAt?: Timestamp;
 }
+
+// ─── WARNA ───────────────────────────────────────────────────────
+
+export interface Warna {
+  id: string;
+  nama_warna: string;
+  kode_hex: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export type WarnaInput = Omit<Warna, 'id' | 'createdAt' | 'updatedAt'>;
 
 // ─── STOK KAIN ───────────────────────────────────────────────────
 
@@ -49,6 +65,9 @@ export interface ModelBaju {
   id: string;
   nama_model: string;
   deskripsi?: string;
+  warna_id?: string;
+  nama_warna?: string;
+  kode_hex_warna?: string;
   ukuran_tersedia: UkuranBaju[];
   kebutuhan_kain: KebutuhanKain[];
   aktif: boolean;
@@ -82,16 +101,28 @@ export interface KainDigunakan {
   jumlah_dipakai: number;
 }
 
+export interface PenugasanWorker {
+  uid: string;
+  nama: string;
+}
+
 export interface BatchProduksi {
   id: string;
   model_id: string;
   nama_model: string;
+  nama_warna?: string;
+  kode_hex_warna?: string;
   detail_ukuran: DetailUkuran[];
   total_pcs: number;
   kain_digunakan: KainDigunakan[];
   status: StatusBatch;
   dibuat_oleh: string;
   catatan_admin?: string;
+  penugasan?: {
+    cutting?: PenugasanWorker;
+    jahit?: PenugasanWorker;
+    steam?: PenugasanWorker;
+  };
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 }

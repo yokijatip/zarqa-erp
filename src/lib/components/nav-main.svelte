@@ -7,24 +7,27 @@
   import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
   import type { Component } from "svelte";
 
+  type SubItem = { title: string; url: string; comingSoon?: boolean };
+
   type NavItem = {
     title: string;
     url: string;
     icon: Component;
     isActive?: boolean;
     comingSoon?: boolean;
-    items?: { title: string; url: string }[];
+    items?: SubItem[];
   };
 
   let { items }: { items: NavItem[] } = $props();
 
   // Track open/closed state per group independently of navigation
+  // Use item.title as key (not item.url) because coming-soon items share url="#"
   let openMap = $state<Record<string, boolean>>(
     Object.fromEntries(
       items
         .filter((item) => item.items && item.items.length > 0)
         .map((item) => [
-          item.url,
+          item.title,
           $page.url.pathname === item.url ||
             item.items!.some((sub) => $page.url.pathname.startsWith(sub.url)),
         ])
@@ -40,7 +43,7 @@
           pathname === item.url ||
           item.items.some((sub) => pathname.startsWith(sub.url))
         ) {
-          openMap[item.url] = true;
+          openMap[item.title] = true;
         }
       }
     }
@@ -51,7 +54,8 @@
       return $page.url.pathname === item.url;
     }
     return (
-      item.items.some((sub) => $page.url.pathname.startsWith(sub.url)) ?? false
+      (item.url !== '#' && $page.url.pathname === item.url) ||
+      item.items.some((sub) => !sub.comingSoon && $page.url.pathname.startsWith(sub.url))
     );
   }
 </script>
@@ -78,7 +82,7 @@
         </Sidebar.MenuItem>
       {:else}
         <!-- Menu dengan submenu -->
-        <Collapsible.Root bind:open={openMap[item.url]} class="group/collapsible">
+        <Collapsible.Root bind:open={openMap[item.title]} class="group/collapsible">
           <Sidebar.MenuItem>
             <div class="flex w-full items-center">
               <Sidebar.MenuButton
@@ -124,19 +128,23 @@
             <Collapsible.Content>
               <Sidebar.MenuSub>
                 {#each item.items as sub}
-                  {@const subActive = $page.url.pathname === sub.url}
+                  {@const disabled = item.comingSoon || sub.comingSoon}
+                  {@const subActive = $page.url.pathname === sub.url && !disabled}
                   <Sidebar.MenuSubItem>
                     <Sidebar.MenuSubButton
                       isActive={subActive}
-                      class={subActive ? "font-medium" : ""}
+                      class="{subActive ? 'font-medium' : ''} {sub.comingSoon ? 'opacity-50' : ''}"
                     >
                       {#snippet child({ props })}
                         <a
-                          href={item.comingSoon ? undefined : sub.url}
-                          class:pointer-events-none={item.comingSoon}
+                          href={disabled ? undefined : sub.url}
+                          class:pointer-events-none={disabled}
                           {...props}
                         >
                           {sub.title}
+                          {#if sub.comingSoon}
+                            <Badge variant="secondary" class="ml-auto text-[10px] py-0">Soon</Badge>
+                          {/if}
                         </a>
                       {/snippet}
                     </Sidebar.MenuSubButton>

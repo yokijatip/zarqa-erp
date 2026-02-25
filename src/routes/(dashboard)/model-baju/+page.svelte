@@ -8,8 +8,9 @@
     aktifkanModel,
   } from "$lib/firebase/model-baju";
   import { getStokKainList } from "$lib/firebase/stok-kain";
+  import { getWarnaList } from "$lib/firebase/warna";
   import { isAdmin } from "$lib/stores/auth.store";
-  import type { ModelBaju, StokKain, UkuranBaju } from "$lib/types";
+  import type { ModelBaju, StokKain, UkuranBaju, Warna } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
   import StatCard from "$lib/components/StatCard.svelte";
   import ShirtIcon from "@lucide/svelte/icons/shirt";
@@ -23,6 +24,7 @@
   // ── State ──────────────────────────────────────────────────────────
   let modelList = $state<ModelBaju[]>([]);
   let stokKainList = $state<StokKain[]>([]);
+  let warnaList = $state<Warna[]>([]);
   let loading = $state(true);
   let saving = $state(false);
   let errorMsg = $state<string | null>(null);
@@ -36,6 +38,7 @@
   // Form fields
   let fNama = $state("");
   let fDeskripsi = $state("");
+  let fWarnaId = $state("");
   let fUkuran = $state<UkuranBaju[]>([]);
   let fKainList = $state<
     { kain_id: string; nama_kain: string; satuan: 'yard' | 'kg'; jumlah_per_ukuran: Partial<Record<UkuranBaju, number | "">> }[]
@@ -103,6 +106,7 @@
   function resetForm() {
     fNama = "";
     fDeskripsi = "";
+    fWarnaId = "";
     fUkuran = [];
     fKainList = [];
     editingId = null;
@@ -117,6 +121,7 @@
     editingId = model.id;
     fNama = model.nama_model;
     fDeskripsi = model.deskripsi ?? "";
+    fWarnaId = model.warna_id ?? "";
     fUkuran = [...model.ukuran_tersedia];
     fKainList = model.kebutuhan_kain.map((k) => ({
       kain_id: k.kain_id,
@@ -151,9 +156,10 @@
   async function load() {
     loading = true;
     try {
-      [modelList, stokKainList] = await Promise.all([
+      [modelList, stokKainList, warnaList] = await Promise.all([
         getModelBajuList(false),
         getStokKainList(),
+        getWarnaList(),
       ]);
     } catch {
       showError("Gagal memuat data. Periksa koneksi Firebase.");
@@ -167,9 +173,13 @@
     if (!canSubmit) return;
     saving = true;
     try {
+      const selectedWarna = warnaList.find((w) => w.id === fWarnaId) ?? null;
       const input = {
         nama_model: fNama.trim(),
         ...(fDeskripsi.trim() ? { deskripsi: fDeskripsi.trim() } : {}),
+        warna_id: selectedWarna?.id ?? "",
+        nama_warna: selectedWarna?.nama_warna ?? "",
+        kode_hex_warna: selectedWarna?.kode_hex ?? "",
         ukuran_tersedia: fUkuran,
         kebutuhan_kain: fKainList.map((k) => ({
           kain_id: k.kain_id,
@@ -476,6 +486,12 @@
             <p class="truncate text-sm font-semibold text-gray-900">
               {model.nama_model}
             </p>
+            {#if model.nama_warna}
+              <span class="mt-0.5 inline-flex items-center gap-1 text-[11px] font-medium text-gray-600">
+                <span class="inline-block h-2.5 w-2.5 rounded-full border border-gray-300 shrink-0" style="background-color: {model.kode_hex_warna}"></span>
+                {model.nama_warna}
+              </span>
+            {/if}
             {#if model.deskripsi}
               <p class="mt-0.5 line-clamp-1 text-xs text-gray-400">
                 {model.deskripsi}
@@ -742,6 +758,46 @@
             bind:value={fDeskripsi}
             class="w-full resize-none rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray.400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
           ></textarea>
+        </div>
+
+        <!-- Warna -->
+        <div>
+          <label class="mb-1.5 block text-sm font-medium text-gray-700" for="warna-model">
+            Warna <span class="text-xs font-normal text-gray-400">(opsional)</span>
+          </label>
+          <Select.Root
+            type="single"
+            value={fWarnaId || undefined}
+            onValueChange={(val) => (fWarnaId = val === "__none__" ? "" : (val ?? ""))}
+          >
+            <Select.Trigger class="w-full" id="warna-model">
+              {#if fWarnaId && warnaList.find((w) => w.id === fWarnaId)}
+                {@const w = warnaList.find((w) => w.id === fWarnaId)!}
+                <span class="flex items-center gap-2">
+                  <span class="inline-block h-3.5 w-3.5 rounded-full border border-gray-200 shrink-0" style="background-color: {w.kode_hex}"></span>
+                  {w.nama_warna}
+                </span>
+              {:else}
+                <span class="text-muted-foreground">— Tanpa warna —</span>
+              {/if}
+            </Select.Trigger>
+            <Select.Content preventScroll={false}>
+              <Select.Item value="__none__">— Tanpa warna —</Select.Item>
+              {#each warnaList as w}
+                <Select.Item value={w.id}>
+                  <span class="flex items-center gap-2">
+                    <span class="inline-block h-3 w-3 rounded-full border border-gray-200 shrink-0" style="background-color: {w.kode_hex}"></span>
+                    {w.nama_warna}
+                  </span>
+                </Select.Item>
+              {/each}
+            </Select.Content>
+          </Select.Root>
+          {#if warnaList.length === 0}
+            <p class="mt-1 text-xs text-gray-400">
+              Belum ada warna terdaftar. <a href="/warna" class="text-blue-500 hover:underline">Tambah warna →</a>
+            </p>
+          {/if}
         </div>
 
         <!-- Ukuran Tersedia -->

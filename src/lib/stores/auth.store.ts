@@ -19,6 +19,32 @@ export const isAdmin = derived(
   ($user) => $user?.role === 'admin_gudang' || $user?.role === 'developer'
 );
 
+// Derived: akses modul Gudang (admin_gudang / owner / developer)
+export const isGudangAccess = derived(
+  currentUser,
+  ($user) =>
+    $user?.role === 'admin_gudang' ||
+    $user?.role === 'owner' ||
+    $user?.role === 'developer'
+);
+
+// Derived: apakah user bisa kelola karyawan (owner / hr / developer)
+export const isKaryawanManager = derived(
+  currentUser,
+  ($user) =>
+    $user?.role === 'owner' ||
+    $user?.role === 'hr' ||
+    $user?.role === 'developer'
+);
+
+// Derived: owner atau developer (akses penuh)
+export const isOwnerOrDev = derived(
+  currentUser,
+  ($user) =>
+    $user?.role === 'owner' ||
+    $user?.role === 'developer'
+);
+
 // Inisialisasi listener auth — panggil sekali di root +layout.svelte
 export function initAuthListener() {
   onAuthChange(async (firebaseUser) => {

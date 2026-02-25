@@ -5,10 +5,12 @@
   import type { BatchProduksi, StokKain, StatusBatch } from "$lib/types";
   import { STATUS_LABEL } from "$lib/types";
   import StatCard from "$lib/components/StatCard.svelte";
+  import { getPerformaKaryawan, type PerformaKaryawan } from "$lib/firebase/performa";
   import ListIcon from "@lucide/svelte/icons/list";
   import ClockIcon from "@lucide/svelte/icons/clock";
   import CheckCircleIcon from "@lucide/svelte/icons/check-circle";
   import AlertTriangleIcon from "@lucide/svelte/icons/triangle-alert";
+  import TrendingUpIcon from "@lucide/svelte/icons/trending-up";
 
   // ── Stage config ──────────────────────────────────────────────────
   type StageConf = {
@@ -171,8 +173,10 @@
   // ── State ──────────────────────────────────────────────────────────
   let batchAktif = $state<BatchProduksi[]>([]);
   let stokKainList = $state<StokKain[]>([]);
+  let performaList = $state<PerformaKaryawan[]>([]);
   let loadingBatch = $state(true);
   let loadingKain = $state(true);
+  let loadingPerforma = $state(true);
   let selectedStage = $state<StatusBatch | null>(null);
   let lastUpdated = $state<Date | null>(null);
 
@@ -252,6 +256,13 @@
   let unsubBatch: (() => void) | undefined;
   let unsubKain: (() => void) | undefined;
 
+  function reloadPerforma() {
+    loadingPerforma = true;
+    getPerformaKaryawan()
+      .then((data) => { performaList = data; })
+      .finally(() => { loadingPerforma = false; });
+  }
+
   onMount(() => {
     unsubBatch = subscribeBatchAktif((data) => {
       batchAktif = data;
@@ -262,6 +273,7 @@
       stokKainList = data;
       loadingKain = false;
     });
+    reloadPerforma();
   });
 
   onDestroy(() => {
@@ -649,6 +661,136 @@
       </div>
     {/if}
   </div>
+</div>
+
+<!-- ── Performa Produksi ───────────────────────────────────────────── -->
+<div class="mb-4 overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
+  <div class="flex items-center justify-between border-b border-gray-50 px-5 py-4">
+    <div class="flex items-center gap-2">
+      <TrendingUpIcon class="h-4 w-4 text-gray-400" />
+      <h2 class="text-sm font-semibold text-gray-800">Performa Produksi</h2>
+      <span class="text-xs text-gray-400">— berdasarkan riwayat batch</span>
+    </div>
+    <button
+      onclick={reloadPerforma}
+      class="flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:underline"
+    >
+      <svg class="h-3 w-3 {loadingPerforma ? 'animate-spin' : ''}" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+      </svg>
+      Refresh
+    </button>
+  </div>
+
+  {#if loadingPerforma}
+    <div class="space-y-0">
+      {#each Array(4) as _}
+        <div class="flex items-center gap-4 border-b border-gray-50 px-5 py-3.5">
+          <div class="h-4 w-28 animate-pulse rounded bg-gray-100"></div>
+          <div class="h-5 w-14 animate-pulse rounded-full bg-gray-100"></div>
+          <div class="ml-auto h-4 w-16 animate-pulse rounded bg-gray-100"></div>
+          <div class="h-4 w-12 animate-pulse rounded bg-gray-100"></div>
+          <div class="h-5 w-16 animate-pulse rounded-full bg-gray-100"></div>
+        </div>
+      {/each}
+    </div>
+  {:else if performaList.length === 0}
+    <div class="flex flex-col items-center gap-2 py-10 text-center">
+      <svg class="h-8 w-8 text-gray-200" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z" />
+      </svg>
+      <p class="text-sm text-gray-400">Belum ada data performa.</p>
+      <p class="text-xs text-gray-300">Data muncul setelah ada batch yang diproses.</p>
+    </div>
+  {:else}
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="bg-gray-50 text-xs text-gray-500">
+            <th class="px-5 py-2.5 text-left font-medium">#</th>
+            <th class="px-4 py-2.5 text-left font-medium">Nama</th>
+            <th class="px-4 py-2.5 text-left font-medium">Divisi</th>
+            <th class="px-4 py-2.5 text-right font-medium">Total PCS</th>
+            <th class="px-4 py-2.5 text-right font-medium">PCS Reject</th>
+            <th class="px-4 py-2.5 text-center font-medium">Reject Rate</th>
+            <th class="px-4 py-2.5 text-center font-medium">Jml Batch</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each performaList as p, i}
+            {@const rejectOk   = p.reject_rate < 5}
+            {@const rejectWarn = p.reject_rate >= 5 && p.reject_rate < 10}
+            {@const rejectBad  = p.reject_rate >= 10}
+            <tr class="border-t border-gray-50 transition-colors hover:bg-gray-50/60">
+              <!-- Rank -->
+              <td class="px-5 py-3.5">
+                {#if i === 0}
+                  <span class="text-base">🥇</span>
+                {:else if i === 1}
+                  <span class="text-base">🥈</span>
+                {:else if i === 2}
+                  <span class="text-base">🥉</span>
+                {:else}
+                  <span class="text-xs text-gray-400">{i + 1}</span>
+                {/if}
+              </td>
+              <!-- Nama -->
+              <td class="px-4 py-3.5">
+                <p class="font-medium text-gray-800">{p.nama}</p>
+              </td>
+              <!-- Divisi badge -->
+              <td class="px-4 py-3.5">
+                <span class="rounded-full px-2.5 py-0.5 text-xs font-medium
+                  {p.divisi === 'Cutting'  ? 'bg-orange-100 text-orange-700' :
+                   p.divisi === 'Jahit'    ? 'bg-blue-100 text-blue-700' :
+                   p.divisi === 'Steam'    ? 'bg-purple-100 text-purple-700' :
+                   p.divisi === 'Keluar'   ? 'bg-emerald-100 text-emerald-700' :
+                   'bg-gray-100 text-gray-600'}">
+                  {p.divisi}
+                </span>
+              </td>
+              <!-- Total PCS Berhasil -->
+              <td class="px-4 py-3.5 text-right">
+                <span class="font-semibold text-gray-800">{p.total_pcs_berhasil.toLocaleString('id-ID')}</span>
+                <span class="ml-1 text-xs text-gray-400">pcs</span>
+              </td>
+              <!-- PCS Reject -->
+              <td class="px-4 py-3.5 text-right">
+                {#if p.total_pcs_reject > 0}
+                  <span class="font-medium text-red-500">{p.total_pcs_reject}</span>
+                  <span class="ml-1 text-xs text-gray-400">pcs</span>
+                {:else}
+                  <span class="text-gray-300">—</span>
+                {/if}
+              </td>
+              <!-- Reject Rate -->
+              <td class="px-4 py-3.5 text-center">
+                <span class="rounded-full px-2.5 py-0.5 text-xs font-semibold
+                  {rejectOk   ? 'bg-green-100 text-green-700' :
+                   rejectWarn ? 'bg-yellow-100 text-yellow-700' :
+                   'bg-red-100 text-red-600'}">
+                  {p.reject_rate}%
+                  {rejectOk ? '✓' : rejectWarn ? '!' : '!!'}
+                </span>
+              </td>
+              <!-- Jumlah Batch -->
+              <td class="px-4 py-3.5 text-center text-sm text-gray-600">
+                {p.jumlah_batch}
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+      <div class="flex items-center border-t border-gray-50 bg-gray-50 px-5 py-2.5">
+        <p class="text-xs text-gray-400">
+          {performaList.length} karyawan produksi ·
+          Reject rate: <span class="text-green-600">{"<"}5% ✓ bagus</span> ·
+          <span class="text-yellow-600">5–10% ! perlu perhatian</span> ·
+          <span class="text-red-500">{">"}10% !! tinggi</span>
+        </p>
+      </div>
+    </div>
+  {/if}
 </div>
 
 <!-- ── Bottom Row: Quick Actions + Stok Kain ──────────────────────── -->

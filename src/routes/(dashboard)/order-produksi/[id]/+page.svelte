@@ -9,12 +9,14 @@
     deleteBatchProduksi,
   } from "$lib/firebase/batch-produksi";
   import { tambahStokBarangJadi } from "$lib/firebase/barang-jadi";
+  import { getKaryawanList } from "$lib/firebase/karyawan";
   import { currentUser, userRole } from "$lib/stores/auth.store";
   import type {
     BatchProduksi,
     RiwayatProses,
     StatusBatch,
     UserRole,
+    UserProfile,
   } from "$lib/types";
   import { STATUS_LABEL } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
@@ -150,6 +152,19 @@
     STEAM_DONE: ["kepala_keluar", "admin_gudang", "developer"],
   };
 
+  // Status transisi yang membutuhkan pemilihan worker, beserta role-nya
+  const PENUGASAN_ROLE: Partial<Record<StatusBatch, UserRole>> = {
+    CUTTING_IN_PROGRESS: "kepala_cutting",
+    JAHIT_IN_PROGRESS:   "kepala_jahit",
+    STEAM_IN_PROGRESS:   "kepala_steam",
+  };
+
+  const PENUGASAN_LABEL: Partial<Record<StatusBatch, string>> = {
+    CUTTING_IN_PROGRESS: "Kepala Cutting",
+    JAHIT_IN_PROGRESS:   "Kepala Jahit",
+    STEAM_IN_PROGRESS:   "Kepala Steam",
+  };
+
   // ── State ──────────────────────────────────────────────────────────
   let batch = $state<BatchProduksi | null>(null);
   let riwayat = $state<RiwayatProses[]>([]);
@@ -166,6 +181,10 @@
   let fPcsBerhasil = $state<number>(0);
   let fPcsReject = $state<number>(0);
   let fCatatan = $state("");
+  let fPenugasanUid = $state("");
+
+  // Karyawan untuk picker penugasan
+  let karyawanList = $state<UserProfile[]>([]);
 
   // ── Derived ────────────────────────────────────────────────────────
   let currentStage = $derived(batch ? STAGE_MAP[batch.status] : null);
@@ -196,6 +215,16 @@
       totalMasukForm <= (batch?.total_pcs ?? 0) &&
       totalMasukForm > 0,
   );
+
+  // Apakah transisi ini membutuhkan pilihan worker
+  let needsPenugasan = $derived(nextStatus ? nextStatus in PENUGASAN_ROLE : false);
+  // Daftar worker yang tersedia untuk transisi ini
+  let filteredWorkers = $derived.by(() => {
+    if (!nextStatus) return [];
+    const role = PENUGASAN_ROLE[nextStatus];
+    if (!role) return [];
+    return karyawanList.filter((k) => k.role === role);
+  });
 
   // ── Helpers ────────────────────────────────────────────────────────
   function formatDate(ts: any): string {
@@ -242,7 +271,10 @@
     errorMsg = null;
     try {
       const id = $page.params.id!;
-      batch = await getBatchById(id);
+      [batch, karyawanList] = await Promise.all([
+        getBatchById(id),
+        getKaryawanList(),
+      ]);
       if (!batch) {
         notFound = true;
         return;
@@ -260,6 +292,7 @@
     fPcsBerhasil = batch?.total_pcs ?? 0;
     fPcsReject = 0;
     fCatatan = "";
+    fPenugasanUid = "";
     openUpdate = true;
   }
 
@@ -278,6 +311,11 @@
       const namaPencatat =
         $currentUser.name || $currentUser.email || $currentUser.uid;
 
+      // Siapkan data penugasan jika transisi ini membutuhkan pilihan worker
+      const selectedWorker = needsPenugasan && fPenugasanUid
+        ? karyawanList.find((k) => k.uid === fPenugasanUid)
+        : undefined;
+
       await updateStatusBatch(
         snapshotBatch.id,
         snapshotNextStatus,
@@ -289,6 +327,7 @@
           pcs_reject: fPcsReject,
           ...(catatanTrimmed ? { catatan: catatanTrimmed } : {}),
         },
+        selectedWorker ? { uid: selectedWorker.uid, nama: selectedWorker.name } : undefined,
       );
 
       // Jika batch selesai → tambahkan ke stok barang jadi
@@ -472,7 +511,15 @@
 
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div>
-        <h1 class="text-xl font-semibold text-gray-900">{batch.nama_model}</h1>
+        <div class="flex items-center gap-2 flex-wrap">
+          <h1 class="text-xl font-semibold text-gray-900">{batch.nama_model}</h1>
+          {#if batch.nama_warna}
+            <span class="inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-2.5 py-0.5 text-xs font-medium text-gray-700 shadow-sm">
+              <span class="inline-block h-3 w-3 rounded-full shrink-0" style="background-color: {batch.kode_hex_warna}"></span>
+              {batch.nama_warna}
+            </span>
+          {/if}
+        </div>
         <div class="mt-1 flex flex-wrap items-center gap-2">
           <span class="text-sm text-gray-500">Order Produksi</span>
           {#if lambat && !selesai}
@@ -685,6 +732,54 @@
       </p>
     </div>
   </div>
+
+  <!-- Penugasan -->
+  {#if batch.penugasan && (batch.penugasan.cutting || batch.penugasan.jahit || batch.penugasan.steam)}
+    <div class="mb-5 rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
+      <p class="mb-3 text-sm font-semibold text-gray-800">Penugasan Produksi</p>
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {#if batch.penugasan.cutting}
+          <div class="flex items-center gap-3 rounded-lg bg-orange-50 px-4 py-3">
+            <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-orange-100">
+              <svg class="h-4 w-4 text-orange-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z" />
+              </svg>
+            </div>
+            <div class="min-w-0">
+              <p class="text-[10px] font-semibold uppercase tracking-wider text-orange-600">Cutting</p>
+              <p class="truncate text-sm font-medium text-gray-800">{batch.penugasan.cutting.nama}</p>
+            </div>
+          </div>
+        {/if}
+        {#if batch.penugasan.jahit}
+          <div class="flex items-center gap-3 rounded-lg bg-blue-50 px-4 py-3">
+            <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-100">
+              <svg class="h-4 w-4 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z" />
+              </svg>
+            </div>
+            <div class="min-w-0">
+              <p class="text-[10px] font-semibold uppercase tracking-wider text-blue-600">Jahit</p>
+              <p class="truncate text-sm font-medium text-gray-800">{batch.penugasan.jahit.nama}</p>
+            </div>
+          </div>
+        {/if}
+        {#if batch.penugasan.steam}
+          <div class="flex items-center gap-3 rounded-lg bg-purple-50 px-4 py-3">
+            <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-purple-100">
+              <svg class="h-4 w-4 text-purple-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z" />
+              </svg>
+            </div>
+            <div class="min-w-0">
+              <p class="text-[10px] font-semibold uppercase tracking-wider text-purple-600">Steam</p>
+              <p class="truncate text-sm font-medium text-gray-800">{batch.penugasan.steam.nama}</p>
+            </div>
+          </div>
+        {/if}
+      </div>
+    </div>
+  {/if}
 
   <!-- Detail: Ukuran + Kain -->
   <div class="mb-5 grid grid-cols-1 gap-5 lg:grid-cols-2">
@@ -932,6 +1027,33 @@
             Model: <span class="font-semibold">{batch.nama_model}</span>
           </p>
         </div>
+
+        <!-- Pilih Worker (hanya untuk transisi ke *_IN_PROGRESS) -->
+        {#if needsPenugasan && nextStatus}
+          <div>
+            <label class="mb-1.5 block text-sm font-medium text-gray-700" for="pilih-worker">
+              {PENUGASAN_LABEL[nextStatus] ?? "Petugas"}
+              <span class="ml-1 text-xs font-normal text-gray-400">(opsional)</span>
+            </label>
+            <select
+              id="pilih-worker"
+              bind:value={fPenugasanUid}
+              class="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-300"
+            >
+              <option value="">— Pilih {PENUGASAN_LABEL[nextStatus] ?? "Petugas"} —</option>
+              {#each filteredWorkers as w}
+                <option value={w.uid}>{w.name}</option>
+              {/each}
+            </select>
+            {#if filteredWorkers.length === 0}
+              <p class="mt-1 text-xs text-amber-600">Belum ada akun {PENUGASAN_LABEL[nextStatus]} di sistem.</p>
+            {:else}
+              <p class="mt-1 text-xs text-gray-400">
+                Worker yang dipilih akan dicatat sebagai penanggung jawab tahap ini.
+              </p>
+            {/if}
+          </div>
+        {/if}
 
         <!-- PCS Berhasil -->
         <div>
