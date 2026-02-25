@@ -11,6 +11,8 @@
   import CheckCircleIcon from "@lucide/svelte/icons/check-circle";
   import AlertTriangleIcon from "@lucide/svelte/icons/triangle-alert";
   import TrendingUpIcon from "@lucide/svelte/icons/trending-up";
+  import { type DateRange, filterByRange, getPeriodRange } from "$lib/period";
+  import PeriodSelector from "$lib/components/period-selector.svelte";
 
   // ── Stage config ──────────────────────────────────────────────────
   type StageConf = {
@@ -179,32 +181,37 @@
   let loadingPerforma = $state(true);
   let selectedStage = $state<StatusBatch | null>(null);
   let lastUpdated = $state<Date | null>(null);
+  let dateRange = $state<DateRange>(getPeriodRange('bulan_ini'));
 
   // ── Derived ────────────────────────────────────────────────────────
+  let batchPeriod = $derived(
+    filterByRange(batchAktif, dateRange, (b) => b.createdAt),
+  );
+
   let kainKritis = $derived(stokKainList.filter((k) => k.stok_tersedia < 100));
-  let totalPcsAktif = $derived(batchAktif.reduce((s, b) => s + b.total_pcs, 0));
+  let totalPcsAktif = $derived(batchPeriod.reduce((s, b) => s + b.total_pcs, 0));
   let antriCount = $derived(
-    batchAktif.filter((b) => b.status === "PENDING_CUTTING").length,
+    batchPeriod.filter((b) => b.status === "PENDING_CUTTING").length,
   );
   let antriPcs = $derived(
-    batchAktif
+    batchPeriod
       .filter((b) => b.status === "PENDING_CUTTING")
       .reduce((s, b) => s + b.total_pcs, 0),
   );
   let siapKirimCount = $derived(
-    batchAktif.filter((b) => b.status === "STEAM_DONE").length,
+    batchPeriod.filter((b) => b.status === "STEAM_DONE").length,
   );
   let siapKirimPcs = $derived(
-    batchAktif
+    batchPeriod
       .filter((b) => b.status === "STEAM_DONE")
       .reduce((s, b) => s + b.total_pcs, 0),
   );
   let terlambatCount = $derived(
-    batchAktif.filter((b) => hitungHari(b.createdAt) > 5).length,
+    batchPeriod.filter((b) => hitungHari(b.createdAt) > 5).length,
   );
 
   let filteredBatch = $derived.by(() => {
-    let list = batchAktif;
+    let list = batchPeriod;
     if (selectedStage) list = list.filter((b) => b.status === selectedStage);
     return [...list].sort(
       (a, b) => hitungHari(b.createdAt) - hitungHari(a.createdAt),
@@ -213,11 +220,11 @@
 
   // ── Helpers ────────────────────────────────────────────────────────
   function countStatus(status: StatusBatch): number {
-    return batchAktif.filter((b) => b.status === status).length;
+    return batchPeriod.filter((b) => b.status === status).length;
   }
 
   function pcsStatus(status: StatusBatch): number {
-    return batchAktif
+    return batchPeriod
       .filter((b) => b.status === status)
       .reduce((s, b) => s + b.total_pcs, 0);
   }
@@ -289,6 +296,7 @@
     <p class="mt-0.5 text-sm text-gray-500">{TODAY_STR}</p>
   </div>
   <div class="flex items-center gap-2">
+    <PeriodSelector bind:dateRange defaultPeriod="bulan_ini" />
     {#if lastUpdated}
       <span class="text-xs text-gray-400"
         >Update: {formatLastUpdated(lastUpdated)}</span
@@ -386,7 +394,7 @@
   <!-- Batch Berjalan -->
   <StatCard
     title="Batch Berjalan"
-    value={batchAktif.length}
+    value={batchPeriod.length}
     icon={ListIcon}
     iconBg="bg-orange-50"
     iconColor="text-orange-500"
@@ -471,7 +479,7 @@
             class="inline-block h-3 w-8 animate-pulse rounded bg-gray-100 align-middle"
           ></span>
         {:else}
-          {batchAktif.length} batch aktif
+          {batchPeriod.length} batch aktif
         {/if}
       </p>
     </div>

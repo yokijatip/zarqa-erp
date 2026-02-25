@@ -17,6 +17,8 @@
   import PackageCheckIcon from "@lucide/svelte/icons/package-check";
   import BoxesIcon from "@lucide/svelte/icons/boxes";
   import ShirtIcon from "@lucide/svelte/icons/shirt";
+  import { type DateRange, filterByRange, getPeriodRange } from "$lib/period";
+  import PeriodSelector from "$lib/components/period-selector.svelte";
 
   const UKURAN_ORDER: UkuranBaju[] = ["S", "M", "L", "XL", "XXL"];
 
@@ -28,6 +30,7 @@
   let errorMsg = $state<string | null>(null);
   let successMsg = $state<string | null>(null);
   let searchQuery = $state("");
+  let dateRange = $state<DateRange>(getPeriodRange('bulan_ini'));
   let openCatat = $state(false);
 
   // Form
@@ -83,18 +86,23 @@
     fModelId !== "" && fTujuan.trim() !== "" && totalPcs > 0,
   );
 
-  // Stats
-  let totalPengiriman = $derived(riwayat.length);
-  let totalPcsKeluar = $derived(riwayat.reduce((s, r) => s + r.total_pcs, 0));
+  // Filter riwayat berdasarkan periode
+  let riwayatPeriod = $derived(
+    filterByRange(riwayat, dateRange, (r) => r.tanggal_keluar),
+  );
+
+  // Stats (totalPengiriman & totalPcsKeluar ikut periode; stok & model = current state)
+  let totalPengiriman = $derived(riwayatPeriod.length);
+  let totalPcsKeluar = $derived(riwayatPeriod.reduce((s, r) => s + r.total_pcs, 0));
   let totalStokTersedia = $derived(
     stokList.reduce((s, i) => s + i.stok_tersedia, 0),
   );
   let totalModelTersedia = $derived(modelDenganStok.length);
 
   let filteredRiwayat = $derived.by(() => {
-    if (!searchQuery.trim()) return riwayat;
+    if (!searchQuery.trim()) return riwayatPeriod;
     const q = searchQuery.toLowerCase().trim();
-    return riwayat.filter(
+    return riwayatPeriod.filter(
       (r) =>
         r.nama_model.toLowerCase().includes(q) ||
         r.tujuan.toLowerCase().includes(q),
@@ -257,7 +265,8 @@
       Catat dan riwayat pengiriman barang jadi
     </p>
   </div>
-  <div class="flex items-center gap-2">
+  <div class="flex flex-wrap items-center gap-2">
+    <PeriodSelector bind:dateRange defaultPeriod="bulan_ini" />
     <Button variant="outline" size="sm" onclick={load}>
       <svg
         class="h-3.5 w-3.5 {loading ? 'animate-spin' : ''}"
@@ -475,7 +484,7 @@
       class="flex items-center justify-between border-t border-gray-100 bg-gray-50 px-5 py-3"
     >
       <p class="text-xs text-gray-400">
-        Menampilkan {filteredRiwayat.length} dari {totalPengiriman} pengiriman
+        Menampilkan {filteredRiwayat.length} dari {riwayat.length} pengiriman total
       </p>
       <p class="text-xs text-gray-400">
         Total: <span class="font-semibold text-gray-700"

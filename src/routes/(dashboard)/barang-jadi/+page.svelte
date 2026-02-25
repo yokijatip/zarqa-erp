@@ -1,9 +1,12 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
-  import { getStokBarangJadi } from "$lib/firebase/barang-jadi";
-  import type { StokBarangJadi, UkuranBaju } from "$lib/types";
+  import { getStokBarangJadi, tambahStokBarangJadi } from "$lib/firebase/barang-jadi";
+  import { getModelBajuList } from "$lib/firebase/model-baju";
+  import type { StokBarangJadi, UkuranBaju, ModelBaju } from "$lib/types";
   import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
+  import * as Dialog from "$lib/components/ui/dialog";
   import StatCard from "$lib/components/StatCard.svelte";
   import ShirtIcon from "@lucide/svelte/icons/shirt";
   import PackageIcon from "@lucide/svelte/icons/package";
@@ -25,17 +28,39 @@
   let filterStatus = $state<"semua" | "kritis" | "low" | "kosong">("semua");
   let lastLoaded = $state<Date | null>(null);
 
+  // Tambah Stok Awal (migrasi)
+  let openTambah = $state(false);
+  let modelList = $state<ModelBaju[]>([]);
+  let loadingModels = $state(false);
+  let savingTambah = $state(false);
+  let fModelId = $state("");
+  let fJumlahPerUkuran = $state<Record<string, number>>({});
+
+  let selectedModel = $derived(modelList.find((m) => m.id === fModelId) ?? null);
+  let totalInputTambah = $derived(
+    Object.values(fJumlahPerUkuran).reduce((s, v) => s + (v ?? 0), 0),
+  );
+
+  function successMsg2(msg: string) {
+    // reuse errorMsg slot for success — dedicated simple approach
+    successToast = msg;
+    setTimeout(() => (successToast = null), 3500);
+  }
+  let successToast = $state<string | null>(null);
+
   // ── Derived ────────────────────────────────────────────────────────
   let grouped = $derived.by(() => {
     const map = new Map<
       string,
-      { model_id: string; nama_model: string; items: StokBarangJadi[] }
+      { model_id: string; nama_model: string; nama_warna?: string; kode_hex_warna?: string; items: StokBarangJadi[] }
     >();
     for (const item of stokList) {
       if (!map.has(item.model_id)) {
         map.set(item.model_id, {
           model_id: item.model_id,
           nama_model: item.nama_model,
+          nama_warna: item.nama_warna,
+          kode_hex_warna: item.kode_hex_warna,
           items: [],
         });
       }
@@ -210,8 +235,52 @@
     }
   }
 
+  async function bukaTambah() {
+    openTambah = true;
+    fModelId = "";
+    fJumlahPerUkuran = {};
+    if (modelList.length === 0) {
+      loadingModels = true;
+      try { modelList = await getModelBajuList(); }
+      finally { loadingModels = false; }
+    }
+  }
+
+  async function submitTambah() {
+    if (!selectedModel || savingTambah) return;
+    const items = selectedModel.ukuran_tersedia
+      .map((u) => ({ ukuran: u, jumlah_pcs: fJumlahPerUkuran[u] ?? 0 }))
+      .filter((i) => i.jumlah_pcs > 0);
+    if (items.length === 0) { showError("Isi setidaknya satu ukuran."); return; }
+    savingTambah = true;
+    try {
+      await tambahStokBarangJadi(selectedModel.id, selectedModel.nama_model, items, {
+        nama_warna: selectedModel.nama_warna,
+        kode_hex_warna: selectedModel.kode_hex_warna,
+      });
+      openTambah = false;
+      await load();
+      successToast = `Stok awal ${selectedModel.nama_model} berhasil ditambahkan.`;
+      setTimeout(() => (successToast = null), 3500);
+    } catch (e: any) {
+      showError(e?.message ?? "Gagal menyimpan stok awal.");
+    } finally {
+      savingTambah = false;
+    }
+  }
+
   onMount(load);
 </script>
+
+<!-- ── Success Toast ──────────────────────────────────────────────── -->
+{#if successToast}
+  <div class="fixed right-5 top-5 z-[9999] flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 shadow-lg">
+    <svg class="h-4 w-4 shrink-0 text-green-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+      <path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+    </svg>
+    <p class="text-sm text-green-800">{successToast}</p>
+  </div>
+{/if}
 
 <!-- ── Error Toast ─────────────────────────────────────────────────── -->
 {#if errorMsg}
@@ -253,6 +322,12 @@
         })}
       </span>
     {/if}
+    <Button variant="outline" size="sm" onclick={bukaTambah}>
+      <svg class="h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+      </svg>
+      Tambah Stok Awal
+    </Button>
     <Button variant="outline" size="sm" onclick={load}>
       <svg
         class="h-3.5 w-3.5 {loading ? 'animate-spin' : ''}"
@@ -564,9 +639,20 @@
             <!-- Kiri: nama + badges -->
             <div class="flex items-center gap-2.5">
               <span class="h-2.5 w-2.5 shrink-0 rounded-full {st.dot}"></span>
-              <p class="text-sm font-semibold {MODEL_NAME_STYLE[statusModel]}">
+              <a
+                href="/barang-jadi/{group.model_id}"
+                class="text-sm font-semibold {MODEL_NAME_STYLE[statusModel]} hover:underline"
+              >
                 {group.nama_model}
-              </p>
+              </a>
+              {#if group.nama_warna}
+                <span class="inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-600">
+                  {#if group.kode_hex_warna}
+                    <span class="inline-block h-2.5 w-2.5 rounded-full shrink-0" style="background-color: {group.kode_hex_warna}"></span>
+                  {/if}
+                  {group.nama_warna}
+                </span>
+              {/if}
               <!-- Status badge -->
               <span
                 class="rounded-full px-2 py-0.5 text-[11px] font-semibold {st.badge}"
@@ -619,6 +705,13 @@
                 <p class="font-semibold text-gray-700">{pctSisa}%</p>
                 <p>sisa</p>
               </div>
+              <div class="h-8 w-px bg-gray-200"></div>
+              <a
+                href="/barang-jadi/{group.model_id}"
+                class="shrink-0 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 transition"
+              >
+                Detail →
+              </a>
             </div>
           </div>
 
@@ -760,3 +853,81 @@
     </div>
   </div>
 {/if}
+
+<!-- ── Dialog: Tambah Stok Awal ──────────────────────────────────── -->
+<Dialog.Root bind:open={openTambah}>
+  <Dialog.Content class="max-w-md">
+    <Dialog.Header>
+      <Dialog.Title>Tambah Stok Awal</Dialog.Title>
+      <Dialog.Description>
+        Isi stok awal berdasarkan model — untuk migrasi bisnis yang sudah berjalan.
+      </Dialog.Description>
+    </Dialog.Header>
+
+    <div class="max-h-[60vh] space-y-4 overflow-y-auto pr-1">
+      <!-- Pilih model -->
+      <div>
+        <label class="mb-1.5 block text-sm font-medium text-gray-700" for="tambah-model">
+          Model Baju <span class="text-red-500">*</span>
+        </label>
+        {#if loadingModels}
+          <div class="h-10 animate-pulse rounded-lg bg-gray-100"></div>
+        {:else}
+          <select
+            id="tambah-model"
+            bind:value={fModelId}
+            onchange={() => (fJumlahPerUkuran = {})}
+            class="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-300"
+          >
+            <option value="">— Pilih model —</option>
+            {#each modelList as m}
+              <option value={m.id}>{m.nama_model}{m.nama_warna ? ` · ${m.nama_warna}` : ""}</option>
+            {/each}
+          </select>
+        {/if}
+      </div>
+
+      <!-- Input per ukuran -->
+      {#if selectedModel}
+        <div>
+          <p class="mb-2 text-sm font-medium text-gray-700">Jumlah per Ukuran</p>
+          <div class="grid grid-cols-3 gap-3 sm:grid-cols-5">
+            {#each selectedModel.ukuran_tersedia as ukuran}
+              <div class="flex flex-col items-center gap-1.5">
+                <span class="flex h-8 w-8 items-center justify-center rounded-full bg-blue-100 text-sm font-bold text-blue-700">
+                  {ukuran}
+                </span>
+                <Input
+                  type="number"
+                  min="0"
+                  placeholder="0"
+                  class="text-center"
+                  value={fJumlahPerUkuran[ukuran] ?? 0}
+                  oninput={(e) => {
+                    const v = parseInt((e.target as HTMLInputElement).value) || 0;
+                    fJumlahPerUkuran = { ...fJumlahPerUkuran, [ukuran]: v };
+                  }}
+                />
+              </div>
+            {/each}
+          </div>
+          {#if totalInputTambah > 0}
+            <p class="mt-2 text-xs text-gray-500">
+              Total: <span class="font-semibold text-gray-800">{totalInputTambah} pcs</span>
+            </p>
+          {/if}
+        </div>
+      {/if}
+    </div>
+
+    <Dialog.Footer class="gap-2">
+      <Button variant="outline" onclick={() => (openTambah = false)}>Batal</Button>
+      <Button
+        onclick={submitTambah}
+        disabled={savingTambah || !selectedModel || Object.values(fJumlahPerUkuran).every((v) => !v || v <= 0)}
+      >
+        {savingTambah ? "Menyimpan..." : "Simpan Stok Awal"}
+      </Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>

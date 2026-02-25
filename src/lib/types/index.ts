@@ -152,6 +152,8 @@ export interface StokBarangJadi {
   id: string;
   model_id: string;
   nama_model: string;
+  nama_warna?: string;
+  kode_hex_warna?: string;
   ukuran: UkuranBaju;
   stok_tersedia: number;
   total_masuk: number;

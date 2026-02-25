@@ -347,6 +347,10 @@
           snapshotBatch.model_id,
           snapshotBatch.nama_model,
           detailBerhasil,
+          {
+            nama_warna: snapshotBatch.nama_warna,
+            kode_hex_warna: snapshotBatch.kode_hex_warna,
+          },
         );
       }
 

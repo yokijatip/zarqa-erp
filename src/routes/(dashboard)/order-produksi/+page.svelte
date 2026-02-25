@@ -22,6 +22,8 @@
   import ClipboardListIcon from "@lucide/svelte/icons/clipboard-list";
   import LoaderIcon from "@lucide/svelte/icons/loader";
   import CircleCheckIcon from "@lucide/svelte/icons/circle-check";
+  import { type DateRange, filterByRange } from "$lib/period";
+  import PeriodSelector from "$lib/components/period-selector.svelte";
 
   const UKURAN_ORDER: UkuranBaju[] = ["S", "M", "L", "XL", "XXL"];
 
@@ -58,6 +60,7 @@
   let successMsg = $state<string | null>(null);
   let searchQuery = $state("");
   let filterStatus = $state<StatusBatch | "SEMUA">("SEMUA");
+  let dateRange = $state<DateRange>(null);
   let openBuat = $state(false);
 
   // Form
@@ -101,12 +104,17 @@
   );
 
   let canSubmit = $derived(fModelId !== "" && totalPcs > 0);
-  let totalOrder = $derived(batchList.length);
+
+  let batchPeriod = $derived(
+    filterByRange(batchList, dateRange, (b) => b.createdAt),
+  );
+
+  let totalOrder = $derived(batchPeriod.length);
   let aktifCount = $derived(
-    batchList.filter((b) => b.status !== "COMPLETED").length,
+    batchPeriod.filter((b) => b.status !== "COMPLETED").length,
   );
   let selesaiCount = $derived(
-    batchList.filter((b) => b.status === "COMPLETED").length,
+    batchPeriod.filter((b) => b.status === "COMPLETED").length,
   );
 
   let filterStatusLabel = $derived(
@@ -114,7 +122,7 @@
   );
 
   let filteredList = $derived.by(() => {
-    let list = batchList;
+    let list = batchPeriod;
     if (filterStatus !== "SEMUA")
       list = list.filter((b) => b.status === filterStatus);
     if (searchQuery.trim()) {
@@ -314,6 +322,8 @@
 
 <!-- ── Filter Bar ─────────────────────────────────────────────────── -->
 <div class="mb-4 flex flex-wrap items-center gap-3">
+  <PeriodSelector bind:dateRange defaultPeriod="semua" />
+
   <!-- Search -->
   <div class="relative min-w-48 flex-1">
     <svg
@@ -516,7 +526,7 @@
     <!-- Footer -->
     <div class="border-t border-gray-100 bg-gray-50 px-5 py-3">
       <p class="text-xs text-gray-400">
-        Menampilkan {filteredList.length} dari {totalOrder} order
+        Menampilkan {filteredList.length} dari {batchList.length} order total
       </p>
     </div>
   {/if}
