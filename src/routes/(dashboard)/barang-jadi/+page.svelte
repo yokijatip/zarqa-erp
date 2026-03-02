@@ -1,8 +1,7 @@
 <script lang="ts">
-  import { onMount } from "svelte";
-  import { goto } from "$app/navigation";
-  import { getStokBarangJadi, tambahStokBarangJadi } from "$lib/firebase/barang-jadi";
-  import { getModelBajuList } from "$lib/firebase/model-baju";
+  import { goto, afterNavigate } from "$app/navigation";
+  import { tambahStokBarangJadi } from "$lib/firebase/barang-jadi";
+  import { barangJadiCache, modelBajuCache } from "$lib/stores/data-cache.svelte";
   import type { StokBarangJadi, UkuranBaju, ModelBaju } from "$lib/types";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -222,11 +221,11 @@
   }
 
   // ── Data ──────────────────────────────────────────────────────────
-  async function load() {
+  async function load(force = false) {
     loading = true;
     errorMsg = null;
     try {
-      stokList = await getStokBarangJadi();
+      stokList = await barangJadiCache.get(force);
       lastLoaded = new Date();
     } catch {
       showError("Gagal memuat data. Periksa koneksi Firebase.");
@@ -241,7 +240,10 @@
     fJumlahPerUkuran = {};
     if (modelList.length === 0) {
       loadingModels = true;
-      try { modelList = await getModelBajuList(); }
+      try {
+        const all = await modelBajuCache.get();
+        modelList = all.filter((m) => m.aktif);
+      }
       finally { loadingModels = false; }
     }
   }
@@ -259,7 +261,7 @@
         kode_hex_warna: selectedModel.kode_hex_warna,
       });
       openTambah = false;
-      await load();
+      await load(true);
       successToast = `Stok awal ${selectedModel.nama_model} berhasil ditambahkan.`;
       setTimeout(() => (successToast = null), 3500);
     } catch (e: any) {
@@ -269,7 +271,12 @@
     }
   }
 
-  onMount(load);
+  afterNavigate(({ from }) => {
+    if (from?.url.pathname.startsWith("/barang-jadi/")) {
+      barangJadiCache.invalidate();
+    }
+    load();
+  });
 </script>
 
 <!-- ── Success Toast ──────────────────────────────────────────────── -->
@@ -328,7 +335,7 @@
       </svg>
       Tambah Stok Awal
     </Button>
-    <Button variant="outline" size="sm" onclick={load}>
+    <Button variant="outline" size="sm" onclick={() => load(true)}>
       <svg
         class="h-3.5 w-3.5 {loading ? 'animate-spin' : ''}"
         xmlns="http://www.w3.org/2000/svg"

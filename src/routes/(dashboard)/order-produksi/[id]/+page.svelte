@@ -7,8 +7,10 @@
     getRiwayatBatch,
     updateStatusBatch,
     deleteBatchProduksi,
+    editKuantitasBatch,
+    updatePenugasanBatch,
   } from "$lib/firebase/batch-produksi";
-  import { tambahStokBarangJadi } from "$lib/firebase/barang-jadi";
+  import { tambahStokBarangJadi } from "$lib/firebase/barang-jadi"; 
   import { getKaryawanList } from "$lib/firebase/karyawan";
   import { currentUser, userRole } from "$lib/stores/auth.store";
   import type {
@@ -17,9 +19,13 @@
     StatusBatch,
     UserRole,
     UserProfile,
+    UkuranBaju,
+    DetailUkuran,
   } from "$lib/types";
   import { STATUS_LABEL } from "$lib/types";
+  import * as Card from "$lib/components/ui/card/index.js";
   import * as Dialog from "$lib/components/ui/dialog";
+  import * as Select from "$lib/components/ui/select";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
 
@@ -123,6 +129,11 @@
     STEAM_DONE: "COMPLETED",
   };
 
+  const STATUS_ORDER: StatusBatch[] = [
+    "PENDING_CUTTING", "CUTTING_IN_PROGRESS", "CUTTING_DONE",
+    "JAHIT_IN_PROGRESS", "JAHIT_DONE", "STEAM_IN_PROGRESS", "STEAM_DONE", "COMPLETED",
+  ];
+
   const ACTION_LABEL: Partial<Record<StatusBatch, string>> = {
     PENDING_CUTTING: "Mulai Cutting",
     CUTTING_IN_PROGRESS: "Cutting Selesai",
@@ -182,9 +193,23 @@
   let fPcsReject = $state<number>(0);
   let fCatatan = $state("");
   let fPenugasanUid = $state("");
+  let fTargetStatus = $state<StatusBatch | null>(null);
+
+  // Edit kuantitas form
+  let openEditKuantitas = $state(false);
+  let fEditUkuran = $state<Partial<Record<UkuranBaju, number>>>({});
+  let fCatatanEdit = $state("");
+  let savingEdit = $state(false);
 
   // Karyawan untuk picker penugasan
   let karyawanList = $state<UserProfile[]>([]);
+
+  // Edit penugasan
+  let openEditPenugasan = $state(false);
+  let fEditCuttingUid = $state("");
+  let fEditJahitUid = $state("");
+  let fEditSteamUid = $state("");
+  let savingPenugasan = $state(false);;
 
   // ── Derived ────────────────────────────────────────────────────────
   let currentStage = $derived(batch ? STAGE_MAP[batch.status] : null);
@@ -192,11 +217,29 @@
     batch ? STAGES.findIndex((s) => s.status === batch!.status) : -1,
   );
   let nextStatus = $derived(batch ? (NEXT_STATUS[batch.status] ?? null) : null);
-  let nextStage = $derived(nextStatus ? STAGE_MAP[nextStatus] : null);
   let actionLabel = $derived(batch ? (ACTION_LABEL[batch.status] ?? "") : "");
 
+  // Status yang tersedia untuk admin loncat proses
+  let availableTargets = $derived.by((): StatusBatch[] => {
+    if (!batch || ($userRole !== "admin_gudang" && $userRole !== "developer")) return [];
+    const idx = STATUS_ORDER.indexOf(batch.status);
+    return STATUS_ORDER.slice(idx + 1);
+  });
+
+  // Status tujuan efektif: admin bisa pilih, role lain selalu nextStatus
+  let effectiveNext = $derived<StatusBatch | null>(
+    ($userRole === "admin_gudang" || $userRole === "developer")
+      ? (fTargetStatus ?? nextStatus)
+      : nextStatus,
+  );
+  let effectiveNextStage = $derived(effectiveNext ? STAGE_MAP[effectiveNext] : null);
+
   let canUpdate = $derived.by(() => {
-    if (!batch || !$userRole || !nextStatus) return false;
+    if (!batch || !$userRole) return false;
+    if (batch.status === "COMPLETED") return false;
+    if ($userRole === "admin_gudang" || $userRole === "developer")
+      return availableTargets.length > 0;
+    if (!nextStatus) return false;
     const allowed = (ALLOWED_ROLES[batch.status] ?? []) as string[];
     return allowed.includes($userRole);
   });
@@ -207,23 +250,55 @@
     return $userRole === "admin_gudang" || $userRole === "developer";
   });
 
+  let canEditKuantitas = $derived(
+    ($userRole === "admin_gudang" || $userRole === "developer") &&
+      batch !== null &&
+      batch.status !== "COMPLETED",
+  );
+
+  // pcs_saat_ini mencerminkan jumlah PCS aktual setelah reject tiap tahap
+  let pcsSaatIni = $derived(batch?.pcs_saat_ini ?? batch?.total_pcs ?? 0);
+
   let totalMasukForm = $derived(fPcsBerhasil + fPcsReject);
-  let sisaBelumInput = $derived((batch?.total_pcs ?? 0) - totalMasukForm);
+  let sisaBelumInput = $derived(pcsSaatIni - totalMasukForm);
   let formValid = $derived(
     fPcsBerhasil >= 0 &&
       fPcsReject >= 0 &&
-      totalMasukForm <= (batch?.total_pcs ?? 0) &&
+      totalMasukForm <= pcsSaatIni &&
       totalMasukForm > 0,
   );
 
-  // Apakah transisi ini membutuhkan pilihan worker
-  let needsPenugasan = $derived(nextStatus ? nextStatus in PENUGASAN_ROLE : false);
+  // Apakah transisi ini membutuhkan pilihan worker (pakai effectiveNext)
+  let needsPenugasan = $derived(effectiveNext ? effectiveNext in PENUGASAN_ROLE : false);
   // Daftar worker yang tersedia untuk transisi ini
   let filteredWorkers = $derived.by(() => {
-    if (!nextStatus) return [];
-    const role = PENUGASAN_ROLE[nextStatus];
+    if (!effectiveNext) return [];
+    const role = PENUGASAN_ROLE[effectiveNext];
     if (!role) return [];
     return karyawanList.filter((k) => k.role === role);
+  });
+
+  // Workers per role untuk dialog edit penugasan
+  let cuttingWorkers = $derived(karyawanList.filter((k) => k.role === "kepala_cutting"));
+  let jahitWorkers   = $derived(karyawanList.filter((k) => k.role === "kepala_jahit"));
+  let steamWorkers   = $derived(karyawanList.filter((k) => k.role === "kepala_steam"));
+
+  // Preview perubahan kain untuk edit kuantitas (proporsional, hanya display)
+  let fEditTotal = $derived(
+    Object.values(fEditUkuran).reduce((s, v) => s + (v ?? 0), 0),
+  );
+  let editKainPreview = $derived.by(() => {
+    if (!batch || batch.total_pcs === 0) return [];
+    return batch.kain_digunakan.map((k) => {
+      const jumlahBaru = parseFloat(
+        (k.jumlah_dipakai * (fEditTotal / batch!.total_pcs)).toFixed(2),
+      );
+      return {
+        ...k,
+        jumlah_baru: jumlahBaru,
+        selisih: parseFloat((k.jumlah_dipakai - jumlahBaru).toFixed(2)),
+      };
+    });
   });
 
   // ── Helpers ────────────────────────────────────────────────────────
@@ -289,21 +364,21 @@
 
   // ── Actions ──────────────────────────────────────────────────────
   function bukaUpdate() {
-    fPcsBerhasil = batch?.total_pcs ?? 0;
+    fPcsBerhasil = batch?.pcs_saat_ini ?? batch?.total_pcs ?? 0;
     fPcsReject = 0;
     fCatatan = "";
     fPenugasanUid = "";
+    fTargetStatus = nextStatus; // default ke step berikutnya
     openUpdate = true;
   }
 
   async function submitUpdate() {
-    // ── FIX: guard semua nullable sebelum dipakai ──────────────────
-    if (!canUpdate || !$currentUser || !batch || !nextStatus || !formValid)
+    if (!canUpdate || !$currentUser || !batch || !effectiveNext || !formValid)
       return;
 
     // Snapshot nilai batch sebelum async agar TypeScript tidak null
     const snapshotBatch = batch;
-    const snapshotNextStatus = nextStatus;
+    const snapshotNextStatus = effectiveNext;
 
     saving = true;
     try {
@@ -379,6 +454,77 @@
       openHapus = false;
     } finally {
       deletingSaving = false;
+    }
+  }
+
+  function bukaEditKuantitas() {
+    if (!batch) return;
+    fEditUkuran = Object.fromEntries(
+      batch.detail_ukuran.map((du) => [du.ukuran, du.jumlah_pcs]),
+    );
+    fCatatanEdit = "";
+    savingEdit = false;
+    openEditKuantitas = true;
+  }
+
+  function bukaEditPenugasan() {
+    if (!batch) return;
+    fEditCuttingUid = batch.penugasan?.cutting?.uid ?? "";
+    fEditJahitUid   = batch.penugasan?.jahit?.uid   ?? "";
+    fEditSteamUid   = batch.penugasan?.steam?.uid   ?? "";
+    savingPenugasan = false;
+    openEditPenugasan = true;
+  }
+
+  async function submitEditPenugasan() {
+    if (!batch || savingPenugasan) return;
+    savingPenugasan = true;
+    try {
+      const penugasan: { cutting?: { uid: string; nama: string }; jahit?: { uid: string; nama: string }; steam?: { uid: string; nama: string } } = {};
+      const cutting = cuttingWorkers.find((w) => w.uid === fEditCuttingUid);
+      const jahit   = jahitWorkers.find((w) => w.uid === fEditJahitUid);
+      const steam   = steamWorkers.find((w) => w.uid === fEditSteamUid);
+      if (cutting) penugasan.cutting = { uid: cutting.uid, nama: cutting.name };
+      if (jahit)   penugasan.jahit   = { uid: jahit.uid, nama: jahit.name };
+      if (steam)   penugasan.steam   = { uid: steam.uid, nama: steam.name };
+      await updatePenugasanBatch(batch.id, penugasan);
+      await load();
+      openEditPenugasan = false;
+      showSuccess("Penugasan berhasil diperbarui.");
+    } catch (e: any) {
+      showError(e?.message ?? "Gagal memperbarui penugasan.");
+    } finally {
+      savingPenugasan = false;
+    }
+  }
+
+  async function submitEditKuantitas() {
+    if (!batch || !$currentUser || fEditTotal <= 0 || savingEdit) return;
+    const snapshotBatch = batch;
+    savingEdit = true;
+    try {
+      const newDetailUkuran: DetailUkuran[] = Object.entries(fEditUkuran)
+        .filter(([, v]) => (v ?? 0) > 0)
+        .map(([ukuran, jumlah_pcs]) => ({
+          ukuran: ukuran as UkuranBaju,
+          jumlah_pcs: Number(jumlah_pcs),
+        }));
+      const namaPencatat =
+        $currentUser.name || $currentUser.email || $currentUser.uid;
+      await editKuantitasBatch(
+        snapshotBatch.id,
+        newDetailUkuran,
+        $currentUser.uid,
+        namaPencatat,
+        fCatatanEdit || undefined,
+      );
+      await load();
+      openEditKuantitas = false;
+      showSuccess(`Kuantitas berhasil diubah menjadi ${fEditTotal} pcs.`);
+    } catch (e: any) {
+      showError(e?.message ?? "Gagal mengubah kuantitas.");
+    } finally {
+      savingEdit = false;
     }
   }
 
@@ -557,6 +703,46 @@
             {STATUS_LABEL[batch.status]}
           </span>
         {/if}
+        <Button variant="outline" size="sm" onclick={load}>
+          <svg
+            class="h-3.5 w-3.5 {loading ? 'animate-spin' : ''}"
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke-width="2"
+            stroke="currentColor"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"
+            />
+          </svg>
+          Refresh
+        </Button>
+        {#if canEditKuantitas}
+          <Button
+            variant="outline"
+            onclick={bukaEditKuantitas}
+            class="border-amber-200 text-amber-700 hover:bg-amber-50 hover:text-amber-800"
+          >
+            <svg
+              class="h-4 w-4"
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke-width="2"
+              stroke="currentColor"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10"
+              />
+            </svg>
+            Edit Jumlah
+          </Button>
+        {/if}
         {#if canDelete}
           <Button
             variant="outline"
@@ -580,31 +766,12 @@
             Hapus
           </Button>
         {/if}
-        {#if canUpdate}
-          <Button onclick={bukaUpdate}>
-            <svg
-              class="h-4 w-4"
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke-width="2"
-              stroke="currentColor"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                d="m4.5 12.75 6 6 9-13.5"
-              />
-            </svg>
-            {actionLabel}
-          </Button>
-        {/if}
       </div>
     </div>
   </div>
 
   <!-- Action Banner -->
-  {#if canUpdate && nextStage && currentStage}
+  {#if canUpdate && effectiveNextStage && currentStage}
     <div
       class="mb-5 flex items-center justify-between rounded-xl border {currentStage.border} {currentStage.bg} px-5 py-4"
     >
@@ -635,7 +802,7 @@
           <p class="text-xs {currentStage.text} opacity-80">
             {STATUS_LABEL[batch.status]}
             <span class="mx-1">→</span>
-            {STATUS_LABEL[nextStatus!]}
+            {STATUS_LABEL[effectiveNext!]}
           </p>
         </div>
       </div>
@@ -643,152 +810,145 @@
         onclick={bukaUpdate}
         class="shrink-0 rounded-lg {currentStage.dot} px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:opacity-90"
       >
-        {actionLabel}
+        Mulai Proses
       </button>
     </div>
   {/if}
 
   <!-- Progress Bar -->
-  <div class="mb-5 rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
-    <div class="mb-3 flex items-center justify-between">
-      <p class="text-xs font-semibold uppercase tracking-wider text-gray-400">
+  <Card.Root class="mb-5 border-gray-100">
+    <Card.Header>
+      <Card.Title class="text-xs font-semibold uppercase tracking-wider text-gray-400 font-medium">
         Progress Produksi
-      </p>
-      <p class="text-xs text-gray-400">
-        Tahap {stageIndex + 1} dari {STAGES.length}
-      </p>
-    </div>
-    <div class="flex gap-1">
-      {#each STAGES as s, i}
-        {@const done = i < stageIndex}
-        {@const current = i === stageIndex}
-        <div class="flex flex-1 flex-col items-center gap-1.5">
-          <div
-            class="h-2 w-full rounded-full {done
-              ? s.dot
-              : current
-                ? s.dot + ' opacity-80'
-                : 'bg-gray-100'}"
-          ></div>
-          <p
-            class="text-center text-[9px] font-medium leading-tight {done ||
-            current
-              ? s.text
-              : 'text-gray-300'}"
-          >
-            {s.short}
-          </p>
-        </div>
-      {/each}
-    </div>
-  </div>
+      </Card.Title>
+      <Card.Action>
+        <p class="text-xs text-gray-400">Tahap {stageIndex + 1} dari {STAGES.length}</p>
+      </Card.Action>
+    </Card.Header>
+    <Card.Content>
+      <div class="flex gap-1">
+        {#each STAGES as s, i}
+          {@const done = i < stageIndex}
+          {@const current = i === stageIndex}
+          <div class="flex flex-1 flex-col items-center gap-1.5">
+            <div
+              class="h-2 w-full rounded-full {done
+                ? s.dot
+                : current
+                  ? s.dot + ' opacity-80'
+                  : 'bg-gray-100'}"
+            ></div>
+            <p
+              class="text-center text-[9px] font-medium leading-tight {done || current
+                ? s.text
+                : 'text-gray-300'}"
+            >
+              {s.short}
+            </p>
+          </div>
+        {/each}
+      </div>
+    </Card.Content>
+  </Card.Root>
 
   <!-- KPI Cards -->
   <div class="mb-5 grid grid-cols-2 gap-4 lg:grid-cols-4">
-    <div class="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
-      <p class="text-xs font-medium uppercase tracking-wider text-gray-400">
-        Total PCS
-      </p>
-      <p class="mt-1.5 text-2xl font-bold text-gray-900">
-        {batch.total_pcs.toLocaleString("id-ID")}
-      </p>
+    <Card.Root class="border-gray-100 gap-1 p-4">
+      <p class="text-xs font-medium uppercase tracking-wider text-gray-400">Total PCS</p>
+      <p class="mt-1 text-2xl font-bold text-gray-900">{batch.total_pcs.toLocaleString("id-ID")}</p>
       <p class="text-xs text-gray-400">pcs diproduksi</p>
-    </div>
-    <div class="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
-      <p class="text-xs font-medium uppercase tracking-wider text-gray-400">
-        Varian Ukuran
-      </p>
-      <p class="mt-1.5 text-2xl font-bold text-gray-900">
-        {batch.detail_ukuran.length}
-      </p>
+    </Card.Root>
+    <Card.Root class="border-gray-100 gap-1 p-4">
+      <p class="text-xs font-medium uppercase tracking-wider text-gray-400">Varian Ukuran</p>
+      <p class="mt-1 text-2xl font-bold text-gray-900">{batch.detail_ukuran.length}</p>
       <p class="text-xs text-gray-400">ukuran berbeda</p>
-    </div>
-    <div class="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
-      <p class="text-xs font-medium uppercase tracking-wider text-gray-400">
-        Dibuat
-      </p>
-      <p class="mt-1.5 text-sm font-bold text-gray-900">
-        {formatDate(batch.createdAt)}
-      </p>
+    </Card.Root>
+    <Card.Root class="border-gray-100 gap-1 p-4">
+      <p class="text-xs font-medium uppercase tracking-wider text-gray-400">Dibuat</p>
+      <p class="mt-1 text-sm font-bold text-gray-900">{formatDate(batch.createdAt)}</p>
       <p class="text-xs text-gray-400">{hari} hari lalu</p>
-    </div>
-    <div
-      class="rounded-xl border {selesai
-        ? 'border-green-100 bg-green-50'
-        : 'border-gray-100 bg-white'} p-4 shadow-sm"
-    >
-      <p
-        class="text-xs font-medium uppercase tracking-wider {selesai
-          ? 'text-green-600'
-          : 'text-gray-400'}"
-      >
-        Riwayat
-      </p>
-      <p
-        class="mt-1.5 text-2xl font-bold {selesai
-          ? 'text-green-700'
-          : 'text-gray-900'}"
-      >
-        {riwayat.length}
-      </p>
-      <p class="text-xs {selesai ? 'text-green-600' : 'text-gray-400'}">
-        proses tercatat
-      </p>
-    </div>
+    </Card.Root>
+    <Card.Root class="gap-1 p-4 {selesai ? 'border-green-100 bg-green-50' : 'border-gray-100'}">
+      <p class="text-xs font-medium uppercase tracking-wider {selesai ? 'text-green-600' : 'text-gray-400'}">Riwayat</p>
+      <p class="mt-1 text-2xl font-bold {selesai ? 'text-green-700' : 'text-gray-900'}">{riwayat.length}</p>
+      <p class="text-xs {selesai ? 'text-green-600' : 'text-gray-400'}">proses tercatat</p>
+    </Card.Root>
   </div>
 
   <!-- Penugasan -->
-  {#if batch.penugasan && (batch.penugasan.cutting || batch.penugasan.jahit || batch.penugasan.steam)}
-    <div class="mb-5 rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
-      <p class="mb-3 text-sm font-semibold text-gray-800">Penugasan Produksi</p>
+  {#if canEditKuantitas || (batch.penugasan && (batch.penugasan.cutting || batch.penugasan.jahit || batch.penugasan.steam))}
+    <Card.Root class="mb-5 border-gray-100">
+      <Card.Header>
+        <Card.Title class="text-sm text-gray-800">Penugasan Produksi</Card.Title>
+        {#if canEditKuantitas}
+          <Card.Action>
+            <Button variant="ghost" size="sm" onclick={bukaEditPenugasan} class="h-7 gap-1.5 text-xs text-gray-500 hover:text-gray-800">
+              <svg class="h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10" />
+              </svg>
+              Edit Petugas
+            </Button>
+          </Card.Action>
+        {/if}
+      </Card.Header>
+      <Card.Content>
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        {#if batch.penugasan.cutting}
-          <div class="flex items-center gap-3 rounded-lg bg-orange-50 px-4 py-3">
-            <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-orange-100">
-              <svg class="h-4 w-4 text-orange-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z" />
-              </svg>
-            </div>
-            <div class="min-w-0">
-              <p class="text-[10px] font-semibold uppercase tracking-wider text-orange-600">Cutting</p>
-              <p class="truncate text-sm font-medium text-gray-800">{batch.penugasan.cutting.nama}</p>
-            </div>
+        <!-- Cutting -->
+        <div class="flex items-center gap-3 rounded-lg px-4 py-3 {batch.penugasan?.cutting ? 'bg-orange-50' : 'border border-dashed border-gray-200 bg-gray-50'}">
+          <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full {batch.penugasan?.cutting ? 'bg-orange-100' : 'bg-gray-100'}">
+            <svg class="h-4 w-4 {batch.penugasan?.cutting ? 'text-orange-600' : 'text-gray-400'}" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z" />
+            </svg>
           </div>
-        {/if}
-        {#if batch.penugasan.jahit}
-          <div class="flex items-center gap-3 rounded-lg bg-blue-50 px-4 py-3">
-            <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-100">
-              <svg class="h-4 w-4 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z" />
-              </svg>
-            </div>
-            <div class="min-w-0">
-              <p class="text-[10px] font-semibold uppercase tracking-wider text-blue-600">Jahit</p>
-              <p class="truncate text-sm font-medium text-gray-800">{batch.penugasan.jahit.nama}</p>
-            </div>
+          <div class="min-w-0">
+            <p class="text-[10px] font-semibold uppercase tracking-wider {batch.penugasan?.cutting ? 'text-orange-600' : 'text-gray-400'}">Cutting</p>
+            <p class="truncate text-sm font-medium {batch.penugasan?.cutting ? 'text-gray-800' : 'text-gray-400'}">
+              {batch.penugasan?.cutting?.nama ?? '—'}
+            </p>
           </div>
-        {/if}
-        {#if batch.penugasan.steam}
-          <div class="flex items-center gap-3 rounded-lg bg-purple-50 px-4 py-3">
-            <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-purple-100">
-              <svg class="h-4 w-4 text-purple-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z" />
-              </svg>
-            </div>
-            <div class="min-w-0">
-              <p class="text-[10px] font-semibold uppercase tracking-wider text-purple-600">Steam</p>
-              <p class="truncate text-sm font-medium text-gray-800">{batch.penugasan.steam.nama}</p>
-            </div>
+        </div>
+
+        <!-- Jahit -->
+        <div class="flex items-center gap-3 rounded-lg px-4 py-3 {batch.penugasan?.jahit ? 'bg-blue-50' : 'border border-dashed border-gray-200 bg-gray-50'}">
+          <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full {batch.penugasan?.jahit ? 'bg-blue-100' : 'bg-gray-100'}">
+            <svg class="h-4 w-4 {batch.penugasan?.jahit ? 'text-blue-600' : 'text-gray-400'}" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z" />
+            </svg>
           </div>
-        {/if}
+          <div class="min-w-0">
+            <p class="text-[10px] font-semibold uppercase tracking-wider {batch.penugasan?.jahit ? 'text-blue-600' : 'text-gray-400'}">Jahit</p>
+            <p class="truncate text-sm font-medium {batch.penugasan?.jahit ? 'text-gray-800' : 'text-gray-400'}">
+              {batch.penugasan?.jahit?.nama ?? '—'}
+            </p>
+          </div>
+        </div>
+
+        <!-- Steam -->
+        <div class="flex items-center gap-3 rounded-lg px-4 py-3 {batch.penugasan?.steam ? 'bg-purple-50' : 'border border-dashed border-gray-200 bg-gray-50'}">
+          <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full {batch.penugasan?.steam ? 'bg-purple-100' : 'bg-gray-100'}">
+            <svg class="h-4 w-4 {batch.penugasan?.steam ? 'text-purple-600' : 'text-gray-400'}" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z" />
+            </svg>
+          </div>
+          <div class="min-w-0">
+            <p class="text-[10px] font-semibold uppercase tracking-wider {batch.penugasan?.steam ? 'text-purple-600' : 'text-gray-400'}">Steam</p>
+            <p class="truncate text-sm font-medium {batch.penugasan?.steam ? 'text-gray-800' : 'text-gray-400'}">
+              {batch.penugasan?.steam?.nama ?? '—'}
+            </p>
+          </div>
+        </div>
       </div>
-    </div>
+      </Card.Content>
+    </Card.Root>
   {/if}
 
   <!-- Detail: Ukuran + Kain -->
   <div class="mb-5 grid grid-cols-1 gap-5 lg:grid-cols-2">
-    <div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
-      <p class="mb-4 text-sm font-semibold text-gray-800">Breakdown Ukuran</p>
+    <Card.Root class="border-gray-100">
+      <Card.Header>
+        <Card.Title class="text-sm text-gray-800">Breakdown Ukuran</Card.Title>
+      </Card.Header>
+      <Card.Content>
       <div class="space-y-3">
         {#each batch.detail_ukuran as du}
           {@const pct = Math.round((du.jumlah_pcs / batch.total_pcs) * 100)}
@@ -815,10 +975,14 @@
           </div>
         {/each}
       </div>
-    </div>
+      </Card.Content>
+    </Card.Root>
 
-    <div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
-      <p class="mb-4 text-sm font-semibold text-gray-800">Kain Digunakan</p>
+    <Card.Root class="border-gray-100">
+      <Card.Header>
+        <Card.Title class="text-sm text-gray-800">Kain Digunakan</Card.Title>
+      </Card.Header>
+      <Card.Content>
       {#if batch.kain_digunakan.length === 0}
         <p class="italic text-sm text-gray-400">Tidak ada data kain.</p>
       {:else}
@@ -843,7 +1007,8 @@
           >
         </p>
       {/if}
-    </div>
+      </Card.Content>
+    </Card.Root>
   </div>
 
   <!-- Catatan Admin -->
@@ -859,8 +1024,11 @@
   {/if}
 
   <!-- Riwayat Proses -->
-  <div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
-    <p class="mb-5 text-sm font-semibold text-gray-800">Riwayat Proses</p>
+  <Card.Root class="border-gray-100">
+    <Card.Header>
+      <Card.Title class="text-sm text-gray-800">Riwayat Proses</Card.Title>
+    </Card.Header>
+    <Card.Content>
 
     {#if riwayat.length === 0}
       <div class="flex flex-col items-center gap-2 py-10">
@@ -892,27 +1060,46 @@
     {:else}
       <div class="relative">
         {#each riwayat as r, i}
-          {@const rStage = STAGE_MAP[r.status_ke]}
+          {@const isEditKuantitas = r.tipe === 'edit_kuantitas'}
+          {@const rStage = isEditKuantitas ? null : STAGE_MAP[r.status_ke]}
           <div class="flex gap-4">
             <div class="flex flex-col items-center">
               <div
-                class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full {rStage?.bg ??
-                  'bg-gray-100'} {rStage?.border ?? 'border-gray-200'} border"
+                class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border {isEditKuantitas
+                  ? 'bg-amber-50 border-amber-200'
+                  : (rStage?.bg ?? 'bg-gray-100') + ' ' + (rStage?.border ?? 'border-gray-200')}"
               >
-                <svg
-                  class="h-3.5 w-3.5 {rStage?.text ?? 'text-gray-400'}"
-                  xmlns="http://www.w3.org/2000/svg"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke-width="2.5"
-                  stroke="currentColor"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    d="m4.5 12.75 6 6 9-13.5"
-                  />
-                </svg>
+                {#if isEditKuantitas}
+                  <svg
+                    class="h-3.5 w-3.5 text-amber-600"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke-width="2.5"
+                    stroke="currentColor"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Z"
+                    />
+                  </svg>
+                {:else}
+                  <svg
+                    class="h-3.5 w-3.5 {rStage?.text ?? 'text-gray-400'}"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke-width="2.5"
+                    stroke="currentColor"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="m4.5 12.75 6 6 9-13.5"
+                    />
+                  </svg>
+                {/if}
               </div>
               {#if i < riwayat.length - 1}
                 <div class="mt-1 min-h-6 w-px flex-1 bg-gray-200"></div>
@@ -920,241 +1107,199 @@
             </div>
 
             <div class="min-w-0 flex-1 pb-5">
-              <div class="flex flex-wrap items-center gap-2">
-                <p class="text-sm font-semibold text-gray-800">
-                  {STATUS_LABEL[r.status_dari]}
-                  <span class="mx-1 font-normal text-gray-400">→</span>
-                  {STATUS_LABEL[r.status_ke]}
-                </p>
-                {#if rStage}
-                  <span
-                    class="rounded-full px-2 py-0.5 text-[10px] font-semibold {rStage.bg} {rStage.text}"
-                  >
-                    {rStage.short}
+              {#if isEditKuantitas}
+                <!-- Edit Kuantitas entry -->
+                <div class="flex flex-wrap items-center gap-2">
+                  <p class="text-sm font-semibold text-gray-800">
+                    Edit Kuantitas
+                  </p>
+                  <span class="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                    Edit Jumlah
                   </span>
-                {/if}
-              </div>
-              <p class="mt-0.5 text-xs text-gray-500">
-                <span class="font-medium text-gray-700"
-                  >{r.updated_by_nama}</span
-                >
-                · {formatDateTime(r.timestamp)}
-              </p>
-              <div class="mt-2 flex flex-wrap items-center gap-3">
-                <div
-                  class="flex items-center gap-1.5 rounded-lg bg-green-50 px-3 py-1.5"
-                >
-                  <span class="h-1.5 w-1.5 rounded-full bg-green-500"></span>
-                  <span class="text-xs text-green-700"
-                    >Berhasil: <strong>{r.pcs_berhasil} pcs</strong></span
-                  >
                 </div>
-                {#if r.pcs_reject > 0}
-                  <div
-                    class="flex items-center gap-1.5 rounded-lg bg-red-50 px-3 py-1.5"
-                  >
-                    <span class="h-1.5 w-1.5 rounded-full bg-red-500"></span>
-                    <span class="text-xs text-red-700"
-                      >Reject: <strong>{r.pcs_reject} pcs</strong></span
-                    >
-                  </div>
-                {/if}
-              </div>
-              {#if r.catatan}
-                <p
-                  class="mt-2 rounded-lg bg-gray-50 px-3 py-2 text-xs italic text-gray-500"
-                >
-                  "{r.catatan}"
+                <p class="mt-0.5 text-xs text-gray-500">
+                  <span class="font-medium text-gray-700">{r.updated_by_nama}</span>
+                  · {formatDateTime(r.timestamp)}
                 </p>
+                <div class="mt-2 flex flex-wrap items-center gap-3">
+                  <div class="flex items-center gap-1.5 rounded-lg bg-amber-50 px-3 py-1.5">
+                    <span class="h-1.5 w-1.5 rounded-full bg-amber-400"></span>
+                    <span class="text-xs text-amber-700">Jumlah baru: <strong>{r.pcs_berhasil} pcs</strong></span>
+                  </div>
+                </div>
+                {#if r.catatan}
+                  <p class="mt-2 rounded-lg bg-gray-50 px-3 py-2 text-xs italic text-gray-500">
+                    "{r.catatan}"
+                  </p>
+                {/if}
+              {:else}
+                <!-- Status update entry -->
+                <div class="flex flex-wrap items-center gap-2">
+                  <p class="text-sm font-semibold text-gray-800">
+                    {STATUS_LABEL[r.status_dari]}
+                    <span class="mx-1 font-normal text-gray-400">→</span>
+                    {STATUS_LABEL[r.status_ke]}
+                  </p>
+                  {#if rStage}
+                    <span
+                      class="rounded-full px-2 py-0.5 text-[10px] font-semibold {rStage.bg} {rStage.text}"
+                    >
+                      {rStage.short}
+                    </span>
+                  {/if}
+                </div>
+                <p class="mt-0.5 text-xs text-gray-500">
+                  <span class="font-medium text-gray-700">{r.updated_by_nama}</span>
+                  · {formatDateTime(r.timestamp)}
+                </p>
+                <div class="mt-2 flex flex-wrap items-center gap-3">
+                  <div class="flex items-center gap-1.5 rounded-lg bg-green-50 px-3 py-1.5">
+                    <span class="h-1.5 w-1.5 rounded-full bg-green-500"></span>
+                    <span class="text-xs text-green-700">Berhasil: <strong>{r.pcs_berhasil} pcs</strong></span>
+                  </div>
+                  {#if r.pcs_reject > 0}
+                    <div class="flex items-center gap-1.5 rounded-lg bg-red-50 px-3 py-1.5">
+                      <span class="h-1.5 w-1.5 rounded-full bg-red-500"></span>
+                      <span class="text-xs text-red-700">Reject: <strong>{r.pcs_reject} pcs</strong></span>
+                    </div>
+                  {/if}
+                </div>
+                {#if r.catatan}
+                  <p class="mt-2 rounded-lg bg-gray-50 px-3 py-2 text-xs italic text-gray-500">
+                    "{r.catatan}"
+                  </p>
+                {/if}
               {/if}
             </div>
           </div>
         {/each}
       </div>
     {/if}
-  </div>
+    </Card.Content>
+  </Card.Root>
 {/if}
 
 <!-- ── Dialog: Perbarui Status ────────────────────────────────────── -->
 <Dialog.Root bind:open={openUpdate}>
   <Dialog.Content class="max-w-md">
     <Dialog.Header>
-      <Dialog.Title>{actionLabel}</Dialog.Title>
-      <Dialog.Description>
-        Catat hasil produksi untuk memperbarui status batch.
-      </Dialog.Description>
+      <Dialog.Title>Perbarui Status</Dialog.Title>
     </Dialog.Header>
 
-    {#if batch && nextStatus && currentStage && nextStage}
-      <div class="max-h-[60vh] space-y-5 overflow-y-auto pr-1">
-        <!-- Status transition -->
-        <div
-          class="flex items-center gap-3 rounded-xl border border-gray-100 bg-gray-50 p-4"
-        >
-          <div class="text-center">
-            <span
-              class="inline-block rounded-full px-2.5 py-1 text-xs font-semibold {currentStage.bg} {currentStage.text}"
-            >
+    {#if batch && effectiveNext && currentStage}
+      {@const effStage = STAGE_MAP[effectiveNext]}
+      <div class="max-h-[60vh] space-y-4 overflow-y-auto px-1 pt-1 pb-0">
+
+        <!-- Pill selector (admin only) -->
+        {#if availableTargets.length > 1}
+          <div class="flex flex-wrap gap-1.5">
+            {#each availableTargets as s}
+              {@const sConf = STAGE_MAP[s]}
+              <button
+                type="button"
+                onclick={() => { fTargetStatus = s; fPenugasanUid = ""; }}
+                class="rounded-full border px-3 py-1 text-xs font-semibold transition {effectiveNext === s
+                  ? `${sConf.bg} ${sConf.text} ${sConf.border} ring-2 ${sConf.ring}`
+                  : 'border-gray-200 bg-white text-gray-500 hover:border-gray-300'}"
+              >
+                {STATUS_LABEL[s]}
+              </button>
+            {/each}
+          </div>
+        {/if}
+
+        <!-- Status + info -->
+        <div class="flex items-center justify-between rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
+          <div class="flex items-center gap-2">
+            <span class="rounded-full px-2.5 py-1 text-xs font-semibold {currentStage.bg} {currentStage.text}">
               {STATUS_LABEL[batch.status]}
             </span>
-          </div>
-          <svg
-            class="h-4 w-4 shrink-0 text-gray-400"
-            xmlns="http://www.w3.org/2000/svg"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke-width="2"
-            stroke="currentColor"
-          >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3"
-            />
-          </svg>
-          <div class="text-center">
-            <span
-              class="inline-block rounded-full px-2.5 py-1 text-xs font-semibold {nextStage.bg} {nextStage.text}"
-            >
-              {STATUS_LABEL[nextStatus]}
+            <svg class="h-3.5 w-3.5 shrink-0 text-gray-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
+            </svg>
+            <span class="rounded-full px-2.5 py-1 text-xs font-semibold {effStage.bg} {effStage.text}">
+              {STATUS_LABEL[effectiveNext]}
             </span>
           </div>
+          <span class="text-xs text-gray-400">{pcsSaatIni} pcs</span>
         </div>
 
-        <!-- Total PCS info -->
-        <div class="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3">
-          <p class="text-xs text-blue-700">
-            Total batch: <span class="font-bold text-blue-900"
-              >{batch.total_pcs} pcs</span
-            >
-            <span class="mx-1">·</span>
-            Model: <span class="font-semibold">{batch.nama_model}</span>
-          </p>
-        </div>
-
-        <!-- Pilih Worker (hanya untuk transisi ke *_IN_PROGRESS) -->
-        {#if needsPenugasan && nextStatus}
+        <!-- Worker picker (hanya untuk *_IN_PROGRESS) -->
+        {#if needsPenugasan && effectiveNext}
           <div>
-            <label class="mb-1.5 block text-sm font-medium text-gray-700" for="pilih-worker">
-              {PENUGASAN_LABEL[nextStatus] ?? "Petugas"}
+            <p class="mb-1.5 text-sm font-medium text-gray-700">
+              {PENUGASAN_LABEL[effectiveNext] ?? "Petugas"}
               <span class="ml-1 text-xs font-normal text-gray-400">(opsional)</span>
-            </label>
-            <select
-              id="pilih-worker"
-              bind:value={fPenugasanUid}
-              class="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-300"
-            >
-              <option value="">— Pilih {PENUGASAN_LABEL[nextStatus] ?? "Petugas"} —</option>
-              {#each filteredWorkers as w}
-                <option value={w.uid}>{w.name}</option>
-              {/each}
-            </select>
+            </p>
             {#if filteredWorkers.length === 0}
-              <p class="mt-1 text-xs text-amber-600">Belum ada akun {PENUGASAN_LABEL[nextStatus]} di sistem.</p>
+              <p class="text-xs text-amber-600">Belum ada akun {PENUGASAN_LABEL[effectiveNext]} di sistem.</p>
             {:else}
-              <p class="mt-1 text-xs text-gray-400">
-                Worker yang dipilih akan dicatat sebagai penanggung jawab tahap ini.
-              </p>
+              <Select.Root
+                type="single"
+                value={fPenugasanUid || undefined}
+                onValueChange={(val) => { fPenugasanUid = val ?? ""; }}
+              >
+                <Select.Trigger class="w-full">
+                  {#if fPenugasanUid}
+                    <span>{filteredWorkers.find(w => w.uid === fPenugasanUid)?.name ?? "—"}</span>
+                  {:else}
+                    <span class="text-muted-foreground">— Pilih petugas —</span>
+                  {/if}
+                </Select.Trigger>
+                <Select.Content preventScroll={false}>
+                  {#each filteredWorkers as w}
+                    <Select.Item value={w.uid}>{w.name}</Select.Item>
+                  {/each}
+                </Select.Content>
+              </Select.Root>
             {/if}
           </div>
         {/if}
 
-        <!-- PCS Berhasil -->
-        <div>
-          <label
-            class="mb-1.5 block text-sm font-medium text-gray-700"
-            for="pcs-berhasil"
-          >
-            PCS Berhasil <span class="text-red-500">*</span>
-          </label>
-          <Input
-            id="pcs-berhasil"
-            type="number"
-            min="0"
-            max={batch.total_pcs}
-            bind:value={fPcsBerhasil}
-          />
-          <p class="mt-1 text-xs text-gray-400">
-            Jumlah pcs yang berhasil diproses di tahap ini
-          </p>
-        </div>
-
-        <!-- PCS Reject -->
-        <div>
-          <label
-            class="mb-1.5 block text-sm font-medium text-gray-700"
-            for="pcs-reject"
-          >
-            PCS Reject
-          </label>
-          <Input
-            id="pcs-reject"
-            type="number"
-            min="0"
-            max={batch.total_pcs}
-            bind:value={fPcsReject}
-          />
-          <p class="mt-1 text-xs text-gray-400">
-            Jumlah pcs yang gagal / cacat (dicatat sebagai loss)
-          </p>
+        <!-- PCS inputs -->
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="mb-1.5 block text-sm font-medium text-gray-700" for="pcs-berhasil">
+              Berhasil <span class="text-red-500">*</span>
+            </label>
+            <Input id="pcs-berhasil" type="number" min="0" max={pcsSaatIni} bind:value={fPcsBerhasil} />
+          </div>
+          <div>
+            <label class="mb-1.5 block text-sm font-medium text-gray-700" for="pcs-reject">
+              Reject
+            </label>
+            <Input id="pcs-reject" type="number" min="0" max={pcsSaatIni} bind:value={fPcsReject} />
+          </div>
         </div>
 
         <!-- Validasi total -->
         {#if totalMasukForm > 0}
-          <div
-            class="rounded-lg border {sisaBelumInput < 0
-              ? 'border-red-200 bg-red-50'
-              : 'border-gray-100 bg-gray-50'} px-4 py-3"
-          >
+          <div class="rounded-lg border {sisaBelumInput < 0 ? 'border-red-200 bg-red-50' : 'border-gray-100 bg-gray-50'} px-3 py-2">
             <div class="flex justify-between text-xs">
-              <span class="text-gray-500">Total diinput</span>
-              <span
-                class="font-semibold {sisaBelumInput < 0
-                  ? 'text-red-700'
-                  : 'text-gray-800'}">{totalMasukForm} pcs</span
-              >
+              <span class="text-gray-500">Diinput / Total</span>
+              <span class="font-semibold {sisaBelumInput < 0 ? 'text-red-700' : 'text-gray-800'}">
+                {totalMasukForm} / {pcsSaatIni} pcs
+                {#if sisaBelumInput < 0}— melebihi!{/if}
+              </span>
             </div>
-            <div class="mt-1 flex justify-between text-xs">
-              <span class="text-gray-500">Sisa belum terinput</span>
-              <span
-                class="font-semibold {sisaBelumInput < 0
-                  ? 'text-red-700'
-                  : 'text-gray-600'}">{sisaBelumInput} pcs</span
-              >
-            </div>
-            {#if sisaBelumInput < 0}
-              <p class="mt-1.5 text-xs font-medium text-red-600">
-                Total melebihi jumlah batch ({batch.total_pcs} pcs)
-              </p>
-            {/if}
           </div>
         {/if}
 
-        {#if nextStatus === "COMPLETED"}
-          <div class="rounded-xl border border-green-200 bg-green-50 p-4">
-            <p class="text-xs font-semibold text-green-700">
-              Info: Batch Akan Ditandai Selesai
-            </p>
-            <p class="mt-1 text-xs text-green-600">
-              {fPcsBerhasil} pcs akan otomatis ditambahkan ke stok Barang Jadi.
-            </p>
-          </div>
+        {#if effectiveNext === "COMPLETED"}
+          <p class="text-xs text-green-700">
+            ✓ {fPcsBerhasil} pcs akan ditambahkan ke stok Barang Jadi.
+          </p>
         {/if}
 
         <!-- Catatan -->
         <div>
-          <label
-            class="mb-1.5 block text-sm font-medium text-gray-700"
-            for="catatan-update"
-          >
-            Catatan <span class="text-xs font-normal text-gray-400"
-              >(opsional)</span
-            >
+          <label class="mb-1.5 block text-sm font-medium text-gray-700" for="catatan-update">
+            Catatan <span class="text-xs font-normal text-gray-400">(opsional)</span>
           </label>
           <textarea
             id="catatan-update"
-            rows="3"
-            placeholder="Kendala, keterangan tambahan, dll..."
+            rows="2"
+            placeholder="Kendala, keterangan tambahan..."
             bind:value={fCatatan}
             class="w-full resize-none rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none"
           ></textarea>
@@ -1162,11 +1307,236 @@
       </div>
 
       <Dialog.Footer class="gap-2">
-        <Button variant="outline" onclick={() => (openUpdate = false)}>
+        <Button variant="outline" onclick={() => (openUpdate = false)}>Batal</Button>
+        <Button onclick={submitUpdate} disabled={saving || !formValid}>
+          {saving ? "Menyimpan..." : "Simpan"}
+        </Button>
+      </Dialog.Footer>
+    {/if}
+  </Dialog.Content>
+</Dialog.Root>
+
+<!-- ── Dialog: Edit Kuantitas ────────────────────────────────────── -->
+<Dialog.Root bind:open={openEditKuantitas}>
+  <Dialog.Content class="max-w-md">
+    <Dialog.Header>
+      <Dialog.Title>Edit Jumlah Order</Dialog.Title>
+      <Dialog.Description>
+        Ubah jumlah pcs per ukuran. Stok kain akan disesuaikan otomatis.
+      </Dialog.Description>
+    </Dialog.Header>
+
+    {#if batch}
+      <div class="max-h-[65vh] space-y-5 overflow-y-auto pr-1">
+        <!-- Info batch -->
+        <div class="rounded-lg border border-amber-100 bg-amber-50 px-4 py-3">
+          <p class="text-xs text-amber-800">
+            <span class="font-semibold">{batch.nama_model}</span>
+            <span class="mx-1">·</span>
+            {STATUS_LABEL[batch.status]}
+            <span class="mx-1">·</span>
+            Saat ini: <span class="font-bold">{pcsSaatIni} pcs</span>
+          </p>
+        </div>
+
+        <!-- Input pcs per ukuran -->
+        <div>
+          <p class="mb-3 text-sm font-medium text-gray-700">Jumlah per Ukuran</p>
+          <div class="space-y-3">
+            {#each batch.detail_ukuran as du}
+              <div class="flex items-center gap-3">
+                <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-50 text-sm font-bold text-blue-700">
+                  {du.ukuran}
+                </div>
+                <Input
+                  type="number"
+                  min="0"
+                  bind:value={fEditUkuran[du.ukuran]}
+                  class="flex-1"
+                />
+                <span class="text-xs text-gray-400">pcs</span>
+              </div>
+            {/each}
+          </div>
+          <div class="mt-3 flex justify-between rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs">
+            <span class="text-gray-500">Total baru</span>
+            <span class="font-bold {fEditTotal <= 0 ? 'text-red-600' : 'text-gray-800'}">
+              {fEditTotal} pcs
+            </span>
+          </div>
+        </div>
+
+        <!-- Preview kain -->
+        {#if editKainPreview.length > 0 && fEditTotal > 0}
+          <div>
+            <p class="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400">
+              Perkiraan Perubahan Kain
+            </p>
+            <div class="overflow-hidden rounded-lg border border-gray-100">
+              <table class="w-full text-xs">
+                <thead class="bg-gray-50">
+                  <tr>
+                    <th class="px-3 py-2 text-left font-medium text-gray-500">Kain</th>
+                    <th class="px-3 py-2 text-right font-medium text-gray-500">Lama</th>
+                    <th class="px-3 py-2 text-right font-medium text-gray-500">Baru</th>
+                    <th class="px-3 py-2 text-right font-medium text-gray-500">Selisih</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                  {#each editKainPreview as kp}
+                    <tr class="bg-white">
+                      <td class="px-3 py-2 text-gray-700">{kp.nama_kain}</td>
+                      <td class="px-3 py-2 text-right text-gray-600">{kp.jumlah_dipakai} {kp.satuan}</td>
+                      <td class="px-3 py-2 text-right text-gray-600">{kp.jumlah_baru} {kp.satuan}</td>
+                      <td class="px-3 py-2 text-right font-semibold {kp.selisih > 0 ? 'text-green-600' : kp.selisih < 0 ? 'text-red-600' : 'text-gray-400'}">
+                        {kp.selisih > 0 ? '+' : ''}{kp.selisih} {kp.satuan}
+                      </td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+            <p class="mt-1.5 text-[10px] text-gray-400">
+              * Perkiraan proporsional. Nilai aktual dihitung berdasarkan kebutuhan kain per ukuran model.
+            </p>
+          </div>
+        {/if}
+
+        <!-- Catatan -->
+        <div>
+          <label class="mb-1.5 block text-sm font-medium text-gray-700" for="catatan-edit">
+            Alasan / Catatan
+            <span class="ml-1 text-xs font-normal text-gray-400">(opsional)</span>
+          </label>
+          <textarea
+            id="catatan-edit"
+            rows="2"
+            placeholder="Alasan perubahan jumlah..."
+            bind:value={fCatatanEdit}
+            class="w-full resize-none rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none"
+          ></textarea>
+        </div>
+      </div>
+
+      <Dialog.Footer class="gap-2">
+        <Button variant="outline" onclick={() => (openEditKuantitas = false)}>
           Batal
         </Button>
-        <Button onclick={submitUpdate} disabled={saving || !formValid}>
-          {saving ? "Menyimpan..." : actionLabel}
+        <Button
+          onclick={submitEditKuantitas}
+          disabled={savingEdit || fEditTotal <= 0}
+          class="bg-amber-600 text-white hover:bg-amber-700"
+        >
+          {savingEdit ? "Menyimpan..." : "Simpan Perubahan"}
+        </Button>
+      </Dialog.Footer>
+    {/if}
+  </Dialog.Content>
+</Dialog.Root>
+
+<!-- ── Dialog: Edit Penugasan ────────────────────────────────────── -->
+<Dialog.Root bind:open={openEditPenugasan}>
+  <Dialog.Content class="max-w-md">
+    <Dialog.Header>
+      <Dialog.Title>Edit Penugasan Petugas</Dialog.Title>
+      <Dialog.Description>
+        Atur siapa yang mengerjakan setiap tahap produksi.
+      </Dialog.Description>
+    </Dialog.Header>
+
+    {#if batch}
+      <div class="space-y-4 py-1">
+
+        <!-- Cutting -->
+        <div>
+          <p class="mb-1.5 text-sm font-medium text-gray-700">Kepala Cutting</p>
+          {#if cuttingWorkers.length === 0}
+            <p class="text-xs text-amber-600">Belum ada akun Kepala Cutting di sistem.</p>
+          {:else}
+            <Select.Root
+              type="single"
+              value={fEditCuttingUid || undefined}
+              onValueChange={(val) => { fEditCuttingUid = val ?? ""; }}
+            >
+              <Select.Trigger class="w-full">
+                {#if fEditCuttingUid}
+                  <span>{cuttingWorkers.find((w) => w.uid === fEditCuttingUid)?.name ?? "—"}</span>
+                {:else}
+                  <span class="text-muted-foreground">— Tidak ada / Kosongkan —</span>
+                {/if}
+              </Select.Trigger>
+              <Select.Content preventScroll={false}>
+                {#each cuttingWorkers as w}
+                  <Select.Item value={w.uid}>{w.name}</Select.Item>
+                {/each}
+              </Select.Content>
+            </Select.Root>
+          {/if}
+        </div>
+
+        <!-- Jahit -->
+        <div>
+          <p class="mb-1.5 text-sm font-medium text-gray-700">Kepala Jahit</p>
+          {#if jahitWorkers.length === 0}
+            <p class="text-xs text-amber-600">Belum ada akun Kepala Jahit di sistem.</p>
+          {:else}
+            <Select.Root
+              type="single"
+              value={fEditJahitUid || undefined}
+              onValueChange={(val) => { fEditJahitUid = val ?? ""; }}
+            >
+              <Select.Trigger class="w-full">
+                {#if fEditJahitUid}
+                  <span>{jahitWorkers.find((w) => w.uid === fEditJahitUid)?.name ?? "—"}</span>
+                {:else}
+                  <span class="text-muted-foreground">— Tidak ada / Kosongkan —</span>
+                {/if}
+              </Select.Trigger>
+              <Select.Content preventScroll={false}>
+                {#each jahitWorkers as w}
+                  <Select.Item value={w.uid}>{w.name}</Select.Item>
+                {/each}
+              </Select.Content>
+            </Select.Root>
+          {/if}
+        </div>
+
+        <!-- Steam -->
+        <div>
+          <p class="mb-1.5 text-sm font-medium text-gray-700">Kepala Steam</p>
+          {#if steamWorkers.length === 0}
+            <p class="text-xs text-amber-600">Belum ada akun Kepala Steam di sistem.</p>
+          {:else}
+            <Select.Root
+              type="single"
+              value={fEditSteamUid || undefined}
+              onValueChange={(val) => { fEditSteamUid = val ?? ""; }}
+            >
+              <Select.Trigger class="w-full">
+                {#if fEditSteamUid}
+                  <span>{steamWorkers.find((w) => w.uid === fEditSteamUid)?.name ?? "—"}</span>
+                {:else}
+                  <span class="text-muted-foreground">— Tidak ada / Kosongkan —</span>
+                {/if}
+              </Select.Trigger>
+              <Select.Content preventScroll={false}>
+                {#each steamWorkers as w}
+                  <Select.Item value={w.uid}>{w.name}</Select.Item>
+                {/each}
+              </Select.Content>
+            </Select.Root>
+          {/if}
+        </div>
+
+        <p class="text-xs text-gray-400">
+          Worker yang tidak dipilih akan dikosongkan dari penugasan batch ini.
+        </p>
+      </div>
+
+      <Dialog.Footer class="gap-2">
+        <Button variant="outline" onclick={() => (openEditPenugasan = false)}>Batal</Button>
+        <Button onclick={submitEditPenugasan} disabled={savingPenugasan}>
+          {savingPenugasan ? "Menyimpan..." : "Simpan"}
         </Button>
       </Dialog.Footer>
     {/if}

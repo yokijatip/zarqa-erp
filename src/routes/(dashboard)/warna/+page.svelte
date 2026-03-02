@@ -1,11 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import {
-    getWarnaList,
-    addWarna,
-    updateWarna,
-    deleteWarna,
-  } from "$lib/firebase/warna";
+  import { addWarna, updateWarna, deleteWarna } from "$lib/firebase/warna";
+  import { warnaCache } from "$lib/stores/data-cache.svelte";
   import type { Warna } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
   import * as Table from "$lib/components/ui/table";
@@ -59,11 +55,11 @@
     setTimeout(() => (errorMsg = null), 5000);
   }
 
-  async function load() {
+  async function load(force = false) {
     loading = true;
     errorMsg = null;
     try {
-      warnaList = await getWarnaList();
+      warnaList = await warnaCache.get(force);
     } catch {
       showError("Gagal memuat data warna. Periksa koneksi Firebase.");
     } finally {
@@ -98,7 +94,7 @@
       await addWarna({ nama_warna: fNama.trim(), kode_hex: fHex });
       openTambah = false;
       showSuccess(`Warna "${fNama.trim()}" berhasil ditambahkan.`);
-      await load();
+      await load(true);
     } catch (e: unknown) {
       showError(e instanceof Error ? e.message : "Gagal menambahkan warna.");
     } finally {
@@ -116,7 +112,7 @@
       });
       openEdit = false;
       showSuccess("Warna berhasil diperbarui.");
-      await load();
+      await load(true);
     } catch (e: unknown) {
       showError(e instanceof Error ? e.message : "Gagal memperbarui warna.");
     } finally {
@@ -131,7 +127,7 @@
       await deleteWarna(selectedWarna.id);
       openHapus = false;
       showSuccess(`Warna "${selectedWarna.nama_warna}" berhasil dihapus.`);
-      await load();
+      await load(true);
     } catch (e: unknown) {
       openHapus = false;
       showError(e instanceof Error ? e.message : "Gagal menghapus warna.");
@@ -240,7 +236,7 @@
     />
   </div>
 
-  <Button variant="outline" size="sm" onclick={load} class="ml-auto">
+  <Button variant="outline" size="sm" onclick={() => load(true)} class="ml-auto">
     <svg
       class="h-3.5 w-3.5 {loading ? 'animate-spin' : ''}"
       xmlns="http://www.w3.org/2000/svg"

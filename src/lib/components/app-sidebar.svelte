@@ -45,6 +45,7 @@
         { title: "Stok Kain", url: "/stok-kain" },
         { title: "Model Baju", url: "/model-baju" },
         { title: "Order Produksi", url: "/order-produksi" },
+        { title: "Stok Potongan", url: "/stok-potongan" },
         { title: "Barang Jadi", url: "/barang-jadi" },
         { title: "Barang Keluar", url: "/barang-keluar" },
         { title: "Warna", url: "/warna" },

@@ -1,12 +1,12 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import {
-    getStokKainList,
     addStokKain,
     restockKain,
     updateStokKain,
     kurangiStokManual,
   } from "$lib/firebase/stok-kain";
+  import { stokKainCache } from "$lib/stores/data-cache.svelte";
   import type { StokKain } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
   import * as Table from "$lib/components/ui/table";
@@ -106,11 +106,6 @@
     };
   }
 
-  function persen(tersedia: number, terpakai: number) {
-    const total = tersedia + terpakai;
-    return total > 0 ? Math.min((tersedia / total) * 100, 100) : 0;
-  }
-
   function showSuccess(msg: string) {
     successMsg = msg;
     setTimeout(() => (successMsg = null), 3000);
@@ -122,11 +117,11 @@
   }
 
   // ── Data ────────────────────────────────────────────────────────────
-  async function load() {
+  async function load(force = false) {
     loading = true;
     errorMsg = null;
     try {
-      stokList = await getStokKainList();
+      stokList = await stokKainCache.get(force);
     } catch {
       showError("Gagal memuat data. Periksa koneksi Firebase.");
     } finally {
@@ -146,7 +141,7 @@
         ...(fCatatan.trim() ? { catatan: fCatatan.trim() } : {}),
       });
       const namaKain = fNama.trim();
-      await load();
+      await load(true);
       openTambah = false;
       fNama = "";
       fSatuan = "yard";
@@ -172,7 +167,7 @@
       const nama = selectedKain.nama_kain;
       const satuan = selectedKain.satuan;
       const jumlah = Number(rJumlah);
-      await load();
+      await load(true);
       openRestock = false;
       selectedKain = null;
       rJumlah = "";
@@ -215,7 +210,7 @@
       const nama = kurangiKain.nama_kain;
       const satuan = kurangiKain.satuan;
       const jumlah = Number(kJumlah);
-      await load();
+      await load(true);
       openKurangi = false;
       kurangiKain = null;
       kJumlah = "";
@@ -244,7 +239,7 @@
         catatan: eCatatan.trim() || undefined,
       });
       const nama = eNama.trim();
-      await load();
+      await load(true);
       openEdit = false;
       editingKain = null;
       eNama = "";
@@ -398,7 +393,7 @@
     {/each}
   </div>
 
-  <Button variant="outline" size="sm" onclick={load} class="ml-auto">
+  <Button variant="outline" size="sm" onclick={() => load(true)} class="ml-auto">
     <svg
       class="h-3.5 w-3.5 {loading ? 'animate-spin' : ''}"
       xmlns="http://www.w3.org/2000/svg"
@@ -475,7 +470,6 @@
         <Table.Row class="bg-gray-50 hover:bg-gray-50">
           <Table.Head>Nama Kain</Table.Head>
           <Table.Head class="text-right">Tersedia</Table.Head>
-          <Table.Head class="text-right">Terpakai</Table.Head>
           <Table.Head class="text-center">Status</Table.Head>
           <Table.Head>Catatan</Table.Head>
           <Table.Head></Table.Head>
@@ -484,19 +478,9 @@
       <Table.Body>
         {#each filteredList as kain}
           {@const st = statusKain(kain.stok_tersedia)}
-          {@const pct = persen(kain.stok_tersedia, kain.stok_terpakai)}
           <Table.Row>
             <Table.Cell>
               <p class="text-sm font-medium text-gray-800">{kain.nama_kain}</p>
-              <div class="mt-1.5 flex items-center gap-2">
-                <div class="h-1.5 w-24 shrink-0 rounded-full bg-gray-100">
-                  <div
-                    class="h-1.5 rounded-full {st.bar}"
-                    style="width: {pct.toFixed(0)}%"
-                  ></div>
-                </div>
-                <span class="text-[10px] text-gray-400">{pct.toFixed(0)}%</span>
-              </div>
             </Table.Cell>
 
             <Table.Cell class="text-right">
@@ -507,13 +491,6 @@
                   : 'text-gray-800'}"
               >
                 {kain.stok_tersedia.toLocaleString("id-ID")}
-              </p>
-              <p class="text-xs text-gray-400">{kain.satuan}</p>
-            </Table.Cell>
-
-            <Table.Cell class="text-right">
-              <p class="text-sm tabular-nums text-gray-600">
-                {kain.stok_terpakai.toLocaleString("id-ID")}
               </p>
               <p class="text-xs text-gray-400">{kain.satuan}</p>
             </Table.Cell>
@@ -774,12 +751,6 @@
                 {selectedKain.satuan}</strong
               ></span
             >
-            <span
-              >Terpakai: <strong class="text-gray-700"
-                >{selectedKain.stok_terpakai.toLocaleString("id-ID")}
-                {selectedKain.satuan}</strong
-              ></span
-            >
           </div>
           <span
             class="mt-2 inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold {statusKain(
@@ -978,13 +949,6 @@
               Tersedia:
               <strong class="text-gray-700">
                 {editingKain.stok_tersedia.toLocaleString("id-ID")}
-                {editingKain.satuan}
-              </strong>
-            </span>
-            <span>
-              Terpakai:
-              <strong class="text-gray-700">
-                {editingKain.stok_terpakai.toLocaleString("id-ID")}
                 {editingKain.satuan}
               </strong>
             </span>

@@ -1,16 +1,15 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
-  import {
-    getBatchList,
-    createBatchProduksi,
-  } from "$lib/firebase/batch-produksi";
-  import { getModelBajuList } from "$lib/firebase/model-baju";
+  import { createBatchProduksi, createBatchDariPotongan } from "$lib/firebase/batch-produksi";
+  import { getStokPotonganByModel } from "$lib/firebase/stok-potongan";
+  import { batchCache, modelBajuCache, stokPotonganCache } from "$lib/stores/data-cache.svelte";
   import { currentUser, isAdmin } from "$lib/stores/auth.store";
   import type {
     BatchProduksi,
     ModelBaju,
     StatusBatch,
+    StokPotongan,
     UkuranBaju,
   } from "$lib/types";
   import { STATUS_LABEL } from "$lib/types";
@@ -67,6 +66,9 @@
   let fModelId = $state("");
   let fCatatan = $state("");
   let fJumlah = $state<Partial<Record<UkuranBaju, number>>>({});
+  let dariPotongan = $state(false);
+  let stokPotonganModel = $state<StokPotongan[]>([]);
+  let loadingStokPotongan = $state(false);
 
   // ── Derived ────────────────────────────────────────────────────────
   let selectedModel = $derived(
@@ -103,7 +105,14 @@
       : [],
   );
 
-  let canSubmit = $derived(fModelId !== "" && totalPcs > 0);
+  let canSubmit = $derived(
+    fModelId !== "" &&
+    totalPcs > 0 &&
+    (!dariPotongan || detailUkuran.every((du) => {
+      const stok = stokPotonganModel.find((s) => s.ukuran === du.ukuran);
+      return stok && stok.stok_tersedia >= du.jumlah_pcs;
+    }))
+  );
 
   let batchPeriod = $derived(
     filterByRange(batchList, dateRange, (b) => b.createdAt),
@@ -154,11 +163,11 @@
   }
 
   // ── Data ──────────────────────────────────────────────────────────
-  async function load() {
+  async function load(force = false) {
     loading = true;
     errorMsg = null;
     try {
-      batchList = await getBatchList();
+      batchList = await batchCache.get(force);
     } catch {
       showError("Gagal memuat data. Periksa koneksi Firebase.");
     } finally {
@@ -168,7 +177,8 @@
 
   async function loadModels() {
     try {
-      modelList = await getModelBajuList(true);
+      const all = await modelBajuCache.get();
+      modelList = all.filter((m) => m.aktif);
     } catch (e) {
       console.error("[loadModels] Gagal memuat model baju:", e);
     }
@@ -179,7 +189,41 @@
     fModelId = "";
     fCatatan = "";
     fJumlah = {};
+    dariPotongan = false;
+    stokPotonganModel = [];
     openBuat = true;
+  }
+
+  async function onToggleDariPotongan(val: boolean) {
+    dariPotongan = val;
+    if (val && fModelId) {
+      loadingStokPotongan = true;
+      try {
+        stokPotonganModel = await getStokPotonganByModel(fModelId);
+      } catch (e) {
+        console.error("[stokPotongan] Gagal fetch:", e);
+        stokPotonganModel = [];
+      } finally {
+        loadingStokPotongan = false;
+      }
+    }
+  }
+
+  async function onModelChange(val: string) {
+    fModelId = val;
+    fJumlah = {};
+    stokPotonganModel = [];
+    if (dariPotongan && val) {
+      loadingStokPotongan = true;
+      try {
+        stokPotonganModel = await getStokPotonganByModel(val);
+      } catch (e) {
+        console.error("[stokPotongan] Gagal fetch:", e);
+        stokPotonganModel = [];
+      } finally {
+        loadingStokPotongan = false;
+      }
+    }
   }
 
   async function submitBuat() {
@@ -187,18 +231,21 @@
     saving = true;
     try {
       const catatanTrimmed = fCatatan.trim();
-      await createBatchProduksi(
-        {
-          model_id: fModelId,
-          nama_model: selectedModel!.nama_model,
-          ...(selectedModel!.nama_warna ? { nama_warna: selectedModel!.nama_warna, kode_hex_warna: selectedModel!.kode_hex_warna } : {}),
-          detail_ukuran: detailUkuran,
-          kain_digunakan: kainDibutuhkan,
-          ...(catatanTrimmed ? { catatan_admin: catatanTrimmed } : {}),
-        },
-        $currentUser.uid,
-      );
-      await load();
+      const inputData = {
+        model_id: fModelId,
+        nama_model: selectedModel!.nama_model,
+        ...(selectedModel!.nama_warna ? { nama_warna: selectedModel!.nama_warna, kode_hex_warna: selectedModel!.kode_hex_warna } : {}),
+        detail_ukuran: detailUkuran,
+        kain_digunakan: kainDibutuhkan,
+        ...(catatanTrimmed ? { catatan_admin: catatanTrimmed } : {}),
+      };
+      if (dariPotongan) {
+        await createBatchDariPotongan(inputData, $currentUser.uid);
+        stokPotonganCache.invalidate();
+      } else {
+        await createBatchProduksi(inputData, $currentUser.uid);
+      }
+      await load(true);
       openBuat = false;
       showSuccess(`Order "${selectedModel!.nama_model}" berhasil dibuat.`);
     } catch (e: any) {
@@ -209,8 +256,8 @@
   }
 
   onMount(() => {
-    load();
     loadModels();
+    load();
   });
 </script>
 
@@ -369,7 +416,7 @@
   </Select.Root>
 
   <!-- Refresh -->
-  <Button variant="outline" size="sm" onclick={load} class="ml-auto">
+  <Button variant="outline" size="sm" onclick={() => load(true)} class="ml-auto">
     <svg
       class="h-3.5 w-3.5 {loading ? 'animate-spin' : ''}"
       xmlns="http://www.w3.org/2000/svg"
@@ -560,10 +607,7 @@
             <Select.Root
               type="single"
               value={fModelId || undefined}
-              onValueChange={(val) => {
-                fModelId = val ?? "";
-                fJumlah = {};
-              }}
+              onValueChange={(val) => onModelChange(val ?? "")}
             >
               <Select.Trigger class="w-full">
                 {#if selectedModel}
@@ -598,6 +642,32 @@
             </Select.Root>
           {/if}
         </div>
+
+        <!-- Toggle: Dari Potongan Kain -->
+        {#if selectedModel}
+          <div class="flex items-center justify-between rounded-lg border border-gray-200 px-4 py-3">
+            <div>
+              <p class="text-sm font-medium text-gray-700">Dari Potongan Kain</p>
+              <p class="text-xs text-gray-400">Gunakan stok sisa cutting — tidak memotong kain mentah</p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-label="Dari potongan kain"
+              aria-checked={dariPotongan}
+              onclick={() => onToggleDariPotongan(!dariPotongan)}
+              class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors {dariPotongan
+                ? 'bg-primary'
+                : 'bg-gray-200'}"
+            >
+              <span
+                class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out {dariPotongan
+                  ? 'translate-x-5'
+                  : 'translate-x-0'}"
+              ></span>
+            </button>
+          </div>
+        {/if}
 
         <!-- Jumlah Per Ukuran -->
         {#if selectedModel}
@@ -637,8 +707,42 @@
             {/if}
           </div>
 
-          <!-- Kebutuhan Kain (auto-calculated) -->
-          {#if kainDibutuhkan.length > 0}
+          <!-- Stok Potongan tersedia per ukuran (saat mode dari potongan) -->
+          {#if dariPotongan}
+            <div class="rounded-xl border border-blue-100 bg-blue-50 p-4">
+              <p class="mb-2 text-xs font-semibold uppercase tracking-wider text-blue-700">
+                Stok Potongan Tersedia
+              </p>
+              {#if loadingStokPotongan}
+                <p class="text-xs text-blue-500">Memuat stok potongan...</p>
+              {:else if stokPotonganModel.length === 0}
+                <p class="text-xs text-red-600">Tidak ada stok potongan untuk model ini.</p>
+              {:else}
+                <div class="space-y-1.5">
+                  {#each UKURAN_ORDER.filter((u) => selectedModel!.ukuran_tersedia.includes(u)) as ukuran}
+                    {@const stok = stokPotonganModel.find((s) => s.ukuran === ukuran)}
+                    {@const jumlahDiminta = fJumlah[ukuran] ?? 0}
+                    {@const cukup = stok && stok.stok_tersedia >= jumlahDiminta}
+                    <div class="flex items-center justify-between text-sm">
+                      <span class="text-gray-700">Ukuran {ukuran}</span>
+                      <span class="font-semibold {stok ? (cukup || jumlahDiminta === 0 ? 'text-blue-800' : 'text-red-600') : 'text-gray-400'}">
+                        {stok ? stok.stok_tersedia : 0} pcs tersedia
+                        {#if jumlahDiminta > 0 && stok && !cukup}
+                          <span class="text-xs font-normal">(diminta: {jumlahDiminta})</span>
+                        {/if}
+                      </span>
+                    </div>
+                  {/each}
+                </div>
+                <p class="mt-2 text-[10px] text-blue-600">
+                  Stok potongan akan dikurangi otomatis. Kain mentah tidak dipotong.
+                </p>
+              {/if}
+            </div>
+          {/if}
+
+          <!-- Kebutuhan Kain (auto-calculated) — sembunyikan saat dari potongan -->
+          {#if kainDibutuhkan.length > 0 && !dariPotongan}
             <div class="rounded-xl border border-amber-100 bg-amber-50 p-4">
               <p
                 class="mb-2 text-xs font-semibold uppercase tracking-wider text-amber-700"

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getKaryawanList } from "$lib/firebase/karyawan";
+  import { karyawanCache } from "$lib/stores/data-cache.svelte";
   import { isKaryawanManager } from "$lib/stores/auth.store";
   import { ROLE_LABEL } from "$lib/firebase/karyawan";
   import type { UserProfile } from "$lib/types";
@@ -42,10 +42,10 @@
     return d < new Date();
   }
 
-  async function load() {
+  async function load(force = false) {
     loading = true;
     try {
-      karyawanList = await getKaryawanList();
+      karyawanList = await karyawanCache.get(force);
     } finally {
       loading = false;
     }

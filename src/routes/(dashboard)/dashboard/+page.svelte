@@ -9,25 +9,16 @@
     StatusBatch,
   } from "$lib/types";
   import { STATUS_LABEL } from "$lib/types";
+  import {
+    batchCache,
+    stokKainCache,
+    barangJadiCache,
+    barangKeluarCache,
+  } from "$lib/stores/data-cache.svelte";
 
   Chart.register(...registerables);
 
   // ── Helpers ──────────────────────────────────────────────────────
-  function fakeTs(date: Date) {
-    return { toDate: () => date } as any;
-  }
-  function daysAgo(n: number, hour = 12): Date {
-    const d = new Date();
-    d.setDate(d.getDate() - n);
-    d.setHours(hour, 0, 0, 0);
-    return d;
-  }
-  function monthsAgo(m: number, day = 15): Date {
-    const d = new Date();
-    d.setMonth(d.getMonth() - m, day);
-    d.setHours(10, 0, 0, 0);
-    return d;
-  }
   function formatDate(d: Date): string {
     return d.toISOString().split("T")[0];
   }
@@ -39,593 +30,16 @@
     }).format(val);
   }
 
-  // ── Dummy Data ────────────────────────────────────────────────────
-  const DUMMY_BATCHES: BatchProduksi[] = [
-    {
-      id: "b01",
-      model_id: "m1",
-      nama_model: "Gamis Syar'i Polos",
-      detail_ukuran: [
-        { ukuran: "M", jumlah_pcs: 40 },
-        { ukuran: "L", jumlah_pcs: 35 },
-        { ukuran: "XL", jumlah_pcs: 25 },
-      ],
-      total_pcs: 100,
-      kain_digunakan: [
-        { kain_id: "k1", nama_kain: "Katun Premium", satuan: "yard", jumlah_dipakai: 200 },
-      ],
-      status: "CUTTING_IN_PROGRESS",
-      dibuat_oleh: "admin",
-      createdAt: fakeTs(daysAgo(3)),
-    },
-    {
-      id: "b02",
-      model_id: "m2",
-      nama_model: "Tunik Batik Modern",
-      detail_ukuran: [
-        { ukuran: "S", jumlah_pcs: 20 },
-        { ukuran: "M", jumlah_pcs: 30 },
-        { ukuran: "L", jumlah_pcs: 20 },
-      ],
-      total_pcs: 70,
-      kain_digunakan: [
-        { kain_id: "k2", nama_kain: "Batik Sogan", satuan: "yard", jumlah_dipakai: 140 },
-      ],
-      status: "JAHIT_IN_PROGRESS",
-      dibuat_oleh: "admin",
-      createdAt: fakeTs(daysAgo(7)),
-    },
-    {
-      id: "b03",
-      model_id: "m3",
-      nama_model: "Baju Koko Premium",
-      detail_ukuran: [
-        { ukuran: "M", jumlah_pcs: 25 },
-        { ukuran: "L", jumlah_pcs: 25 },
-        { ukuran: "XL", jumlah_pcs: 10 },
-      ],
-      total_pcs: 60,
-      kain_digunakan: [
-        { kain_id: "k1", nama_kain: "Katun Premium", satuan: "yard", jumlah_dipakai: 120 },
-      ],
-      status: "STEAM_IN_PROGRESS",
-      dibuat_oleh: "admin",
-      createdAt: fakeTs(daysAgo(10)),
-    },
-    {
-      id: "b04",
-      model_id: "m4",
-      nama_model: "Dress Muslim Casual",
-      detail_ukuran: [
-        { ukuran: "M", jumlah_pcs: 30 },
-        { ukuran: "L", jumlah_pcs: 30 },
-      ],
-      total_pcs: 60,
-      kain_digunakan: [
-        { kain_id: "k4", nama_kain: "Jersey", satuan: "yard", jumlah_dipakai: 120 },
-      ],
-      status: "PENDING_CUTTING",
-      dibuat_oleh: "admin",
-      createdAt: fakeTs(daysAgo(1)),
-    },
-    {
-      id: "b05",
-      model_id: "m5",
-      nama_model: "Abaya Elegan",
-      detail_ukuran: [
-        { ukuran: "M", jumlah_pcs: 20 },
-        { ukuran: "L", jumlah_pcs: 20 },
-        { ukuran: "XL", jumlah_pcs: 20 },
-      ],
-      total_pcs: 60,
-      kain_digunakan: [
-        { kain_id: "k5", nama_kain: "Balotelly", satuan: "yard", jumlah_dipakai: 180 },
-      ],
-      status: "JAHIT_DONE",
-      dibuat_oleh: "admin",
-      createdAt: fakeTs(daysAgo(14)),
-    },
-    {
-      id: "b06",
-      model_id: "m1",
-      nama_model: "Gamis Syar'i Polos",
-      detail_ukuran: [
-        { ukuran: "L", jumlah_pcs: 50 },
-        { ukuran: "XL", jumlah_pcs: 30 },
-      ],
-      total_pcs: 80,
-      kain_digunakan: [
-        { kain_id: "k1", nama_kain: "Katun Premium", satuan: "yard", jumlah_dipakai: 160 },
-      ],
-      status: "COMPLETED",
-      dibuat_oleh: "admin",
-      createdAt: fakeTs(daysAgo(20)),
-    },
-    {
-      id: "b07",
-      model_id: "m2",
-      nama_model: "Tunik Batik Modern",
-      detail_ukuran: [
-        { ukuran: "S", jumlah_pcs: 25 },
-        { ukuran: "M", jumlah_pcs: 35 },
-      ],
-      total_pcs: 60,
-      kain_digunakan: [
-        { kain_id: "k2", nama_kain: "Batik Sogan", satuan: "yard", jumlah_dipakai: 120 },
-      ],
-      status: "COMPLETED",
-      dibuat_oleh: "admin",
-      createdAt: fakeTs(daysAgo(30)),
-    },
-    {
-      id: "b08",
-      model_id: "m3",
-      nama_model: "Baju Koko Premium",
-      detail_ukuran: [
-        { ukuran: "M", jumlah_pcs: 40 },
-        { ukuran: "L", jumlah_pcs: 30 },
-      ],
-      total_pcs: 70,
-      kain_digunakan: [
-        { kain_id: "k1", nama_kain: "Katun Premium", satuan: "yard", jumlah_dipakai: 140 },
-      ],
-      status: "COMPLETED",
-      dibuat_oleh: "admin",
-      createdAt: fakeTs(daysAgo(45)),
-    },
-    {
-      id: "b09",
-      model_id: "m4",
-      nama_model: "Dress Muslim Casual",
-      detail_ukuran: [
-        { ukuran: "S", jumlah_pcs: 15 },
-        { ukuran: "M", jumlah_pcs: 25 },
-        { ukuran: "L", jumlah_pcs: 20 },
-      ],
-      total_pcs: 60,
-      kain_digunakan: [
-        { kain_id: "k4", nama_kain: "Jersey", satuan: "yard", jumlah_dipakai: 120 },
-      ],
-      status: "CUTTING_DONE",
-      dibuat_oleh: "admin",
-      createdAt: fakeTs(daysAgo(5)),
-    },
-    {
-      id: "b10",
-      model_id: "m5",
-      nama_model: "Abaya Elegan",
-      detail_ukuran: [
-        { ukuran: "L", jumlah_pcs: 25 },
-        { ukuran: "XL", jumlah_pcs: 25 },
-      ],
-      total_pcs: 50,
-      kain_digunakan: [
-        { kain_id: "k5", nama_kain: "Balotelly", satuan: "yard", jumlah_dipakai: 150 },
-      ],
-      status: "STEAM_DONE",
-      dibuat_oleh: "admin",
-      createdAt: fakeTs(daysAgo(12)),
-    },
-    {
-      id: "b11",
-      model_id: "m1",
-      nama_model: "Gamis Syar'i Polos",
-      detail_ukuran: [
-        { ukuran: "M", jumlah_pcs: 30 },
-        { ukuran: "L", jumlah_pcs: 40 },
-      ],
-      total_pcs: 70,
-      kain_digunakan: [
-        { kain_id: "k1", nama_kain: "Katun Premium", satuan: "yard", jumlah_dipakai: 140 },
-      ],
-      status: "PENDING_CUTTING",
-      dibuat_oleh: "admin",
-      createdAt: fakeTs(daysAgo(2)),
-    },
-    {
-      id: "b12",
-      model_id: "m2",
-      nama_model: "Tunik Batik Modern",
-      detail_ukuran: [
-        { ukuran: "S", jumlah_pcs: 20 },
-        { ukuran: "M", jumlah_pcs: 30 },
-      ],
-      total_pcs: 50,
-      kain_digunakan: [
-        { kain_id: "k2", nama_kain: "Batik Sogan", satuan: "yard", jumlah_dipakai: 100 },
-      ],
-      status: "JAHIT_IN_PROGRESS",
-      dibuat_oleh: "admin",
-      createdAt: fakeTs(daysAgo(8)),
-    },
-  ];
+  // ── Real Data State ────────────────────────────────────────
+  let batches = $state<BatchProduksi[]>([]);
+  let stokKain = $state<StokKain[]>([]);
+  let barangJadi = $state<StokBarangJadi[]>([]);
+  let barangKeluar = $state<BarangKeluar[]>([]);
+  let loading = $state(false);
+  let lastLoaded = $state<Date | null>(null);
+  let errorMsg = $state<string | null>(null);
 
-  const DUMMY_STOK_KAIN: StokKain[] = [
-    {
-      id: "k1",
-      nama_kain: "Katun Premium",
-      satuan: "yard",
-      stok_tersedia: 850,
-      stok_terpakai: 1200,
-    },
-    {
-      id: "k2",
-      nama_kain: "Batik Sogan",
-      satuan: "yard",
-      stok_tersedia: 450,
-      stok_terpakai: 600,
-    },
-    {
-      id: "k3",
-      nama_kain: "Wolfis",
-      satuan: "yard",
-      stok_tersedia: 75,
-      stok_terpakai: 400,
-    },
-    {
-      id: "k4",
-      nama_kain: "Jersey",
-      satuan: "yard",
-      stok_tersedia: 320,
-      stok_terpakai: 280,
-    },
-    {
-      id: "k5",
-      nama_kain: "Balotelly",
-      satuan: "yard",
-      stok_tersedia: 200,
-      stok_terpakai: 350,
-    },
-    {
-      id: "k6",
-      nama_kain: "Linen",
-      satuan: "yard",
-      stok_tersedia: 90,
-      stok_terpakai: 180,
-    },
-  ];
-
-  const DUMMY_BARANG_JADI: StokBarangJadi[] = [
-    {
-      id: "bj1",
-      model_id: "m1",
-      nama_model: "Gamis Syar'i Polos",
-      ukuran: "M",
-      stok_tersedia: 45,
-      total_masuk: 150,
-      total_keluar: 105,
-    },
-    {
-      id: "bj2",
-      model_id: "m1",
-      nama_model: "Gamis Syar'i Polos",
-      ukuran: "L",
-      stok_tersedia: 38,
-      total_masuk: 130,
-      total_keluar: 92,
-    },
-    {
-      id: "bj3",
-      model_id: "m1",
-      nama_model: "Gamis Syar'i Polos",
-      ukuran: "XL",
-      stok_tersedia: 22,
-      total_masuk: 80,
-      total_keluar: 58,
-    },
-    {
-      id: "bj4",
-      model_id: "m2",
-      nama_model: "Tunik Batik Modern",
-      ukuran: "S",
-      stok_tersedia: 30,
-      total_masuk: 90,
-      total_keluar: 60,
-    },
-    {
-      id: "bj5",
-      model_id: "m2",
-      nama_model: "Tunik Batik Modern",
-      ukuran: "M",
-      stok_tersedia: 55,
-      total_masuk: 130,
-      total_keluar: 75,
-    },
-    {
-      id: "bj6",
-      model_id: "m3",
-      nama_model: "Baju Koko Premium",
-      ukuran: "M",
-      stok_tersedia: 40,
-      total_masuk: 110,
-      total_keluar: 70,
-    },
-    {
-      id: "bj7",
-      model_id: "m3",
-      nama_model: "Baju Koko Premium",
-      ukuran: "L",
-      stok_tersedia: 25,
-      total_masuk: 90,
-      total_keluar: 65,
-    },
-    {
-      id: "bj8",
-      model_id: "m4",
-      nama_model: "Dress Muslim Casual",
-      ukuran: "M",
-      stok_tersedia: 18,
-      total_masuk: 60,
-      total_keluar: 42,
-    },
-    {
-      id: "bj9",
-      model_id: "m5",
-      nama_model: "Abaya Elegan",
-      ukuran: "L",
-      stok_tersedia: 35,
-      total_masuk: 80,
-      total_keluar: 45,
-    },
-  ];
-
-  const DUMMY_KELUAR: BarangKeluar[] = [
-    // 5 bulan lalu
-    {
-      id: "kl01",
-      model_id: "m1",
-      nama_model: "Gamis Syar'i Polos",
-      detail_keluar: [
-        { ukuran: "M", jumlah_pcs: 20 },
-        { ukuran: "L", jumlah_pcs: 15 },
-      ],
-      total_pcs: 35,
-      tujuan: "Bandung",
-      dicatat_oleh: "admin",
-      tanggal_keluar: fakeTs(monthsAgo(5, 8)),
-    },
-    {
-      id: "kl02",
-      model_id: "m2",
-      nama_model: "Tunik Batik Modern",
-      detail_keluar: [{ ukuran: "M", jumlah_pcs: 18 }],
-      total_pcs: 18,
-      tujuan: "Jakarta",
-      dicatat_oleh: "admin",
-      tanggal_keluar: fakeTs(monthsAgo(5, 20)),
-    },
-    {
-      id: "kl03",
-      model_id: "m3",
-      nama_model: "Baju Koko Premium",
-      detail_keluar: [{ ukuran: "L", jumlah_pcs: 12 }],
-      total_pcs: 12,
-      tujuan: "Surabaya",
-      dicatat_oleh: "admin",
-      tanggal_keluar: fakeTs(monthsAgo(5, 25)),
-    },
-    // 4 bulan lalu
-    {
-      id: "kl04",
-      model_id: "m1",
-      nama_model: "Gamis Syar'i Polos",
-      detail_keluar: [
-        { ukuran: "M", jumlah_pcs: 25 },
-        { ukuran: "L", jumlah_pcs: 20 },
-      ],
-      total_pcs: 45,
-      tujuan: "Bandung",
-      dicatat_oleh: "admin",
-      tanggal_keluar: fakeTs(monthsAgo(4, 5)),
-    },
-    {
-      id: "kl05",
-      model_id: "m4",
-      nama_model: "Dress Muslim Casual",
-      detail_keluar: [{ ukuran: "M", jumlah_pcs: 22 }],
-      total_pcs: 22,
-      tujuan: "Jakarta",
-      dicatat_oleh: "admin",
-      tanggal_keluar: fakeTs(monthsAgo(4, 15)),
-    },
-    {
-      id: "kl06",
-      model_id: "m2",
-      nama_model: "Tunik Batik Modern",
-      detail_keluar: [
-        { ukuran: "S", jumlah_pcs: 20 },
-        { ukuran: "M", jumlah_pcs: 15 },
-      ],
-      total_pcs: 35,
-      tujuan: "Medan",
-      dicatat_oleh: "admin",
-      tanggal_keluar: fakeTs(monthsAgo(4, 22)),
-    },
-    // 3 bulan lalu
-    {
-      id: "kl07",
-      model_id: "m1",
-      nama_model: "Gamis Syar'i Polos",
-      detail_keluar: [
-        { ukuran: "M", jumlah_pcs: 30 },
-        { ukuran: "L", jumlah_pcs: 25 },
-        { ukuran: "XL", jumlah_pcs: 15 },
-      ],
-      total_pcs: 70,
-      tujuan: "Bandung",
-      dicatat_oleh: "admin",
-      tanggal_keluar: fakeTs(monthsAgo(3, 7)),
-    },
-    {
-      id: "kl08",
-      model_id: "m3",
-      nama_model: "Baju Koko Premium",
-      detail_keluar: [
-        { ukuran: "M", jumlah_pcs: 25 },
-        { ukuran: "L", jumlah_pcs: 20 },
-      ],
-      total_pcs: 45,
-      tujuan: "Yogyakarta",
-      dicatat_oleh: "admin",
-      tanggal_keluar: fakeTs(monthsAgo(3, 18)),
-    },
-    {
-      id: "kl09",
-      model_id: "m5",
-      nama_model: "Abaya Elegan",
-      detail_keluar: [
-        { ukuran: "L", jumlah_pcs: 18 },
-        { ukuran: "XL", jumlah_pcs: 12 },
-      ],
-      total_pcs: 30,
-      tujuan: "Solo",
-      dicatat_oleh: "admin",
-      tanggal_keluar: fakeTs(monthsAgo(3, 28)),
-    },
-    // 2 bulan lalu
-    {
-      id: "kl10",
-      model_id: "m1",
-      nama_model: "Gamis Syar'i Polos",
-      detail_keluar: [
-        { ukuran: "M", jumlah_pcs: 35 },
-        { ukuran: "L", jumlah_pcs: 30 },
-      ],
-      total_pcs: 65,
-      tujuan: "Bandung",
-      dicatat_oleh: "admin",
-      tanggal_keluar: fakeTs(monthsAgo(2, 10)),
-    },
-    {
-      id: "kl11",
-      model_id: "m2",
-      nama_model: "Tunik Batik Modern",
-      detail_keluar: [
-        { ukuran: "M", jumlah_pcs: 30 },
-        { ukuran: "L", jumlah_pcs: 20 },
-      ],
-      total_pcs: 50,
-      tujuan: "Jakarta",
-      dicatat_oleh: "admin",
-      tanggal_keluar: fakeTs(monthsAgo(2, 15)),
-    },
-    {
-      id: "kl12",
-      model_id: "m4",
-      nama_model: "Dress Muslim Casual",
-      detail_keluar: [{ ukuran: "M", jumlah_pcs: 25 }],
-      total_pcs: 25,
-      tujuan: "Semarang",
-      dicatat_oleh: "admin",
-      tanggal_keluar: fakeTs(monthsAgo(2, 20)),
-    },
-    // 1 bulan lalu
-    {
-      id: "kl13",
-      model_id: "m1",
-      nama_model: "Gamis Syar'i Polos",
-      detail_keluar: [
-        { ukuran: "M", jumlah_pcs: 40 },
-        { ukuran: "L", jumlah_pcs: 35 },
-        { ukuran: "XL", jumlah_pcs: 20 },
-      ],
-      total_pcs: 95,
-      tujuan: "Bandung",
-      dicatat_oleh: "admin",
-      tanggal_keluar: fakeTs(monthsAgo(1, 5)),
-    },
-    {
-      id: "kl14",
-      model_id: "m3",
-      nama_model: "Baju Koko Premium",
-      detail_keluar: [
-        { ukuran: "M", jumlah_pcs: 35 },
-        { ukuran: "L", jumlah_pcs: 25 },
-      ],
-      total_pcs: 60,
-      tujuan: "Jakarta",
-      dicatat_oleh: "admin",
-      tanggal_keluar: fakeTs(monthsAgo(1, 12)),
-    },
-    {
-      id: "kl15",
-      model_id: "m5",
-      nama_model: "Abaya Elegan",
-      detail_keluar: [
-        { ukuran: "L", jumlah_pcs: 22 },
-        { ukuran: "XL", jumlah_pcs: 18 },
-      ],
-      total_pcs: 40,
-      tujuan: "Surabaya",
-      dicatat_oleh: "admin",
-      tanggal_keluar: fakeTs(monthsAgo(1, 20)),
-    },
-    {
-      id: "kl16",
-      model_id: "m2",
-      nama_model: "Tunik Batik Modern",
-      detail_keluar: [
-        { ukuran: "S", jumlah_pcs: 20 },
-        { ukuran: "M", jumlah_pcs: 30 },
-      ],
-      total_pcs: 50,
-      tujuan: "Medan",
-      dicatat_oleh: "admin",
-      tanggal_keluar: fakeTs(monthsAgo(1, 25)),
-    },
-    // Bulan ini
-    {
-      id: "kl17",
-      model_id: "m1",
-      nama_model: "Gamis Syar'i Polos",
-      detail_keluar: [
-        { ukuran: "M", jumlah_pcs: 30 },
-        { ukuran: "L", jumlah_pcs: 25 },
-      ],
-      total_pcs: 55,
-      tujuan: "Bandung",
-      dicatat_oleh: "admin",
-      tanggal_keluar: fakeTs(daysAgo(18)),
-    },
-    {
-      id: "kl18",
-      model_id: "m2",
-      nama_model: "Tunik Batik Modern",
-      detail_keluar: [
-        { ukuran: "M", jumlah_pcs: 20 },
-        { ukuran: "L", jumlah_pcs: 15 },
-      ],
-      total_pcs: 35,
-      tujuan: "Jakarta",
-      dicatat_oleh: "admin",
-      tanggal_keluar: fakeTs(daysAgo(12)),
-    },
-    {
-      id: "kl19",
-      model_id: "m3",
-      nama_model: "Baju Koko Premium",
-      detail_keluar: [
-        { ukuran: "M", jumlah_pcs: 15 },
-        { ukuran: "L", jumlah_pcs: 12 },
-      ],
-      total_pcs: 27,
-      tujuan: "Bogor",
-      dicatat_oleh: "admin",
-      tanggal_keluar: fakeTs(daysAgo(7)),
-    },
-    {
-      id: "kl20",
-      model_id: "m4",
-      nama_model: "Dress Muslim Casual",
-      detail_keluar: [{ ukuran: "M", jumlah_pcs: 18 }],
-      total_pcs: 18,
-      tujuan: "Depok",
-      dicatat_oleh: "admin",
-      tanggal_keluar: fakeTs(daysAgo(3)),
-    },
-  ];
-
-  // ── Date Range State ──────────────────────────────────────────────
+    // ── Date Range State ──────────────────────────────────────────────
   const TODAY = new Date();
   let dateFrom = $state(
     formatDate(
@@ -669,7 +83,7 @@
   let keluarFiltered = $derived.by(() => {
     const from = new Date(dateFrom + "T00:00:00");
     const to = new Date(dateTo + "T23:59:59");
-    return DUMMY_KELUAR.filter((k) => {
+    return barangKeluar.filter((k) => {
       const d = k.tanggal_keluar?.toDate?.();
       return d && d >= from && d <= to;
     });
@@ -677,22 +91,22 @@
 
   // ── Derived KPIs ─────────────────────────────────────────────────
   let batchAktif = $derived(
-    DUMMY_BATCHES.filter((b) => b.status !== "COMPLETED"),
+    batches.filter((b) => b.status !== "COMPLETED"),
   );
   let batchSelesai = $derived(
-    DUMMY_BATCHES.filter((b) => b.status === "COMPLETED").length,
+    batches.filter((b) => b.status === "COMPLETED").length,
   );
   let totalStokPcs = $derived(
-    DUMMY_BARANG_JADI.reduce((s, b) => s + b.stok_tersedia, 0),
+    barangJadi.reduce((s, b) => s + b.stok_tersedia, 0),
   );
   let totalKainYard = $derived(
-    DUMMY_STOK_KAIN.reduce((s, k) => s + k.stok_tersedia, 0),
+    stokKain.reduce((s, k) => s + k.stok_tersedia, 0),
   );
   let totalKeluarPcs = $derived(
     keluarFiltered.reduce((s, k) => s + k.total_pcs, 0),
   );
   let stokKainKritis = $derived(
-    DUMMY_STOK_KAIN.filter((k) => k.stok_tersedia < 100),
+    stokKain.filter((k) => k.stok_tersedia < 100),
   );
 
   // ── Derived: Estimasi Keuangan (Demo) ────────────────────────────
@@ -713,7 +127,7 @@
     const diffMs = to.getTime() - from.getTime();
     const prevFrom = new Date(from.getTime() - diffMs);
     const prevTo = new Date(from.getTime() - 1);
-    return DUMMY_KELUAR.filter((k) => {
+    return barangKeluar.filter((k) => {
       const d = k.tanggal_keluar?.toDate?.();
       return d && d >= prevFrom && d <= prevTo;
     }).reduce((s, k) => s + k.total_pcs, 0);
@@ -772,7 +186,7 @@
 
   function buildStatusDist() {
     const map: Partial<Record<StatusBatch, number>> = {};
-    for (const b of DUMMY_BATCHES) map[b.status] = (map[b.status] ?? 0) + 1;
+    for (const b of batches) map[b.status] = (map[b.status] ?? 0) + 1;
     const entries = Object.entries(map) as [StatusBatch, number][];
     return {
       labels: entries.map(([k]) => STATUS_LABEL[k]),
@@ -800,7 +214,7 @@
         `${MONTHS_ID[d.getMonth()]} '${String(d.getFullYear()).slice(2)}`,
       );
       data.push(
-        DUMMY_KELUAR.filter((k) => {
+        barangKeluar.filter((k) => {
           const kd = k.tanggal_keluar?.toDate?.();
           return (
             kd &&
@@ -944,14 +358,55 @@
   // Rebuild only the date-filtered chart when range changes
   $effect(() => {
     const filtered = keluarFiltered; // track dependency
-    if (canvasModel) buildModelChart(filtered);
+    if (canvasModel && !loading) buildModelChart(filtered);
   });
 
-  onMount(async () => {
-    await tick();
-    buildStatusChart();
-    buildModelChart(keluarFiltered);
-    buildTrendChart();
+  // ── Data Loading ──────────────────────────────────────────────────
+  async function load(force = false) {
+    // Kalau semua cache masih fresh dan bukan force refresh, pakai data cache
+    const allFresh =
+      batchCache.isFresh() &&
+      stokKainCache.isFresh() &&
+      barangJadiCache.isFresh() &&
+      barangKeluarCache.isFresh();
+
+    if (!force && allFresh) {
+      // Ambil dari cache tanpa loading state — instan
+      batches = batchCache.data ?? [];
+      stokKain = stokKainCache.data ?? [];
+      barangJadi = barangJadiCache.data ?? [];
+      barangKeluar = barangKeluarCache.data ?? [];
+      lastLoaded = batchCache.fetchedAt ? new Date(batchCache.fetchedAt) : lastLoaded;
+      await tick();
+      buildStatusChart();
+      buildModelChart(keluarFiltered);
+      buildTrendChart();
+      return;
+    }
+
+    loading = true;
+    errorMsg = null;
+    try {
+      [batches, stokKain, barangJadi, barangKeluar] = await Promise.all([
+        batchCache.get(force),
+        stokKainCache.get(force),
+        barangJadiCache.get(force),
+        barangKeluarCache.get(force),
+      ]);
+      lastLoaded = new Date();
+      await tick();
+      buildStatusChart();
+      buildModelChart(keluarFiltered);
+      buildTrendChart();
+    } catch {
+      errorMsg = "Gagal memuat data. Periksa koneksi internet.";
+    } finally {
+      loading = false;
+    }
+  }
+
+  onMount(() => {
+    load();
   });
 
   onDestroy(() => {
@@ -968,25 +423,67 @@
     <p class="mt-0.5 text-sm text-gray-500">Ringkasan operasional Zarqa ERP</p>
   </div>
 
-  <!-- Badge Demo -->
-  <span
-    class="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700"
+  <div class="flex items-center gap-2">
+    {#if lastLoaded && !loading}
+      <span class="text-xs text-gray-400">
+        Diperbarui: {lastLoaded.toLocaleTimeString("id-ID", {
+          hour: "2-digit",
+          minute: "2-digit",
+        })}
+      </span>
+      {#if batchCache.isFresh()}
+        <span
+          class="rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-[10px] font-medium text-green-600"
+          title="Data diambil dari cache, bukan dari Firestore"
+        >
+          cache
+        </span>
+      {/if}
+    {/if}
+    <button
+      onclick={() => load(true)}
+      disabled={loading}
+      class="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 shadow-sm transition hover:bg-gray-50 disabled:opacity-50"
+    >
+      <svg
+        class="h-3.5 w-3.5 {loading ? 'animate-spin' : ''}"
+        xmlns="http://www.w3.org/2000/svg"
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke-width="2"
+        stroke="currentColor"
+      >
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"
+        />
+      </svg>
+      {loading ? "Memuat..." : "Refresh"}
+    </button>
+  </div>
+</div>
+
+<!-- ── Error ─────────────────────────────────────────────────────── -->
+{#if errorMsg}
+  <div
+    class="mb-4 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
   >
     <svg
-      class="h-3 w-3"
+      class="h-4 w-4 shrink-0"
       xmlns="http://www.w3.org/2000/svg"
       viewBox="0 0 20 20"
       fill="currentColor"
     >
       <path
         fill-rule="evenodd"
-        d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z"
+        d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.28 7.22a.75.75 0 00-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 101.06 1.06L10 11.06l1.72 1.72a.75.75 0 101.06-1.06L11.06 10l1.72-1.72a.75.75 0 00-1.06-1.06L10 8.94 8.28 7.22z"
         clip-rule="evenodd"
       />
     </svg>
-    Mode Demo — Data Dummy
-  </span>
-</div>
+    {errorMsg}
+  </div>
+{/if}
 
 <!-- ── Date Range Picker ───────────────────────────────────────────── -->
 <div
@@ -1030,19 +527,31 @@
       type="date"
       bind:value={dateFrom}
       onchange={onManualChange}
-      class="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700 shadow-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+      class="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700 shadow-xs focus:outline-none focus:ring-2 focus:ring-gray-400"
     />
     <span class="text-sm text-gray-400">s/d</span>
     <input
       type="date"
       bind:value={dateTo}
       onchange={onManualChange}
-      class="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700 shadow-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+      class="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700 shadow-xs focus:outline-none focus:ring-2 focus:ring-gray-400"
     />
   </div>
 </div>
 
 <!-- ── KPI Cards ──────────────────────────────────────────────────── -->
+{#if loading && batches.length === 0}
+  <div class="mb-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
+    {#each Array(4) as _}
+      <div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
+        <div class="h-3 w-20 animate-pulse rounded bg-gray-100"></div>
+        <div class="mt-3 h-8 w-14 animate-pulse rounded bg-gray-100"></div>
+        <div class="mt-2 h-2.5 w-28 animate-pulse rounded bg-gray-100"></div>
+        <div class="mt-3 h-1 w-full animate-pulse rounded-full bg-gray-100"></div>
+      </div>
+    {/each}
+  </div>
+{:else}
 <div class="mb-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
   <div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
     <div class="flex items-start justify-between">
@@ -1074,8 +583,8 @@
     <div class="mt-3 h-1 w-full rounded-full bg-gray-100">
       <div
         class="h-1 rounded-full bg-orange-400"
-        style="width: {DUMMY_BATCHES.length
-          ? Math.round((batchAktif.length / DUMMY_BATCHES.length) * 100)
+        style="width: {batches.length
+          ? Math.round((batchAktif.length / batches.length) * 100)
           : 0}%"
       ></div>
     </div>
@@ -1110,7 +619,7 @@
     </p>
     <p class="mt-0.5 text-xs text-gray-500">pcs tersedia di gudang</p>
     <p class="mt-3 text-xs text-gray-400">
-      {DUMMY_BARANG_JADI.length} varian model &amp; ukuran
+      {barangJadi.length} varian model &amp; ukuran
     </p>
   </div>
 
@@ -1152,7 +661,7 @@
       </p>
     {:else}
       <p class="mt-3 text-xs text-gray-400">
-        {DUMMY_STOK_KAIN.length} jenis kain
+        {stokKain.length} jenis kain
       </p>
     {/if}
   </div>
@@ -1200,6 +709,7 @@
     {/if}
   </div>
 </div>
+{/if}
 
 <!-- ── Keuangan Summary ────────────────────────────────────────────── -->
 <div class="mb-4 rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
@@ -1272,7 +782,7 @@
       Distribusi Status Produksi
     </h2>
     <p class="mb-4 text-xs text-gray-400">
-      {DUMMY_BATCHES.length} batch total — status saat ini
+      {batches.length} batch total — status saat ini
     </p>
     <div class="relative h-64">
       <canvas bind:this={canvasStatus}></canvas>
@@ -1362,7 +872,7 @@
     <div class="mb-4 flex items-center justify-between">
       <div>
         <h2 class="text-sm font-semibold text-gray-800">Stok Kain</h2>
-        <p class="text-xs text-gray-400">{DUMMY_STOK_KAIN.length} jenis kain</p>
+        <p class="text-xs text-gray-400">{stokKain.length} jenis kain</p>
       </div>
       <a
         href="/stok-kain"
@@ -1371,7 +881,7 @@
       >
     </div>
     <div class="space-y-3">
-      {#each DUMMY_STOK_KAIN as kain}
+      {#each stokKain as kain}
         {@const total = kain.stok_tersedia + kain.stok_terpakai}
         {@const persen = total > 0 ? (kain.stok_tersedia / total) * 100 : 0}
         {@const kritis = kain.stok_tersedia < 100}

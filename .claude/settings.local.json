@@ -18,7 +18,14 @@
       "Bash(find C:\\\\Dev\\\\Web\\\\zarqa-erp-web\\\\src\\\\routes\\\\\\(dashboard\\)\\\\order-produksi:*)",
       "Bash(find C:\\\\Dev\\\\Web\\\\zarqa-erp-web\\\\src\\\\routes\\\\\\(dashboard\\)\\\\monitor-produksi:*)",
       "Bash(npx shadcn-svelte@latest add:*)",
-      "Bash(npm run check:*)"
+      "Bash(npm run check:*)",
+      "Bash(npm install:*)",
+      "Bash(npx playwright:*)",
+      "Bash(TEST_EMAIL=\"admingudang@gmail.com\" TEST_PASSWORD=\"Yokijp30!\" npx playwright:*)",
+      "Bash(wc:*)",
+      "Bash(find \"C:\\\\Dev\\\\Android\\\\zarqa-erp-app/app/src/main/java/com/yoki/zarqaproduction\" -name \"*.kt\" -exec wc -l {} ;)",
+      "Bash(./gradlew assembleDebug:*)",
+      "Bash(cat:*)"
     ]
   }
 }

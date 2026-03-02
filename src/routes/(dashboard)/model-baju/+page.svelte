@@ -1,14 +1,12 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { afterNavigate } from "$app/navigation";
   import {
-    getModelBajuList,
     addModelBaju,
     updateModelBaju,
     nonaktifkanModel,
     aktifkanModel,
   } from "$lib/firebase/model-baju";
-  import { getStokKainList } from "$lib/firebase/stok-kain";
-  import { getWarnaList } from "$lib/firebase/warna";
+  import { modelBajuCache, stokKainCache, warnaCache } from "$lib/stores/data-cache.svelte";
   import { isAdmin } from "$lib/stores/auth.store";
   import type { ModelBaju, StokKain, UkuranBaju, Warna } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
@@ -153,13 +151,13 @@
   }
 
   // ── Data ──────────────────────────────────────────────────────────
-  async function load() {
+  async function load(force = false) {
     loading = true;
     try {
       [modelList, stokKainList, warnaList] = await Promise.all([
-        getModelBajuList(false),
-        getStokKainList(),
-        getWarnaList(),
+        modelBajuCache.get(force),
+        stokKainCache.get(force),
+        warnaCache.get(force),
       ]);
     } catch {
       showError("Gagal memuat data. Periksa koneksi Firebase.");
@@ -199,7 +197,7 @@
         showSuccess(`Model "${fNama}" berhasil ditambahkan.`);
       }
 
-      await load();
+      await load(true);
       openForm = false;
       resetForm();
     } catch {
@@ -215,7 +213,7 @@
     try {
       await nonaktifkanModel(id);
       konfirmasiId = null;
-      await load();
+      await load(true);
       showSuccess(`Model "${nama}" berhasil dinonaktifkan.`);
     } catch {
       showError("Gagal menonaktifkan model.");
@@ -225,14 +223,19 @@
   async function doAktifkan(id: string, nama: string) {
     try {
       await aktifkanModel(id);
-      await load();
+      await load(true);
       showSuccess(`Model "${nama}" berhasil diaktifkan kembali.`);
     } catch {
       showError("Gagal mengaktifkan model.");
     }
   }
 
-  onMount(load);
+  afterNavigate(({ from }) => {
+    if (from?.url.pathname.startsWith("/model-baju/")) {
+      modelBajuCache.invalidate();
+    }
+    load();
+  });
 </script>
 
 <!-- ── Toast ─────────────────────────────────────────────────────── -->
@@ -384,7 +387,7 @@
   </button>
 
   <!-- Refresh -->
-  <Button variant="outline" size="sm" onclick={load} class="ml-auto">
+  <Button variant="outline" size="sm" onclick={() => load(true)} class="ml-auto">
     <svg
       class="h-3.5 w-3.5 {loading ? 'animate-spin' : ''}"
       xmlns="http://www.w3.org/2000/svg"

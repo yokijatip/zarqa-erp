@@ -1,10 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import {
-    getStokBarangJadi,
-    catatBarangKeluar,
-    getRiwayatBarangKeluar,
-  } from "$lib/firebase/barang-jadi";
+  import { catatBarangKeluar } from "$lib/firebase/barang-jadi";
+  import { barangJadiCache, barangKeluarCache } from "$lib/stores/data-cache.svelte";
   import { currentUser, userRole } from "$lib/stores/auth.store";
   import type { StokBarangJadi, BarangKeluar, UkuranBaju } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
@@ -159,13 +156,13 @@
   }
 
   // ── Data ──────────────────────────────────────────────────────────
-  async function load() {
+  async function load(force = false) {
     loading = true;
     errorMsg = null;
     try {
       [stokList, riwayat] = await Promise.all([
-        getStokBarangJadi(),
-        getRiwayatBarangKeluar(),
+        barangJadiCache.get(force),
+        barangKeluarCache.get(force),
       ]);
     } catch {
       showError("Gagal memuat data. Periksa koneksi Firebase.");
@@ -198,7 +195,7 @@
         },
         $currentUser.uid,
       );
-      await load();
+      await load(true);
       openCatat = false;
       showSuccess(
         `Pengiriman ${totalPcs} pcs "${selectedModelData!.nama_model}" ke ${fTujuan.trim()} berhasil dicatat.`,
@@ -267,7 +264,7 @@
   </div>
   <div class="flex flex-wrap items-center gap-2">
     <PeriodSelector bind:dateRange defaultPeriod="bulan_ini" />
-    <Button variant="outline" size="sm" onclick={load}>
+    <Button variant="outline" size="sm" onclick={() => load(true)}>
       <svg
         class="h-3.5 w-3.5 {loading ? 'animate-spin' : ''}"
         xmlns="http://www.w3.org/2000/svg"

@@ -7,7 +7,9 @@ import {
 } from 'firebase/firestore';
 import { db } from './config';
 import { kurangiStokKain, kembalikanStokKain } from './stok-kain';
-import type { BatchProduksi, BatchProduksiInput, StatusBatch, RiwayatProses, PenugasanWorker } from '$lib/types';
+import { kurangiStokPotongan } from './stok-potongan';
+import { getModelBajuById } from './model-baju';
+import type { BatchProduksi, BatchProduksiInput, StatusBatch, RiwayatProses, PenugasanWorker, DetailUkuran } from '$lib/types';
 
 const COL = 'batch_produksi';
 
@@ -27,7 +29,36 @@ export async function createBatchProduksi(
   const ref = await addDoc(collection(db, COL), {
     ...data,
     total_pcs: totalPcs,
+    pcs_saat_ini: totalPcs,
     status: 'PENDING_CUTTING' as StatusBatch,
+    dibuat_oleh: dibuatOlehUid,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+
+  return ref.id;
+}
+
+// Buat order produksi dari stok potongan kain (kain sudah dipotong sebelumnya)
+// Tidak memotong stok kain mentah — langsung masuk CUTTING_DONE
+export async function createBatchDariPotongan(
+  data: BatchProduksiInput,
+  dibuatOlehUid: string
+): Promise<string> {
+  // Validasi dan kurangi stok potongan per ukuran
+  for (const du of data.detail_ukuran) {
+    await kurangiStokPotongan(data.model_id, du.ukuran, du.jumlah_pcs);
+  }
+
+  const totalPcs = data.detail_ukuran.reduce((sum, u) => sum + u.jumlah_pcs, 0);
+
+  const ref = await addDoc(collection(db, COL), {
+    ...data,
+    kain_digunakan: [],
+    total_pcs: totalPcs,
+    pcs_saat_ini: totalPcs,
+    status: 'CUTTING_DONE' as StatusBatch,
+    dari_potongan: true,
     dibuat_oleh: dibuatOlehUid,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -84,6 +115,11 @@ export async function updateStatusBatch(
     updatePayload[`penugasan.${penugasanKey}`] = penugasan;
   }
 
+  // Sinkronkan pcs_saat_ini agar app Android tidak menampilkan "Belum sinkron"
+  if (riwayat.pcs_berhasil != null) {
+    updatePayload['pcs_saat_ini'] = riwayat.pcs_berhasil;
+  }
+
   await updateDoc(doc(db, COL, batchId), updatePayload);
 
   // Catat riwayat di sub-koleksi
@@ -129,6 +165,78 @@ export async function deleteBatchProduksi(batchId: string): Promise<void> {
 
   // Hapus dokumen batch
   await deleteDoc(doc(db, COL, batchId));
+}
+
+// Edit kuantitas batch (naik/turun) + sesuaikan stok kain otomatis
+export async function editKuantitasBatch(
+  batchId: string,
+  newDetailUkuran: DetailUkuran[],
+  updatedByUid: string,
+  updatedByNama: string,
+  alasan?: string
+): Promise<void> {
+  const batch = await getBatchById(batchId);
+  if (!batch) throw new Error('Batch tidak ditemukan');
+  if (batch.status === 'COMPLETED') throw new Error('Batch selesai tidak dapat diedit');
+
+  const oldTotal = batch.total_pcs;
+  const newTotal = newDetailUkuran.reduce((s, du) => s + du.jumlah_pcs, 0);
+  if (newTotal <= 0) throw new Error('Total pcs harus lebih dari 0');
+
+  const model = await getModelBajuById(batch.model_id);
+
+  const newKainDigunakan = batch.kain_digunakan.map(kd => {
+    let jumlahBaru: number;
+    const kebutuhan = model?.kebutuhan_kain.find(k => k.kain_id === kd.kain_id);
+    if (kebutuhan?.jumlah_per_ukuran) {
+      jumlahBaru = newDetailUkuran.reduce((s, du) =>
+        s + (kebutuhan.jumlah_per_ukuran[du.ukuran] ?? 0) * du.jumlah_pcs, 0);
+      jumlahBaru = parseFloat(jumlahBaru.toFixed(2));
+    } else {
+      // fallback proporsional jika data model tidak tersedia
+      jumlahBaru = parseFloat((kd.jumlah_dipakai * (newTotal / oldTotal)).toFixed(2));
+    }
+    return { ...kd, jumlah_dipakai: jumlahBaru };
+  });
+
+  // Sesuaikan stok kain: kembalikan jika kurang, potong jika tambah
+  for (let i = 0; i < batch.kain_digunakan.length; i++) {
+    const selisih = parseFloat(
+      (batch.kain_digunakan[i].jumlah_dipakai - newKainDigunakan[i].jumlah_dipakai).toFixed(2)
+    );
+    if (selisih > 0) await kembalikanStokKain(batch.kain_digunakan[i].kain_id, selisih);
+    if (selisih < 0) await kurangiStokKain(batch.kain_digunakan[i].kain_id, Math.abs(selisih));
+  }
+
+  await updateDoc(doc(db, COL, batchId), {
+    detail_ukuran: newDetailUkuran,
+    total_pcs: newTotal,
+    kain_digunakan: newKainDigunakan,
+    updatedAt: serverTimestamp(),
+  });
+
+  await addDoc(collection(db, COL, batchId, 'riwayat_proses'), {
+    tipe: 'edit_kuantitas',
+    status_dari: batch.status,
+    status_ke: batch.status,
+    updated_by_uid: updatedByUid,
+    updated_by_nama: updatedByNama,
+    pcs_berhasil: newTotal,
+    pcs_reject: 0,
+    catatan: alasan?.trim() || `Jumlah diubah dari ${oldTotal} menjadi ${newTotal} pcs`,
+    timestamp: serverTimestamp(),
+  });
+}
+
+// Update penugasan worker tanpa mengubah status batch
+export async function updatePenugasanBatch(
+  batchId: string,
+  penugasan: { cutting?: PenugasanWorker; jahit?: PenugasanWorker; steam?: PenugasanWorker }
+): Promise<void> {
+  await updateDoc(doc(db, COL, batchId), {
+    penugasan,
+    updatedAt: serverTimestamp(),
+  });
 }
 
 // Real-time listener semua batch aktif (untuk monitor produksi)

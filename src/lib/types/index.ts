@@ -115,9 +115,11 @@ export interface BatchProduksi {
   detail_ukuran: DetailUkuran[];
   total_pcs: number;
   kain_digunakan: KainDigunakan[];
+  pcs_saat_ini?: number;
   status: StatusBatch;
   dibuat_oleh: string;
   catatan_admin?: string;
+  dari_potongan?: boolean;
   penugasan?: {
     cutting?: PenugasanWorker;
     jahit?: PenugasanWorker;
@@ -136,6 +138,7 @@ export type BatchProduksiInput = Omit<
 
 export interface RiwayatProses {
   id?: string;
+  tipe?: 'status_update' | 'edit_kuantitas';
   status_dari: StatusBatch;
   status_ke: StatusBatch;
   updated_by_uid: string;
@@ -158,6 +161,21 @@ export interface StokBarangJadi {
   stok_tersedia: number;
   total_masuk: number;
   total_keluar: number;
+  updatedAt?: Timestamp;
+}
+
+// ─── STOK POTONGAN ───────────────────────────────────────────────
+
+export interface StokPotongan {
+  id: string;
+  model_id: string;
+  nama_model: string;
+  nama_warna?: string;
+  kode_hex_warna?: string;
+  ukuran: UkuranBaju;
+  stok_tersedia: number;
+  total_masuk: number;
+  total_terpakai: number;
   updatedAt?: Timestamp;
 }
 

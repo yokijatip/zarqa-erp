@@ -2,10 +2,11 @@
   import { onMount, onDestroy } from "svelte";
   import { subscribeBatchAktif } from "$lib/firebase/batch-produksi";
   import { subscribeStokKain } from "$lib/firebase/stok-kain";
-  import type { BatchProduksi, StokKain, StatusBatch } from "$lib/types";
+  import { getStokBarangJadi } from "$lib/firebase/barang-jadi";
+  import type { BatchProduksi, StokKain, StokBarangJadi, StatusBatch } from "$lib/types";
   import { STATUS_LABEL } from "$lib/types";
   import StatCard from "$lib/components/StatCard.svelte";
-  import { getPerformaKaryawan, type PerformaKaryawan } from "$lib/firebase/performa";
+  import { getPerformaPerDivisi, type PerformaKaryawan, type DivisiKey } from "$lib/firebase/performa";
   import ListIcon from "@lucide/svelte/icons/list";
   import ClockIcon from "@lucide/svelte/icons/clock";
   import CheckCircleIcon from "@lucide/svelte/icons/check-circle";
@@ -175,9 +176,14 @@
   // ── State ──────────────────────────────────────────────────────────
   let batchAktif = $state<BatchProduksi[]>([]);
   let stokKainList = $state<StokKain[]>([]);
-  let performaList = $state<PerformaKaryawan[]>([]);
+  let stokBarangJadi = $state<StokBarangJadi[]>([]);
+  let performaByDivisi = $state<Record<DivisiKey, PerformaKaryawan[]>>({
+    Cutting: [], Jahit: [], Steam: [], Keluar: [],
+  });
+  let selectedDivisi = $state<DivisiKey>('Cutting');
   let loadingBatch = $state(true);
   let loadingKain = $state(true);
+  let loadingBarangJadi = $state(true);
   let loadingPerforma = $state(true);
   let selectedStage = $state<StatusBatch | null>(null);
   let lastUpdated = $state<Date | null>(null);
@@ -190,21 +196,16 @@
 
   let kainKritis = $derived(stokKainList.filter((k) => k.stok_tersedia < 100));
   let totalPcsAktif = $derived(batchPeriod.reduce((s, b) => s + b.total_pcs, 0));
-  let antriCount = $derived(
-    batchPeriod.filter((b) => b.status === "PENDING_CUTTING").length,
-  );
-  let antriPcs = $derived(
+  let terlambatPcs = $derived(
     batchPeriod
-      .filter((b) => b.status === "PENDING_CUTTING")
+      .filter((b) => hitungHari(b.createdAt) > 5)
       .reduce((s, b) => s + b.total_pcs, 0),
   );
-  let siapKirimCount = $derived(
-    batchPeriod.filter((b) => b.status === "STEAM_DONE").length,
+  let totalPcsBarangJadi = $derived(
+    stokBarangJadi.reduce((s, b) => s + b.stok_tersedia, 0),
   );
-  let siapKirimPcs = $derived(
-    batchPeriod
-      .filter((b) => b.status === "STEAM_DONE")
-      .reduce((s, b) => s + b.total_pcs, 0),
+  let modelBarangJadiCount = $derived(
+    new Set(stokBarangJadi.filter((b) => b.stok_tersedia > 0).map((b) => b.model_id)).size,
   );
   let terlambatCount = $derived(
     batchPeriod.filter((b) => hitungHari(b.createdAt) > 5).length,
@@ -265,10 +266,16 @@
 
   function reloadPerforma() {
     loadingPerforma = true;
-    getPerformaKaryawan()
-      .then((data) => { performaList = data; })
+    getPerformaPerDivisi()
+      .then((data) => { performaByDivisi = data; })
       .finally(() => { loadingPerforma = false; });
   }
+
+  const DIVISI_TABS: { key: DivisiKey; label: string; dot: string; tabActive: string; tabInactive: string; badgeBg: string }[] = [
+    { key: 'Cutting', label: 'Cutting',  dot: 'bg-orange-500', tabActive: 'border-orange-500 text-orange-600', tabInactive: 'border-transparent text-gray-500 hover:text-gray-700', badgeBg: 'bg-orange-100 text-orange-700' },
+    { key: 'Jahit',   label: 'Jahit',    dot: 'bg-blue-500',   tabActive: 'border-blue-500 text-blue-600',   tabInactive: 'border-transparent text-gray-500 hover:text-gray-700', badgeBg: 'bg-blue-100 text-blue-700'   },
+    { key: 'Steam',   label: 'Steam',    dot: 'bg-purple-500', tabActive: 'border-purple-500 text-purple-600', tabInactive: 'border-transparent text-gray-500 hover:text-gray-700', badgeBg: 'bg-purple-100 text-purple-700' },
+  ];
 
   onMount(() => {
     unsubBatch = subscribeBatchAktif((data) => {
@@ -279,6 +286,10 @@
     unsubKain = subscribeStokKain((data) => {
       stokKainList = data;
       loadingKain = false;
+    });
+    getStokBarangJadi().then((data) => {
+      stokBarangJadi = data;
+      loadingBarangJadi = false;
     });
     reloadPerforma();
   });
@@ -391,55 +402,55 @@
 
 <!-- ── KPI Cards ──────────────────────────────────────────────────── -->
 <div class="mb-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
-  <!-- Batch Berjalan -->
+  <!-- Batch Aktif -->
   <StatCard
-    title="Batch Berjalan"
+    title="Batch Aktif"
     value={batchPeriod.length}
     icon={ListIcon}
     iconBg="bg-orange-50"
     iconColor="text-orange-500"
     loading={loadingBatch}
-    footerSubtext="{totalPcsAktif.toLocaleString(
-      'id-ID',
-    )} pcs sedang diproduksi"
-    footerText={terlambatCount > 0
-      ? `${terlambatCount} batch >5 hari ⚠`
-      : "Semua batch dalam jadwal"}
-    footerTextClass={terlambatCount > 0 ? "text-red-500" : "text-gray-400"}
+    footerText="{totalPcsAktif.toLocaleString('id-ID')} pcs diproduksi"
+    footerTextClass="text-gray-500"
+    footerSubtext="Periode ini"
   />
 
-  <!-- Antri Cutting -->
+  <!-- Terlambat -->
   <StatCard
-    title="Antri Cutting"
-    value={antriCount}
+    title="Terlambat"
+    value={terlambatCount}
     icon={ClockIcon}
-    iconBg="bg-slate-100"
-    iconColor="text-slate-500"
+    iconBg={terlambatCount > 0 ? "bg-red-100" : "bg-gray-100"}
+    iconColor={terlambatCount > 0 ? "text-red-600" : "text-gray-400"}
     loading={loadingBatch}
-    footerSubtext="{antriPcs.toLocaleString('id-ID')} pcs menunggu"
-    footerText="Cutting aktif: {countStatus('CUTTING_IN_PROGRESS')} batch"
+    class={terlambatCount > 0 ? "border-red-200 !bg-red-50" : ""}
+    titleClass={terlambatCount > 0 ? "text-red-600" : ""}
+    valueClass={terlambatCount > 0 ? "text-red-700" : ""}
+    footerText={terlambatCount > 0
+      ? `${terlambatPcs.toLocaleString('id-ID')} pcs terhambat`
+      : "Semua dalam jadwal"}
+    footerTextClass={terlambatCount > 0 ? "text-red-600" : "text-gray-400"}
+    footerSubtext={terlambatCount > 0 ? "Lebih dari 5 hari berjalan" : ""}
+    footerSubtextClass="text-red-400"
+    footerLink={terlambatCount > 0 ? "/order-produksi" : undefined}
   />
 
-  <!-- Siap Kirim -->
+  <!-- Siap Kirim (dari stok barang jadi) -->
   <StatCard
     title="Siap Kirim"
-    value={siapKirimCount}
+    value="{totalPcsBarangJadi.toLocaleString('id-ID')} pcs"
     icon={CheckCircleIcon}
-    iconBg={siapKirimCount > 0 ? "bg-emerald-100" : "bg-gray-100"}
-    iconColor={siapKirimCount > 0 ? "text-emerald-600" : "text-gray-400"}
-    loading={loadingBatch}
-    class={siapKirimCount > 0 ? "border-emerald-200 !bg-emerald-50" : ""}
-    titleClass={siapKirimCount > 0 ? "text-emerald-600" : "text-gray-400"}
-    valueClass={siapKirimCount > 0 ? "text-emerald-700" : "text-gray-900"}
-    footerSubtext="{siapKirimPcs.toLocaleString('id-ID')} pcs menunggu dicatat"
-    footerSubtextClass={siapKirimCount > 0
-      ? "text-emerald-600"
-      : "text-gray-500"}
-    footerText={siapKirimCount > 0
-      ? "Catat sekarang"
-      : "Belum ada yang siap kirim"}
-    footerLink={siapKirimCount > 0 ? "/barang-keluar" : undefined}
-    footerTextClass={siapKirimCount > 0 ? "text-emerald-700" : "text-gray-400"}
+    iconBg={totalPcsBarangJadi > 0 ? "bg-emerald-100" : "bg-gray-100"}
+    iconColor={totalPcsBarangJadi > 0 ? "text-emerald-600" : "text-gray-400"}
+    loading={loadingBarangJadi}
+    class={totalPcsBarangJadi > 0 ? "border-emerald-200 !bg-emerald-50" : ""}
+    titleClass={totalPcsBarangJadi > 0 ? "text-emerald-600" : "text-gray-400"}
+    valueClass={totalPcsBarangJadi > 0 ? "text-emerald-700" : "text-gray-900"}
+    footerText={totalPcsBarangJadi > 0 ? "Catat pengiriman" : "Stok barang jadi kosong"}
+    footerLink={totalPcsBarangJadi > 0 ? "/barang-keluar" : undefined}
+    footerTextClass={totalPcsBarangJadi > 0 ? "text-emerald-700" : "text-gray-400"}
+    footerSubtext="{modelBarangJadiCount} model tersedia"
+    footerSubtextClass={totalPcsBarangJadi > 0 ? "text-emerald-600" : "text-gray-400"}
   />
 
   <!-- Kain Kritis -->
@@ -673,11 +684,12 @@
 
 <!-- ── Performa Produksi ───────────────────────────────────────────── -->
 <div class="mb-4 overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
-  <div class="flex items-center justify-between border-b border-gray-50 px-5 py-4">
+  <!-- Header -->
+  <div class="flex items-center justify-between border-b border-gray-100 px-5 py-4">
     <div class="flex items-center gap-2">
       <TrendingUpIcon class="h-4 w-4 text-gray-400" />
       <h2 class="text-sm font-semibold text-gray-800">Performa Produksi</h2>
-      <span class="text-xs text-gray-400">— berdasarkan riwayat batch</span>
+      <span class="text-xs text-gray-400">— per bagian</span>
     </div>
     <button
       onclick={reloadPerforma}
@@ -690,114 +702,122 @@
     </button>
   </div>
 
+  <!-- Tab Bagian -->
+  <div class="flex gap-0 border-b border-gray-100 px-5">
+    {#each DIVISI_TABS as tab}
+      {@const count = performaByDivisi[tab.key].length}
+      <button
+        onclick={() => (selectedDivisi = tab.key)}
+        class="flex items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-medium transition
+          {selectedDivisi === tab.key ? tab.tabActive : tab.tabInactive}"
+      >
+        <span class="h-2 w-2 rounded-full {tab.dot}"></span>
+        {tab.label}
+        {#if !loadingPerforma && count > 0}
+          <span class="rounded-full px-1.5 py-0.5 text-[10px] font-semibold {tab.badgeBg}">{count}</span>
+        {/if}
+      </button>
+    {/each}
+  </div>
+
   {#if loadingPerforma}
     <div class="space-y-0">
       {#each Array(4) as _}
         <div class="flex items-center gap-4 border-b border-gray-50 px-5 py-3.5">
-          <div class="h-4 w-28 animate-pulse rounded bg-gray-100"></div>
-          <div class="h-5 w-14 animate-pulse rounded-full bg-gray-100"></div>
+          <div class="h-4 w-6 animate-pulse rounded bg-gray-100"></div>
+          <div class="h-4 w-32 animate-pulse rounded bg-gray-100"></div>
           <div class="ml-auto h-4 w-16 animate-pulse rounded bg-gray-100"></div>
           <div class="h-4 w-12 animate-pulse rounded bg-gray-100"></div>
           <div class="h-5 w-16 animate-pulse rounded-full bg-gray-100"></div>
         </div>
       {/each}
     </div>
-  {:else if performaList.length === 0}
-    <div class="flex flex-col items-center gap-2 py-10 text-center">
-      <svg class="h-8 w-8 text-gray-200" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z" />
-      </svg>
-      <p class="text-sm text-gray-400">Belum ada data performa.</p>
-      <p class="text-xs text-gray-300">Data muncul setelah ada batch yang diproses.</p>
-    </div>
   {:else}
-    <div class="overflow-x-auto">
-      <table class="w-full text-sm">
-        <thead>
-          <tr class="bg-gray-50 text-xs text-gray-500">
-            <th class="px-5 py-2.5 text-left font-medium">#</th>
-            <th class="px-4 py-2.5 text-left font-medium">Nama</th>
-            <th class="px-4 py-2.5 text-left font-medium">Divisi</th>
-            <th class="px-4 py-2.5 text-right font-medium">Total PCS</th>
-            <th class="px-4 py-2.5 text-right font-medium">PCS Reject</th>
-            <th class="px-4 py-2.5 text-center font-medium">Reject Rate</th>
-            <th class="px-4 py-2.5 text-center font-medium">Jml Batch</th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each performaList as p, i}
-            {@const rejectOk   = p.reject_rate < 5}
-            {@const rejectWarn = p.reject_rate >= 5 && p.reject_rate < 10}
-            {@const rejectBad  = p.reject_rate >= 10}
-            <tr class="border-t border-gray-50 transition-colors hover:bg-gray-50/60">
-              <!-- Rank -->
-              <td class="px-5 py-3.5">
-                {#if i === 0}
-                  <span class="text-base">🥇</span>
-                {:else if i === 1}
-                  <span class="text-base">🥈</span>
-                {:else if i === 2}
-                  <span class="text-base">🥉</span>
-                {:else}
-                  <span class="text-xs text-gray-400">{i + 1}</span>
-                {/if}
-              </td>
-              <!-- Nama -->
-              <td class="px-4 py-3.5">
-                <p class="font-medium text-gray-800">{p.nama}</p>
-              </td>
-              <!-- Divisi badge -->
-              <td class="px-4 py-3.5">
-                <span class="rounded-full px-2.5 py-0.5 text-xs font-medium
-                  {p.divisi === 'Cutting'  ? 'bg-orange-100 text-orange-700' :
-                   p.divisi === 'Jahit'    ? 'bg-blue-100 text-blue-700' :
-                   p.divisi === 'Steam'    ? 'bg-purple-100 text-purple-700' :
-                   p.divisi === 'Keluar'   ? 'bg-emerald-100 text-emerald-700' :
-                   'bg-gray-100 text-gray-600'}">
-                  {p.divisi}
-                </span>
-              </td>
-              <!-- Total PCS Berhasil -->
-              <td class="px-4 py-3.5 text-right">
-                <span class="font-semibold text-gray-800">{p.total_pcs_berhasil.toLocaleString('id-ID')}</span>
-                <span class="ml-1 text-xs text-gray-400">pcs</span>
-              </td>
-              <!-- PCS Reject -->
-              <td class="px-4 py-3.5 text-right">
-                {#if p.total_pcs_reject > 0}
-                  <span class="font-medium text-red-500">{p.total_pcs_reject}</span>
-                  <span class="ml-1 text-xs text-gray-400">pcs</span>
-                {:else}
-                  <span class="text-gray-300">—</span>
-                {/if}
-              </td>
-              <!-- Reject Rate -->
-              <td class="px-4 py-3.5 text-center">
-                <span class="rounded-full px-2.5 py-0.5 text-xs font-semibold
-                  {rejectOk   ? 'bg-green-100 text-green-700' :
-                   rejectWarn ? 'bg-yellow-100 text-yellow-700' :
-                   'bg-red-100 text-red-600'}">
-                  {p.reject_rate}%
-                  {rejectOk ? '✓' : rejectWarn ? '!' : '!!'}
-                </span>
-              </td>
-              <!-- Jumlah Batch -->
-              <td class="px-4 py-3.5 text-center text-sm text-gray-600">
-                {p.jumlah_batch}
-              </td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-      <div class="flex items-center border-t border-gray-50 bg-gray-50 px-5 py-2.5">
-        <p class="text-xs text-gray-400">
-          {performaList.length} karyawan produksi ·
-          Reject rate: <span class="text-green-600">{"<"}5% ✓ bagus</span> ·
-          <span class="text-yellow-600">5–10% ! perlu perhatian</span> ·
-          <span class="text-red-500">{">"}10% !! tinggi</span>
-        </p>
+    {@const list = performaByDivisi[selectedDivisi]}
+    {#if list.length === 0}
+      <div class="flex flex-col items-center gap-2 py-10 text-center">
+        <svg class="h-8 w-8 text-gray-200" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z" />
+        </svg>
+        <p class="text-sm text-gray-400">Belum ada data performa {selectedDivisi}.</p>
+        <p class="text-xs text-gray-300">Data muncul setelah ada batch yang selesai di bagian ini.</p>
       </div>
-    </div>
+    {:else}
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="bg-gray-50 text-xs text-gray-500">
+              <th class="px-5 py-2.5 text-left font-medium">#</th>
+              <th class="px-4 py-2.5 text-left font-medium">Nama</th>
+              <th class="px-4 py-2.5 text-right font-medium">Total PCS</th>
+              <th class="px-4 py-2.5 text-right font-medium">PCS Reject</th>
+              <th class="px-4 py-2.5 text-center font-medium">Reject Rate</th>
+              <th class="px-4 py-2.5 text-center font-medium">Jml Batch</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each list as p, i}
+              {@const rejectOk   = p.reject_rate < 5}
+              {@const rejectWarn = p.reject_rate >= 5 && p.reject_rate < 10}
+              <tr class="border-t border-gray-50 transition-colors hover:bg-gray-50/60">
+                <!-- Rank -->
+                <td class="px-5 py-3.5">
+                  {#if i === 0}
+                    <span class="text-base">🥇</span>
+                  {:else if i === 1}
+                    <span class="text-base">🥈</span>
+                  {:else if i === 2}
+                    <span class="text-base">🥉</span>
+                  {:else}
+                    <span class="text-xs text-gray-400">{i + 1}</span>
+                  {/if}
+                </td>
+                <!-- Nama -->
+                <td class="px-4 py-3.5">
+                  <p class="font-medium text-gray-800">{p.nama}</p>
+                </td>
+                <!-- Total PCS Berhasil -->
+                <td class="px-4 py-3.5 text-right">
+                  <span class="font-semibold text-gray-800">{p.total_pcs_berhasil.toLocaleString('id-ID')}</span>
+                  <span class="ml-1 text-xs text-gray-400">pcs</span>
+                </td>
+                <!-- PCS Reject -->
+                <td class="px-4 py-3.5 text-right">
+                  {#if p.total_pcs_reject > 0}
+                    <span class="font-medium text-red-500">{p.total_pcs_reject}</span>
+                    <span class="ml-1 text-xs text-gray-400">pcs</span>
+                  {:else}
+                    <span class="text-gray-300">—</span>
+                  {/if}
+                </td>
+                <!-- Reject Rate -->
+                <td class="px-4 py-3.5 text-center">
+                  <span class="rounded-full px-2.5 py-0.5 text-xs font-semibold
+                    {rejectOk   ? 'bg-green-100 text-green-700' :
+                     rejectWarn ? 'bg-yellow-100 text-yellow-700' :
+                     'bg-red-100 text-red-600'}">
+                    {p.reject_rate}%
+                    {rejectOk ? '✓' : rejectWarn ? '!' : '!!'}
+                  </span>
+                </td>
+                <!-- Jumlah Batch -->
+                <td class="px-4 py-3.5 text-center text-sm text-gray-600">
+                  {p.jumlah_batch}
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+        <div class="flex items-center border-t border-gray-50 bg-gray-50 px-5 py-2.5">
+          <p class="text-xs text-gray-400">
+            {list.length} karyawan bagian {selectedDivisi} ·
+            Reject rate: <span class="text-green-600">{"<"}5% ✓ bagus</span> ·
+            <span class="text-yellow-600">5–10% ! perlu perhatian</span> ·
+            <span class="text-red-500">{">"}10% !! tinggi</span>
+          </p>
+        </div>
+      </div>
+    {/if}
   {/if}
 </div>
 

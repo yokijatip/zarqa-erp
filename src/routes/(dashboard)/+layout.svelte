@@ -15,6 +15,7 @@
     '/stok-kain':        [{ label: 'Gudang', href: '/gudang' }, { label: 'Stok Kain' }],
     '/model-baju':       [{ label: 'Gudang', href: '/gudang' }, { label: 'Model Baju' }],
     '/order-produksi':   [{ label: 'Gudang', href: '/gudang' }, { label: 'Order Produksi' }],
+    '/stok-potongan':    [{ label: 'Gudang', href: '/gudang' }, { label: 'Stok Potongan' }],
     '/barang-jadi':      [{ label: 'Gudang', href: '/gudang' }, { label: 'Barang Jadi' }],
     '/barang-keluar':    [{ label: 'Gudang', href: '/gudang' }, { label: 'Barang Keluar' }],
   };

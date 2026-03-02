@@ -13,61 +13,73 @@ export interface PerformaKaryawan {
   reject_rate: number; // 0-100
 }
 
+export type DivisiKey = 'Cutting' | 'Jahit' | 'Steam' | 'Keluar';
+
 // Status yang menandakan pekerjaan selesai di suatu divisi
-const STATUS_DIVISI: Partial<Record<StatusBatch, string>> = {
+const STATUS_DIVISI: Partial<Record<StatusBatch, DivisiKey>> = {
   CUTTING_DONE: 'Cutting',
   JAHIT_DONE:   'Jahit',
   STEAM_DONE:   'Steam',
   COMPLETED:    'Keluar',
 };
 
-export async function getPerformaKaryawan(): Promise<PerformaKaryawan[]> {
+/** Performa dikelompokkan per divisi — satu karyawan bisa muncul di beberapa divisi */
+export async function getPerformaPerDivisi(): Promise<Record<DivisiKey, PerformaKaryawan[]>> {
   const snap = await getDocs(collectionGroup(db, 'riwayat_proses'));
 
-  // Map per uid: (uid -> PerformaKaryawan)
-  const map = new Map<string, PerformaKaryawan & { _divisiCount: Record<string, number> }>();
+  // Map per (uid + divisi)
+  const map = new Map<string, PerformaKaryawan>();
 
   snap.docs.forEach((doc) => {
     const d = doc.data() as RiwayatProses;
 
-    // Hanya hitung entri di mana batch mencapai status DONE/COMPLETED
     const divisi = STATUS_DIVISI[d.status_ke as StatusBatch];
     if (!divisi) return;
 
-    const key = d.updated_by_uid || d.updated_by_nama;
-    if (!key) return;
+    const uid = d.updated_by_uid || d.updated_by_nama;
+    if (!uid) return;
 
+    const key = `${uid}__${divisi}`;
     const existing = map.get(key) ?? {
       uid: d.updated_by_uid,
       nama: d.updated_by_nama,
-      divisi: '',
+      divisi,
       total_pcs_berhasil: 0,
       total_pcs_reject: 0,
       jumlah_batch: 0,
       reject_rate: 0,
-      _divisiCount: {},
     };
 
     existing.total_pcs_berhasil += d.pcs_berhasil ?? 0;
     existing.total_pcs_reject  += d.pcs_reject ?? 0;
     existing.jumlah_batch      += 1;
-    existing._divisiCount[divisi] = (existing._divisiCount[divisi] ?? 0) + 1;
 
     map.set(key, existing);
   });
 
-  return Array.from(map.values())
-    .map(({ _divisiCount, ...p }) => {
-      // Divisi utama = yang paling sering dikerjakan
-      const divisi = Object.entries(_divisiCount)
-        .sort((a, b) => b[1] - a[1])[0]?.[0] ?? '—';
+  const result: Record<DivisiKey, PerformaKaryawan[]> = {
+    Cutting: [],
+    Jahit: [],
+    Steam: [],
+    Keluar: [],
+  };
 
-      const total = p.total_pcs_berhasil + p.total_pcs_reject;
-      const reject_rate = total > 0
-        ? Math.round((p.total_pcs_reject / total) * 100)
-        : 0;
+  map.forEach((p) => {
+    const total = p.total_pcs_berhasil + p.total_pcs_reject;
+    p.reject_rate = total > 0 ? Math.round((p.total_pcs_reject / total) * 100) : 0;
+    result[p.divisi as DivisiKey]?.push(p);
+  });
 
-      return { ...p, divisi, reject_rate };
-    })
-    .sort((a, b) => b.total_pcs_berhasil - a.total_pcs_berhasil);
+  for (const key of Object.keys(result) as DivisiKey[]) {
+    result[key].sort((a, b) => b.total_pcs_berhasil - a.total_pcs_berhasil);
+  }
+
+  return result;
+}
+
+/** @deprecated Gunakan getPerformaPerDivisi */
+export async function getPerformaKaryawan(): Promise<PerformaKaryawan[]> {
+  const byDivisi = await getPerformaPerDivisi();
+  const all = [...byDivisi.Cutting, ...byDivisi.Jahit, ...byDivisi.Steam, ...byDivisi.Keluar];
+  return all.sort((a, b) => b.total_pcs_berhasil - a.total_pcs_berhasil);
 }
