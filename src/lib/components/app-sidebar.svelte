@@ -109,7 +109,7 @@
   const navSecondary = [
     {
       title: "Pengaturan",
-      url: "#",
+      url: "/pengaturan",
       icon: SettingsIcon,
     },
   ];

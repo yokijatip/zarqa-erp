@@ -18,6 +18,8 @@
     '/stok-potongan':    [{ label: 'Gudang', href: '/gudang' }, { label: 'Stok Potongan' }],
     '/barang-jadi':      [{ label: 'Gudang', href: '/gudang' }, { label: 'Barang Jadi' }],
     '/barang-keluar':    [{ label: 'Gudang', href: '/gudang' }, { label: 'Barang Keluar' }],
+    '/pengaturan':       [{ label: 'Pengaturan' }],
+    '/pengaturan/profil': [{ label: 'Pengaturan', href: '/pengaturan' }, { label: 'Profil' }],
   };
 
   let crumbs = $derived.by((): Crumb[] => {

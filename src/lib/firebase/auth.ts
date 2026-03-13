@@ -4,9 +4,12 @@ import {
   signInWithEmailAndPassword,
   signOut,
   onAuthStateChanged,
+  updatePassword,
+  reauthenticateWithCredential,
+  EmailAuthProvider,
   type User,
 } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { auth, db } from './config';
 import type { UserProfile } from '$lib/types';
 
@@ -29,6 +32,23 @@ export async function getUserProfile(uid: string): Promise<UserProfile | null> {
   const snap = await getDoc(ref);
   if (!snap.exists()) return null;
   return { uid: snap.id, ...snap.data() } as UserProfile;
+}
+
+// Update nama di Firestore
+export async function updateUserProfile(uid: string, name: string): Promise<void> {
+  await updateDoc(doc(db, 'users', uid), { name });
+}
+
+// Ganti password (reauthenticate dulu sebelum update)
+export async function updateUserPassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<void> {
+  const user = auth.currentUser;
+  if (!user || !user.email) throw new Error('User tidak ditemukan.');
+  const cred = EmailAuthProvider.credential(user.email, currentPassword);
+  await reauthenticateWithCredential(user, cred);
+  await updatePassword(user, newPassword);
 }
 
 // Listener perubahan auth state (dipakai di store)
