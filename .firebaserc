@@ -1,0 +1,6 @@
+{
+  "projects": {
+    "default": "zarqa-erp-firebase",
+    "production": "zarqa-erp-firebase"
+  }
+}
