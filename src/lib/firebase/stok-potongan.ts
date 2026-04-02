@@ -1,13 +1,17 @@
 // src/lib/firebase/stok-potongan.ts
 import {
   collection, doc, getDocs,
-  addDoc, updateDoc, serverTimestamp,
+  serverTimestamp, runTransaction,
   query, orderBy, where,
 } from 'firebase/firestore';
 import { db } from './config';
 import type { StokPotongan, UkuranBaju } from '$lib/types';
 
 const COL = 'stok_potongan';
+
+function buildStokPotonganDocId(modelId: string, ukuran: string): string {
+  return `${modelId}__${ukuran}`;
+}
 
 // Ambil semua stok potongan
 export async function getStokPotonganList(): Promise<StokPotongan[]> {
@@ -37,30 +41,36 @@ export async function tambahStokPotongan(
       where('ukuran', '==', item.ukuran)
     );
     const snap = await getDocs(q);
+    const ref = snap.empty
+      ? doc(db, COL, buildStokPotonganDocId(modelId, item.ukuran))
+      : snap.docs[0].ref;
 
-    if (snap.empty) {
-      await addDoc(collection(db, COL), {
-        model_id: modelId,
-        nama_model: namaModel,
-        ...(warna?.nama_warna     ? { nama_warna: warna.nama_warna }         : {}),
-        ...(warna?.kode_hex_warna ? { kode_hex_warna: warna.kode_hex_warna } : {}),
-        ukuran: item.ukuran,
-        stok_tersedia: item.jumlah_pcs,
-        total_masuk: item.jumlah_pcs,
-        total_terpakai: 0,
-        updatedAt: serverTimestamp(),
-      });
-    } else {
-      const existing = snap.docs[0];
-      const data = existing.data() as StokPotongan;
-      await updateDoc(doc(db, COL, existing.id), {
+    await runTransaction(db, async (transaction) => {
+      const existingSnap = await transaction.get(ref);
+      if (!existingSnap.exists()) {
+        transaction.set(ref, {
+          model_id: modelId,
+          nama_model: namaModel,
+          ...(warna?.nama_warna ? { nama_warna: warna.nama_warna } : {}),
+          ...(warna?.kode_hex_warna ? { kode_hex_warna: warna.kode_hex_warna } : {}),
+          ukuran: item.ukuran,
+          stok_tersedia: item.jumlah_pcs,
+          total_masuk: item.jumlah_pcs,
+          total_terpakai: 0,
+          updatedAt: serverTimestamp(),
+        });
+        return;
+      }
+
+      const data = existingSnap.data() as StokPotongan;
+      transaction.update(ref, {
         stok_tersedia: data.stok_tersedia + item.jumlah_pcs,
         total_masuk: data.total_masuk + item.jumlah_pcs,
-        ...(warna?.nama_warna     ? { nama_warna: warna.nama_warna }         : {}),
+        ...(warna?.nama_warna ? { nama_warna: warna.nama_warna } : {}),
         ...(warna?.kode_hex_warna ? { kode_hex_warna: warna.kode_hex_warna } : {}),
         updatedAt: serverTimestamp(),
       });
-    }
+    });
   }
 }
 
@@ -78,15 +88,22 @@ export async function kurangiStokPotongan(
   const snap = await getDocs(q);
   if (snap.empty) throw new Error(`Stok potongan ukuran ${ukuran} tidak ditemukan`);
 
-  const existing = snap.docs[0];
-  const data = existing.data() as StokPotongan;
-  if (data.stok_tersedia < jumlah) {
-    throw new Error(`Stok potongan ${ukuran} tidak mencukupi (tersedia: ${data.stok_tersedia} pcs)`);
-  }
+  const ref = snap.docs[0].ref;
+  await runTransaction(db, async (transaction) => {
+    const existingSnap = await transaction.get(ref);
+    if (!existingSnap.exists()) {
+      throw new Error(`Stok potongan ukuran ${ukuran} tidak ditemukan`);
+    }
 
-  await updateDoc(doc(db, COL, existing.id), {
-    stok_tersedia: data.stok_tersedia - jumlah,
-    total_terpakai: data.total_terpakai + jumlah,
-    updatedAt: serverTimestamp(),
+    const data = existingSnap.data() as StokPotongan;
+    if (data.stok_tersedia < jumlah) {
+      throw new Error(`Stok potongan ${ukuran} tidak mencukupi (tersedia: ${data.stok_tersedia} pcs)`);
+    }
+
+    transaction.update(ref, {
+      stok_tersedia: data.stok_tersedia - jumlah,
+      total_terpakai: data.total_terpakai + jumlah,
+      updatedAt: serverTimestamp(),
+    });
   });
 }

@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { cn } from "$lib/utils.js";
-	import type { HTMLAttributes } from "svelte/elements";
+	import type { SvelteHTMLElements } from "svelte/elements";
 
-	let { class: className, children, ...restProps }: HTMLAttributes<HTMLTableCaptionElement> = $props();
+	let { class: className, children, ...restProps }: SvelteHTMLElements["caption"] = $props();
 </script>
 
 <caption

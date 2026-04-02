@@ -1,7 +1,7 @@
 // src/lib/firebase/barang-jadi.ts
 import {
-  collection, doc, getDocs, getDoc,
-  addDoc, updateDoc, serverTimestamp,
+  collection, doc, getDocs,
+  serverTimestamp, runTransaction,
   query, orderBy, where,
 } from 'firebase/firestore';
 import { db } from './config';
@@ -9,6 +9,10 @@ import type { StokBarangJadi, BarangKeluar, BarangKeluarInput } from '$lib/types
 
 const COL_JADI = 'stok_barang_jadi';
 const COL_KELUAR = 'barang_keluar';
+
+function buildBarangJadiDocId(modelId: string, ukuran: string): string {
+  return `${modelId}__${ukuran}`;
+}
 
 // ─── STOK BARANG JADI ───────────────────────────────────────────
 
@@ -34,32 +38,36 @@ export async function tambahStokBarangJadi(
       where('ukuran', '==', item.ukuran)
     );
     const snap = await getDocs(q);
+    const ref = snap.empty
+      ? doc(db, COL_JADI, buildBarangJadiDocId(modelId, item.ukuran))
+      : snap.docs[0].ref;
 
-    if (snap.empty) {
-      // Belum ada, buat dokumen baru
-      await addDoc(collection(db, COL_JADI), {
-        model_id: modelId,
-        nama_model: namaModel,
-        ...(warna?.nama_warna     ? { nama_warna: warna.nama_warna }         : {}),
-        ...(warna?.kode_hex_warna ? { kode_hex_warna: warna.kode_hex_warna } : {}),
-        ukuran: item.ukuran,
-        stok_tersedia: item.jumlah_pcs,
-        total_masuk: item.jumlah_pcs,
-        total_keluar: 0,
-        updatedAt: serverTimestamp(),
-      });
-    } else {
-      // Sudah ada, update stok (dan sinkron warna jika ada)
-      const existing = snap.docs[0];
-      const data = existing.data() as StokBarangJadi;
-      await updateDoc(doc(db, COL_JADI, existing.id), {
+    await runTransaction(db, async (transaction) => {
+      const existingSnap = await transaction.get(ref);
+      if (!existingSnap.exists()) {
+        transaction.set(ref, {
+          model_id: modelId,
+          nama_model: namaModel,
+          ...(warna?.nama_warna ? { nama_warna: warna.nama_warna } : {}),
+          ...(warna?.kode_hex_warna ? { kode_hex_warna: warna.kode_hex_warna } : {}),
+          ukuran: item.ukuran,
+          stok_tersedia: item.jumlah_pcs,
+          total_masuk: item.jumlah_pcs,
+          total_keluar: 0,
+          updatedAt: serverTimestamp(),
+        });
+        return;
+      }
+
+      const data = existingSnap.data() as StokBarangJadi;
+      transaction.update(ref, {
         stok_tersedia: data.stok_tersedia + item.jumlah_pcs,
         total_masuk: data.total_masuk + item.jumlah_pcs,
-        ...(warna?.nama_warna     ? { nama_warna: warna.nama_warna }         : {}),
+        ...(warna?.nama_warna ? { nama_warna: warna.nama_warna } : {}),
         ...(warna?.kode_hex_warna ? { kode_hex_warna: warna.kode_hex_warna } : {}),
         updatedAt: serverTimestamp(),
       });
-    }
+    });
   }
 }
 
@@ -70,7 +78,8 @@ export async function catatBarangKeluar(
   data: BarangKeluarInput,
   dicatatOlehUid: string
 ): Promise<string> {
-  // Kurangi stok barang jadi per ukuran
+  const stokRefs = new Map<string, ReturnType<typeof doc>>();
+
   for (const item of data.detail_keluar) {
     const q = query(
       collection(db, COL_JADI),
@@ -79,27 +88,42 @@ export async function catatBarangKeluar(
     );
     const snap = await getDocs(q);
     if (snap.empty) throw new Error(`Stok ${data.nama_model} ukuran ${item.ukuran} tidak ditemukan`);
-
-    const existing = snap.docs[0];
-    const stok = existing.data() as StokBarangJadi;
-    if (stok.stok_tersedia < item.jumlah_pcs) {
-      throw new Error(`Stok ${data.nama_model} ukuran ${item.ukuran} tidak mencukupi`);
-    }
-
-    await updateDoc(doc(db, COL_JADI, existing.id), {
-      stok_tersedia: stok.stok_tersedia - item.jumlah_pcs,
-      total_keluar: stok.total_keluar + item.jumlah_pcs,
-      updatedAt: serverTimestamp(),
-    });
+    stokRefs.set(item.ukuran, snap.docs[0].ref);
   }
 
   const totalPcs = data.detail_keluar.reduce((sum, i) => sum + i.jumlah_pcs, 0);
+  const ref = doc(collection(db, COL_KELUAR));
 
-  const ref = await addDoc(collection(db, COL_KELUAR), {
-    ...data,
-    total_pcs: totalPcs,
-    dicatat_oleh: dicatatOlehUid,
-    tanggal_keluar: serverTimestamp(),
+  await runTransaction(db, async (transaction) => {
+    for (const item of data.detail_keluar) {
+      const stokRef = stokRefs.get(item.ukuran);
+      if (!stokRef) {
+        throw new Error(`Stok ${data.nama_model} ukuran ${item.ukuran} tidak ditemukan`);
+      }
+
+      const existingSnap = await transaction.get(stokRef);
+      if (!existingSnap.exists()) {
+        throw new Error(`Stok ${data.nama_model} ukuran ${item.ukuran} tidak ditemukan`);
+      }
+
+      const stok = existingSnap.data() as StokBarangJadi;
+      if (stok.stok_tersedia < item.jumlah_pcs) {
+        throw new Error(`Stok ${data.nama_model} ukuran ${item.ukuran} tidak mencukupi`);
+      }
+
+      transaction.update(stokRef, {
+        stok_tersedia: stok.stok_tersedia - item.jumlah_pcs,
+        total_keluar: stok.total_keluar + item.jumlah_pcs,
+        updatedAt: serverTimestamp(),
+      });
+    }
+
+    transaction.set(ref, {
+      ...data,
+      total_pcs: totalPcs,
+      dicatat_oleh: dicatatOlehUid,
+      tanggal_keluar: serverTimestamp(),
+    });
   });
 
   return ref.id;
@@ -118,24 +142,34 @@ export async function getStokByModel(modelId: string): Promise<StokBarangJadi[]>
 // Kurangi stok manual (koreksi, loss, dll — dicatat ke total_keluar)
 export async function kurangiStokManual(stokId: string, jumlah: number): Promise<void> {
   const ref = doc(db, COL_JADI, stokId);
-  const snap = await getDoc(ref);
-  if (!snap.exists()) throw new Error('Stok tidak ditemukan');
-  const data = snap.data() as StokBarangJadi;
-  if (data.stok_tersedia < jumlah) throw new Error(`Stok hanya ${data.stok_tersedia} pcs, tidak bisa dikurangi ${jumlah} pcs`);
-  await updateDoc(ref, {
-    stok_tersedia: data.stok_tersedia - jumlah,
-    total_keluar: data.total_keluar + jumlah,
-    updatedAt: serverTimestamp(),
+  await runTransaction(db, async (transaction) => {
+    const snap = await transaction.get(ref);
+    if (!snap.exists()) throw new Error('Stok tidak ditemukan');
+
+    const data = snap.data() as StokBarangJadi;
+    if (data.stok_tersedia < jumlah) {
+      throw new Error(`Stok hanya ${data.stok_tersedia} pcs, tidak bisa dikurangi ${jumlah} pcs`);
+    }
+
+    transaction.update(ref, {
+      stok_tersedia: data.stok_tersedia - jumlah,
+      total_keluar: data.total_keluar + jumlah,
+      updatedAt: serverTimestamp(),
+    });
   });
 }
 
 // Set stok ke nilai absolut (koreksi stok fisik)
 export async function setStokManual(stokId: string, jumlahBaru: number): Promise<void> {
   const ref = doc(db, COL_JADI, stokId);
-  if (!( await getDoc(ref)).exists()) throw new Error('Stok tidak ditemukan');
-  await updateDoc(ref, {
-    stok_tersedia: jumlahBaru,
-    updatedAt: serverTimestamp(),
+  await runTransaction(db, async (transaction) => {
+    const snap = await transaction.get(ref);
+    if (!snap.exists()) throw new Error('Stok tidak ditemukan');
+
+    transaction.update(ref, {
+      stok_tersedia: jumlahBaru,
+      updatedAt: serverTimestamp(),
+    });
   });
 }
 

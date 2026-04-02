@@ -1,25 +1,58 @@
 <script lang="ts">
   import { currentUser } from '$lib/stores/auth.store';
-  import { updateUserProfile, updateUserPassword } from '$lib/firebase/auth';
+  import { updateUserProfile, updateUserPassword, uploadProfilePhoto } from '$lib/firebase/auth';
   import { ROLE_LABEL } from '$lib/firebase/karyawan';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
+  import CameraIcon from '@lucide/svelte/icons/camera';
+  import LoaderIcon from '@lucide/svelte/icons/loader';
 
-  // ── Toast ──────────────────────────────────────────────────────────
+  // ── Toast ─────────────────────────────────────────────────────────
   let successMsg = $state<string | null>(null);
-  let errorMsg = $state<string | null>(null);
+  let errorMsg   = $state<string | null>(null);
 
   function showSuccess(msg: string) {
     successMsg = msg;
-    setTimeout(() => (successMsg = null), 3000);
+    setTimeout(() => (successMsg = null), 3500);
   }
   function showError(msg: string) {
     errorMsg = msg;
     setTimeout(() => (errorMsg = null), 6000);
   }
 
-  // ── Edit Profil ────────────────────────────────────────────────────
-  let namaBaru = $state($currentUser?.name ?? '');
+  // ── Ganti Foto ────────────────────────────────────────────────────
+  let fileInput: HTMLInputElement;
+  let uploadingPhoto = $state(false);
+
+  async function onFileSelected(e: Event) {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (!file || !$currentUser) return;
+
+    if (!file.type.startsWith('image/')) {
+      showError('File harus berupa gambar (JPG, PNG, WebP).');
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      showError('Ukuran foto maksimal 2 MB.');
+      return;
+    }
+
+    uploadingPhoto = true;
+    try {
+      const url = await uploadProfilePhoto($currentUser.uid, file);
+      $currentUser.photoURL = url;
+      showSuccess('Foto profil berhasil diperbarui.');
+    } catch (e: unknown) {
+      showError(e instanceof Error ? e.message : 'Gagal mengunggah foto.');
+    } finally {
+      uploadingPhoto = false;
+      // Reset input agar file yang sama bisa dipilih ulang
+      if (fileInput) fileInput.value = '';
+    }
+  }
+
+  // ── Edit Nama ─────────────────────────────────────────────────────
+  let namaBaru     = $state($currentUser?.name ?? '');
   let savingProfil = $state(false);
 
   let canSaveProfil = $derived(
@@ -31,7 +64,6 @@
     savingProfil = true;
     try {
       await updateUserProfile($currentUser.uid, namaBaru.trim());
-      // Update store lokal agar UI langsung berubah
       $currentUser.name = namaBaru.trim();
       showSuccess('Nama profil berhasil diperbarui.');
     } catch (e: unknown) {
@@ -41,22 +73,20 @@
     }
   }
 
-  // ── Ganti Password ─────────────────────────────────────────────────
-  let passLama = $state('');
-  let passBaru = $state('');
+  // ── Ganti Password ────────────────────────────────────────────────
+  let passLama       = $state('');
+  let passBaru       = $state('');
   let passKonfirmasi = $state('');
-  let savingPass = $state(false);
+  let savingPass     = $state(false);
 
   let canSavePass = $derived(
     passLama.trim() !== '' &&
-      passBaru.trim().length >= 6 &&
-      passBaru === passKonfirmasi,
+    passBaru.trim().length >= 6 &&
+    passBaru === passKonfirmasi,
   );
 
   let errKonfirmasi = $derived(
-    passKonfirmasi !== '' && passBaru !== passKonfirmasi
-      ? 'Password tidak cocok.'
-      : null,
+    passKonfirmasi !== '' && passBaru !== passKonfirmasi ? 'Password tidak cocok.' : null,
   );
 
   let errPassBaru = $derived(
@@ -83,11 +113,18 @@
   }
 </script>
 
+<!-- ── Hidden file input ───────────────────────────────────────────── -->
+<input
+  bind:this={fileInput}
+  type="file"
+  accept="image/*"
+  class="hidden"
+  onchange={onFileSelected}
+/>
+
 <!-- ── Toast ──────────────────────────────────────────────────────── -->
 {#if successMsg}
-  <div
-    class="fixed right-5 top-5 z-50 flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 shadow-lg"
-  >
+  <div class="fixed right-5 top-5 z-50 flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 shadow-lg">
     <svg class="h-4 w-4 shrink-0 text-green-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
       <path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5" />
     </svg>
@@ -95,9 +132,7 @@
   </div>
 {/if}
 {#if errorMsg}
-  <div
-    class="fixed right-5 top-5 z-50 flex max-w-sm items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 shadow-lg"
-  >
+  <div class="fixed right-5 top-5 z-50 flex max-w-sm items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 shadow-lg">
     <svg class="mt-0.5 h-4 w-4 shrink-0 text-red-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
       <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
     </svg>
@@ -105,40 +140,48 @@
   </div>
 {/if}
 
-<!-- ── Header ─────────────────────────────────────────────────────── -->
-<div class="mb-6">
-  <h1 class="text-xl font-semibold text-gray-900">Profil Saya</h1>
-  <p class="mt-0.5 text-sm text-gray-500">Perbarui nama tampilan dan password akun Anda</p>
-</div>
+<div class="mx-auto max-w-xl space-y-6">
 
-<div class="mx-auto max-w-lg space-y-6">
-
-  <!-- ── Bagian 1: Edit Profil ────────────────────────────────────── -->
-  <div class="rounded-xl border border-gray-100 bg-white p-6 shadow-sm">
-    <h2 class="mb-4 text-sm font-semibold text-gray-800">Informasi Profil</h2>
-
+  <!-- ── Informasi Profil ──────────────────────────────────────────── -->
+  <div class="rounded-xl border border-gray-100 bg-gray-50/50 p-5">
+    <div class="mb-4 flex items-center justify-between">
+      <h2 class="text-sm font-semibold text-gray-800">Informasi Profil</h2>
+      <!-- Tombol ganti foto -->
+      <button
+        type="button"
+        onclick={() => fileInput?.click()}
+        disabled={uploadingPhoto}
+        class="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 shadow-sm transition hover:bg-gray-50 disabled:opacity-60"
+      >
+        {#if uploadingPhoto}
+          <LoaderIcon class="h-3.5 w-3.5 animate-spin" />
+          Mengunggah...
+        {:else}
+          <CameraIcon class="h-3.5 w-3.5" />
+          Ganti Foto
+        {/if}
+      </button>
+    </div>
     <div class="space-y-4">
-      <!-- Nama -->
+
       <div class="space-y-1.5">
-        <label class="block text-sm font-medium text-gray-700" for="nama">
-          Nama Lengkap
-        </label>
+        <label class="block text-sm font-medium text-gray-700" for="nama">Nama Lengkap</label>
         <Input id="nama" bind:value={namaBaru} placeholder="Nama lengkap Anda" />
       </div>
 
-      <!-- Email (read-only) -->
       <div class="space-y-1.5">
         <p class="block text-sm font-medium text-gray-700">Email</p>
-        <div class="flex h-10 items-center rounded-lg border border-gray-200 bg-gray-50 px-3 text-sm text-gray-500">
+        <div class="flex h-10 items-center rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-500">
           {$currentUser?.email ?? '-'}
         </div>
-        <p class="text-xs text-gray-400">Email tidak dapat diubah.</p>
+        <p class="text-[11px] text-gray-400">
+          Untuk mengubah email, hubungi administrator sistem.
+        </p>
       </div>
 
-      <!-- Role (read-only) -->
       <div class="space-y-1.5">
         <p class="block text-sm font-medium text-gray-700">Role</p>
-        <div class="flex h-10 items-center rounded-lg border border-gray-200 bg-gray-50 px-3 text-sm text-gray-500">
+        <div class="flex h-10 items-center rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-500">
           {$currentUser ? (ROLE_LABEL[$currentUser.role] ?? $currentUser.role) : '-'}
         </div>
       </div>
@@ -151,54 +194,27 @@
     </div>
   </div>
 
-  <!-- ── Bagian 2: Ganti Password ─────────────────────────────────── -->
-  <div class="rounded-xl border border-gray-100 bg-white p-6 shadow-sm">
+  <!-- ── Ganti Password ────────────────────────────────────────────── -->
+  <div class="rounded-xl border border-gray-100 bg-gray-50/50 p-5">
     <h2 class="mb-4 text-sm font-semibold text-gray-800">Ganti Password</h2>
-
     <div class="space-y-4">
-      <!-- Password Saat Ini -->
+
       <div class="space-y-1.5">
-        <label class="block text-sm font-medium text-gray-700" for="pass-lama">
-          Password Saat Ini
-        </label>
-        <Input
-          id="pass-lama"
-          type="password"
-          bind:value={passLama}
-          placeholder="Masukkan password saat ini"
-          autocomplete="current-password"
-        />
+        <label class="block text-sm font-medium text-gray-700" for="pass-lama">Password Saat Ini</label>
+        <Input id="pass-lama" type="password" bind:value={passLama} placeholder="Masukkan password saat ini" autocomplete="current-password" />
       </div>
 
-      <!-- Password Baru -->
       <div class="space-y-1.5">
-        <label class="block text-sm font-medium text-gray-700" for="pass-baru">
-          Password Baru
-        </label>
-        <Input
-          id="pass-baru"
-          type="password"
-          bind:value={passBaru}
-          placeholder="Minimal 6 karakter"
-          autocomplete="new-password"
-        />
+        <label class="block text-sm font-medium text-gray-700" for="pass-baru">Password Baru</label>
+        <Input id="pass-baru" type="password" bind:value={passBaru} placeholder="Minimal 6 karakter" autocomplete="new-password" />
         {#if errPassBaru}
           <p class="text-xs text-red-500">{errPassBaru}</p>
         {/if}
       </div>
 
-      <!-- Konfirmasi Password Baru -->
       <div class="space-y-1.5">
-        <label class="block text-sm font-medium text-gray-700" for="pass-konfirmasi">
-          Konfirmasi Password Baru
-        </label>
-        <Input
-          id="pass-konfirmasi"
-          type="password"
-          bind:value={passKonfirmasi}
-          placeholder="Ulangi password baru"
-          autocomplete="new-password"
-        />
+        <label class="block text-sm font-medium text-gray-700" for="pass-konfirmasi">Konfirmasi Password Baru</label>
+        <Input id="pass-konfirmasi" type="password" bind:value={passKonfirmasi} placeholder="Ulangi password baru" autocomplete="new-password" />
         {#if errKonfirmasi}
           <p class="text-xs text-red-500">{errKonfirmasi}</p>
         {/if}

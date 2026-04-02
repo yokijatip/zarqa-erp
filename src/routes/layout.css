@@ -120,6 +120,26 @@
   }
 }
 
+/* ── Display settings ────────────────────────────────────────────── */
+
+/* Nonaktifkan semua animasi dan transisi */
+.no-animation *,
+.no-animation *::before,
+.no-animation *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+}
+
+/* Tampilan kompak: kurangi ukuran font dan spacing berbasis rem */
+[data-density="compact"] {
+  font-size: 0.9375rem;
+}
+[data-density="compact"] body {
+  line-height: 1.4;
+}
+
+/* ── Sidebar nav ─────────────────────────────────────────────────── */
 /* Sidebar nav: slide-in background from left on hover */
 .nav-slide {
   position: relative;

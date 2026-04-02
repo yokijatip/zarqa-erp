@@ -2,12 +2,11 @@
 import {
   collection, doc, getDocs, getDoc,
   addDoc, updateDoc, deleteDoc, serverTimestamp,
+  runTransaction,
   query, orderBy, where, onSnapshot,
   type Unsubscribe,
 } from 'firebase/firestore';
 import { db } from './config';
-import { kurangiStokKain, kembalikanStokKain } from './stok-kain';
-import { kurangiStokPotongan } from './stok-potongan';
 import { getModelBajuById } from './model-baju';
 import type { BatchProduksi, BatchProduksiInput, StatusBatch, RiwayatProses, PenugasanWorker, DetailUkuran } from '$lib/types';
 
@@ -19,21 +18,45 @@ export async function createBatchProduksi(
   data: BatchProduksiInput,
   dibuatOlehUid: string
 ): Promise<string> {
-  // Kurangi stok semua jenis kain yang dibutuhkan
-  for (const kain of data.kain_digunakan) {
-    await kurangiStokKain(kain.kain_id, kain.jumlah_dipakai);
-  }
-
   const totalPcs = data.detail_ukuran.reduce((sum, u) => sum + u.jumlah_pcs, 0);
+  const ref = doc(collection(db, COL));
 
-  const ref = await addDoc(collection(db, COL), {
-    ...data,
-    total_pcs: totalPcs,
-    pcs_saat_ini: totalPcs,
-    status: 'PENDING_CUTTING' as StatusBatch,
-    dibuat_oleh: dibuatOlehUid,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
+  await runTransaction(db, async (transaction) => {
+    const kainSnapshots = await Promise.all(
+      data.kain_digunakan.map(async (kain) => {
+        const kainRef = doc(db, 'stok_kain', kain.kain_id);
+        const kainSnap = await transaction.get(kainRef);
+        return { kain, kainRef, kainSnap };
+      })
+    );
+
+    for (const { kain, kainSnap } of kainSnapshots) {
+      if (!kainSnap.exists()) throw new Error('Kain tidak ditemukan');
+
+      const stok = kainSnap.data() as { nama_kain: string; stok_tersedia: number; stok_terpakai: number };
+      if (stok.stok_tersedia < kain.jumlah_dipakai) {
+        throw new Error(`Stok kain "${stok.nama_kain}" tidak mencukupi`);
+      }
+    }
+
+    for (const { kain, kainRef, kainSnap } of kainSnapshots) {
+      const stok = kainSnap.data() as { stok_tersedia: number; stok_terpakai: number };
+      transaction.update(kainRef, {
+        stok_tersedia: stok.stok_tersedia - kain.jumlah_dipakai,
+        stok_terpakai: stok.stok_terpakai + kain.jumlah_dipakai,
+        updatedAt: serverTimestamp(),
+      });
+    }
+
+    transaction.set(ref, {
+      ...data,
+      total_pcs: totalPcs,
+      pcs_saat_ini: totalPcs,
+      status: 'PENDING_CUTTING' as StatusBatch,
+      dibuat_oleh: dibuatOlehUid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
   });
 
   return ref.id;
@@ -45,23 +68,61 @@ export async function createBatchDariPotongan(
   data: BatchProduksiInput,
   dibuatOlehUid: string
 ): Promise<string> {
-  // Validasi dan kurangi stok potongan per ukuran
+  const totalPcs = data.detail_ukuran.reduce((sum, u) => sum + u.jumlah_pcs, 0);
+  const stokPotonganRefs = new Map<string, ReturnType<typeof doc>>();
+
   for (const du of data.detail_ukuran) {
-    await kurangiStokPotongan(data.model_id, du.ukuran, du.jumlah_pcs);
+    const q = query(
+      collection(db, 'stok_potongan'),
+      where('model_id', '==', data.model_id),
+      where('ukuran', '==', du.ukuran)
+    );
+    const snap = await getDocs(q);
+    if (snap.empty) throw new Error(`Stok potongan ukuran ${du.ukuran} tidak ditemukan`);
+    stokPotonganRefs.set(du.ukuran, snap.docs[0].ref);
   }
 
-  const totalPcs = data.detail_ukuran.reduce((sum, u) => sum + u.jumlah_pcs, 0);
+  const ref = doc(collection(db, COL));
+  await runTransaction(db, async (transaction) => {
+    const stokSnapshots = await Promise.all(
+      data.detail_ukuran.map(async (du) => {
+        const stokRef = stokPotonganRefs.get(du.ukuran);
+        if (!stokRef) throw new Error(`Stok potongan ukuran ${du.ukuran} tidak ditemukan`);
 
-  const ref = await addDoc(collection(db, COL), {
-    ...data,
-    kain_digunakan: [],
-    total_pcs: totalPcs,
-    pcs_saat_ini: totalPcs,
-    status: 'CUTTING_DONE' as StatusBatch,
-    dari_potongan: true,
-    dibuat_oleh: dibuatOlehUid,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
+        const stokSnap = await transaction.get(stokRef);
+        return { du, stokRef, stokSnap };
+      })
+    );
+
+    for (const { du, stokSnap } of stokSnapshots) {
+      if (!stokSnap.exists()) throw new Error(`Stok potongan ukuran ${du.ukuran} tidak ditemukan`);
+
+      const stok = stokSnap.data() as { stok_tersedia: number; total_terpakai: number };
+      if (stok.stok_tersedia < du.jumlah_pcs) {
+        throw new Error(`Stok potongan ${du.ukuran} tidak mencukupi (tersedia: ${stok.stok_tersedia} pcs)`);
+      }
+    }
+
+    for (const { du, stokRef, stokSnap } of stokSnapshots) {
+      const stok = stokSnap.data() as { stok_tersedia: number; total_terpakai: number };
+      transaction.update(stokRef, {
+        stok_tersedia: stok.stok_tersedia - du.jumlah_pcs,
+        total_terpakai: stok.total_terpakai + du.jumlah_pcs,
+        updatedAt: serverTimestamp(),
+      });
+    }
+
+    transaction.set(ref, {
+      ...data,
+      kain_digunakan: [],
+      total_pcs: totalPcs,
+      pcs_saat_ini: totalPcs,
+      status: 'CUTTING_DONE' as StatusBatch,
+      dari_potongan: true,
+      dibuat_oleh: dibuatOlehUid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
   });
 
   return ref.id;
@@ -100,36 +161,155 @@ export async function updateStatusBatch(
   riwayat: Omit<RiwayatProses, 'status_ke' | 'updated_by_uid' | 'updated_by_nama' | 'timestamp'>,
   penugasan?: PenugasanWorker
 ): Promise<void> {
+  const batchRef = doc(db, COL, batchId);
+  const riwayatRef = doc(collection(db, COL, batchId, 'riwayat_proses'));
+
+  await runTransaction(db, async (transaction) => {
+    const batchSnap = await transaction.get(batchRef);
+    if (!batchSnap.exists()) throw new Error('Batch tidak ditemukan');
+
+    const batch = { id: batchSnap.id, ...batchSnap.data() } as BatchProduksi;
+    if (batch.status === statusBaru) {
+      throw new Error('Status batch sudah diperbarui oleh pengguna lain');
+    }
+
+    const updatePayload: Record<string, unknown> = {
+      status: statusBaru,
+      updatedAt: serverTimestamp(),
+    };
+
+    const penugasanKey = PENUGASAN_KEY[statusBaru];
+    if (penugasan && penugasanKey) {
+      updatePayload[`penugasan.${penugasanKey}`] = penugasan;
+    }
+
+    if (riwayat.pcs_berhasil != null) {
+      updatePayload['pcs_saat_ini'] = riwayat.pcs_berhasil;
+    }
+
+    transaction.update(batchRef, updatePayload);
+    transaction.set(riwayatRef, {
+      ...riwayat,
+      tipe: 'status_update',
+      status_dari: batch.status,
+      status_ke: statusBaru,
+      updated_by_uid: updatedByUid,
+      updated_by_nama: updatedByNama,
+      timestamp: serverTimestamp(),
+    });
+  });
+}
+
+// Selesaikan batch + tambah stok barang jadi dalam satu transaction
+export async function completeBatchProduksi(
+  batchId: string,
+  updatedByUid: string,
+  updatedByNama: string,
+  riwayat: Omit<RiwayatProses, 'status_ke' | 'updated_by_uid' | 'updated_by_nama' | 'timestamp'>
+): Promise<void> {
   const batch = await getBatchById(batchId);
   if (!batch) throw new Error('Batch tidak ditemukan');
-
-  // Bangun payload update dokumen utama
-  const updatePayload: Record<string, unknown> = {
-    status: statusBaru,
-    updatedAt: serverTimestamp(),
-  };
-
-  // Jika ada penugasan dan status tujuan memiliki key yang sesuai, simpan ke field
-  const penugasanKey = PENUGASAN_KEY[statusBaru];
-  if (penugasan && penugasanKey) {
-    updatePayload[`penugasan.${penugasanKey}`] = penugasan;
+  if (batch.status !== 'STEAM_DONE') {
+    throw new Error('Batch hanya bisa diselesaikan dari status Steam Selesai');
+  }
+  if (riwayat.pcs_berhasil <= 0) {
+    throw new Error('PCS berhasil harus lebih dari 0 untuk menyelesaikan batch');
   }
 
-  // Sinkronkan pcs_saat_ini agar app Android tidak menampilkan "Belum sinkron"
-  if (riwayat.pcs_berhasil != null) {
-    updatePayload['pcs_saat_ini'] = riwayat.pcs_berhasil;
+  const ratio = riwayat.pcs_berhasil / batch.total_pcs;
+  let sisa = riwayat.pcs_berhasil;
+  const detailBerhasil = batch.detail_ukuran
+    .map((du, idx) => {
+      const isLast = idx === batch.detail_ukuran.length - 1;
+      const jumlah = isLast ? sisa : Math.floor(du.jumlah_pcs * ratio);
+      sisa -= jumlah;
+      return { ukuran: du.ukuran, jumlah_pcs: Math.max(0, jumlah) };
+    })
+    .filter((du) => du.jumlah_pcs > 0);
+
+  const stokBarangJadiRefs = new Map<string, ReturnType<typeof doc>>();
+  for (const item of detailBerhasil) {
+    const q = query(
+      collection(db, 'stok_barang_jadi'),
+      where('model_id', '==', batch.model_id),
+      where('ukuran', '==', item.ukuran)
+    );
+    const snap = await getDocs(q);
+    const ref = snap.empty
+      ? doc(db, 'stok_barang_jadi', `${batch.model_id}__${item.ukuran}`)
+      : snap.docs[0].ref;
+    stokBarangJadiRefs.set(item.ukuran, ref);
   }
 
-  await updateDoc(doc(db, COL, batchId), updatePayload);
+  const batchRef = doc(db, COL, batchId);
+  const riwayatRef = doc(collection(db, COL, batchId, 'riwayat_proses'));
 
-  // Catat riwayat di sub-koleksi
-  await addDoc(collection(db, COL, batchId, 'riwayat_proses'), {
-    ...riwayat,
-    status_dari: batch.status,
-    status_ke: statusBaru,
-    updated_by_uid: updatedByUid,
-    updated_by_nama: updatedByNama,
-    timestamp: serverTimestamp(),
+  await runTransaction(db, async (transaction) => {
+    const batchSnap = await transaction.get(batchRef);
+    if (!batchSnap.exists()) throw new Error('Batch tidak ditemukan');
+
+    const currentBatch = { id: batchSnap.id, ...batchSnap.data() } as BatchProduksi;
+    if (currentBatch.status === 'COMPLETED') {
+      throw new Error('Batch sudah diselesaikan oleh pengguna lain');
+    }
+    if (currentBatch.status !== 'STEAM_DONE') {
+      throw new Error('Status batch sudah berubah, muat ulang halaman lalu coba lagi');
+    }
+
+    const stokSnapshots = await Promise.all(
+      detailBerhasil.map(async (item) => {
+        const stokRef = stokBarangJadiRefs.get(item.ukuran);
+        if (!stokRef) return null;
+
+        const stokSnap = await transaction.get(stokRef);
+        return { item, stokRef, stokSnap };
+      })
+    );
+
+    transaction.update(batchRef, {
+      status: 'COMPLETED' as StatusBatch,
+      pcs_saat_ini: riwayat.pcs_berhasil,
+      updatedAt: serverTimestamp(),
+    });
+
+    transaction.set(riwayatRef, {
+      ...riwayat,
+      tipe: 'status_update',
+      status_dari: currentBatch.status,
+      status_ke: 'COMPLETED' as StatusBatch,
+      updated_by_uid: updatedByUid,
+      updated_by_nama: updatedByNama,
+      timestamp: serverTimestamp(),
+    });
+
+    for (const entry of stokSnapshots) {
+      if (!entry) continue;
+      const { item, stokRef, stokSnap } = entry;
+
+      if (!stokSnap.exists()) {
+        transaction.set(stokRef, {
+          model_id: currentBatch.model_id,
+          nama_model: currentBatch.nama_model,
+          ...(currentBatch.nama_warna ? { nama_warna: currentBatch.nama_warna } : {}),
+          ...(currentBatch.kode_hex_warna ? { kode_hex_warna: currentBatch.kode_hex_warna } : {}),
+          ukuran: item.ukuran,
+          stok_tersedia: item.jumlah_pcs,
+          total_masuk: item.jumlah_pcs,
+          total_keluar: 0,
+          updatedAt: serverTimestamp(),
+        });
+        continue;
+      }
+
+      const stok = stokSnap.data() as { stok_tersedia: number; total_masuk: number };
+      transaction.update(stokRef, {
+        stok_tersedia: stok.stok_tersedia + item.jumlah_pcs,
+        total_masuk: stok.total_masuk + item.jumlah_pcs,
+        ...(currentBatch.nama_warna ? { nama_warna: currentBatch.nama_warna } : {}),
+        ...(currentBatch.kode_hex_warna ? { kode_hex_warna: currentBatch.kode_hex_warna } : {}),
+        updatedAt: serverTimestamp(),
+      });
+    }
   });
 }
 
@@ -146,25 +326,43 @@ export async function getRiwayatBatch(batchId: string): Promise<RiwayatProses[]>
 // Hapus batch produksi + kembalikan stok kain
 // Hanya boleh untuk batch yang belum COMPLETED
 export async function deleteBatchProduksi(batchId: string): Promise<void> {
-  const batch = await getBatchById(batchId);
-  if (!batch) throw new Error('Batch tidak ditemukan');
-  if (batch.status === 'COMPLETED') {
-    throw new Error('Batch yang sudah selesai tidak dapat dihapus');
-  }
+  const batchRef = doc(db, COL, batchId);
+  await runTransaction(db, async (transaction) => {
+    const batchSnap = await transaction.get(batchRef);
+    if (!batchSnap.exists()) throw new Error('Batch tidak ditemukan');
 
-  // Kembalikan stok kain yang sudah dipotong saat order dibuat
-  for (const kain of batch.kain_digunakan) {
-    await kembalikanStokKain(kain.kain_id, kain.jumlah_dipakai);
-  }
+    const batch = { id: batchSnap.id, ...batchSnap.data() } as BatchProduksi;
+    if (batch.status === 'COMPLETED') {
+      throw new Error('Batch yang sudah selesai tidak dapat dihapus');
+    }
+
+    const kainSnapshots = await Promise.all(
+      batch.kain_digunakan.map(async (kain) => {
+        const kainRef = doc(db, 'stok_kain', kain.kain_id);
+        const kainSnap = await transaction.get(kainRef);
+        return { kain, kainRef, kainSnap };
+      })
+    );
+
+    for (const { kain, kainRef, kainSnap } of kainSnapshots) {
+      if (!kainSnap.exists()) continue;
+
+      const stok = kainSnap.data() as { stok_tersedia: number; stok_terpakai: number };
+      transaction.update(kainRef, {
+        stok_tersedia: stok.stok_tersedia + kain.jumlah_dipakai,
+        stok_terpakai: Math.max(0, stok.stok_terpakai - kain.jumlah_dipakai),
+        updatedAt: serverTimestamp(),
+      });
+    }
+
+    transaction.delete(batchRef);
+  });
 
   // Hapus semua riwayat_proses di sub-koleksi
   const riwayatSnap = await getDocs(collection(db, COL, batchId, 'riwayat_proses'));
   for (const d of riwayatSnap.docs) {
     await deleteDoc(doc(db, COL, batchId, 'riwayat_proses', d.id));
   }
-
-  // Hapus dokumen batch
-  await deleteDoc(doc(db, COL, batchId));
 }
 
 // Edit kuantitas batch (naik/turun) + sesuaikan stok kain otomatis
@@ -199,32 +397,72 @@ export async function editKuantitasBatch(
     return { ...kd, jumlah_dipakai: jumlahBaru };
   });
 
-  // Sesuaikan stok kain: kembalikan jika kurang, potong jika tambah
-  for (let i = 0; i < batch.kain_digunakan.length; i++) {
-    const selisih = parseFloat(
-      (batch.kain_digunakan[i].jumlah_dipakai - newKainDigunakan[i].jumlah_dipakai).toFixed(2)
+  const batchRef = doc(db, COL, batchId);
+  const riwayatRef = doc(collection(db, COL, batchId, 'riwayat_proses'));
+
+  await runTransaction(db, async (transaction) => {
+    const batchSnap = await transaction.get(batchRef);
+    if (!batchSnap.exists()) throw new Error('Batch tidak ditemukan');
+
+    const currentBatch = { id: batchSnap.id, ...batchSnap.data() } as BatchProduksi;
+    if (currentBatch.status === 'COMPLETED') throw new Error('Batch selesai tidak dapat diedit');
+
+    const kainSnapshots = await Promise.all(
+      currentBatch.kain_digunakan.map(async (kainDigunakan, i) => {
+        const oldJumlah = parseFloat(kainDigunakan.jumlah_dipakai.toFixed(2));
+        const selisih = parseFloat((oldJumlah - newKainDigunakan[i].jumlah_dipakai).toFixed(2));
+        if (selisih === 0) return null;
+
+        const kainRef = doc(db, 'stok_kain', kainDigunakan.kain_id);
+        const kainSnap = await transaction.get(kainRef);
+        return { i, selisih, kainRef, kainSnap };
+      })
     );
-    if (selisih > 0) await kembalikanStokKain(batch.kain_digunakan[i].kain_id, selisih);
-    if (selisih < 0) await kurangiStokKain(batch.kain_digunakan[i].kain_id, Math.abs(selisih));
-  }
 
-  await updateDoc(doc(db, COL, batchId), {
-    detail_ukuran: newDetailUkuran,
-    total_pcs: newTotal,
-    kain_digunakan: newKainDigunakan,
-    updatedAt: serverTimestamp(),
-  });
+    for (const entry of kainSnapshots) {
+      if (!entry) continue;
+      const { i, selisih, kainSnap } = entry;
+      if (!kainSnap.exists()) throw new Error('Kain tidak ditemukan');
 
-  await addDoc(collection(db, COL, batchId, 'riwayat_proses'), {
-    tipe: 'edit_kuantitas',
-    status_dari: batch.status,
-    status_ke: batch.status,
-    updated_by_uid: updatedByUid,
-    updated_by_nama: updatedByNama,
-    pcs_berhasil: newTotal,
-    pcs_reject: 0,
-    catatan: alasan?.trim() || `Jumlah diubah dari ${oldTotal} menjadi ${newTotal} pcs`,
-    timestamp: serverTimestamp(),
+      const kain = kainSnap.data() as { nama_kain: string; stok_tersedia: number; stok_terpakai: number };
+      if (selisih < 0 && kain.stok_tersedia < Math.abs(selisih)) {
+        throw new Error(`Stok kain "${kain.nama_kain}" tidak mencukupi`);
+      }
+    }
+
+    for (const entry of kainSnapshots) {
+      if (!entry) continue;
+      const { selisih, kainRef, kainSnap } = entry;
+      const kain = kainSnap.data() as { stok_tersedia: number; stok_terpakai: number };
+      transaction.update(kainRef, {
+        stok_tersedia: selisih > 0
+          ? kain.stok_tersedia + selisih
+          : kain.stok_tersedia - Math.abs(selisih),
+        stok_terpakai: selisih > 0
+          ? Math.max(0, kain.stok_terpakai - selisih)
+          : kain.stok_terpakai + Math.abs(selisih),
+        updatedAt: serverTimestamp(),
+      });
+    }
+
+    transaction.update(batchRef, {
+      detail_ukuran: newDetailUkuran,
+      total_pcs: newTotal,
+      kain_digunakan: newKainDigunakan,
+      updatedAt: serverTimestamp(),
+    });
+
+    transaction.set(riwayatRef, {
+      tipe: 'edit_kuantitas',
+      status_dari: currentBatch.status,
+      status_ke: currentBatch.status,
+      updated_by_uid: updatedByUid,
+      updated_by_nama: updatedByNama,
+      pcs_berhasil: newTotal,
+      pcs_reject: 0,
+      catatan: alasan?.trim() || `Jumlah diubah dari ${oldTotal} menjadi ${newTotal} pcs`,
+      timestamp: serverTimestamp(),
+    });
   });
 }
 

@@ -6,11 +6,11 @@
     getBatchById,
     getRiwayatBatch,
     updateStatusBatch,
+    completeBatchProduksi,
     deleteBatchProduksi,
     editKuantitasBatch,
     updatePenugasanBatch,
   } from "$lib/firebase/batch-produksi";
-  import { tambahStokBarangJadi } from "$lib/firebase/barang-jadi"; 
   import { getKaryawanList } from "$lib/firebase/karyawan";
   import { currentUser, userRole } from "$lib/stores/auth.store";
   import type {
@@ -391,41 +391,31 @@
         ? karyawanList.find((k) => k.uid === fPenugasanUid)
         : undefined;
 
-      await updateStatusBatch(
-        snapshotBatch.id,
-        snapshotNextStatus,
-        $currentUser.uid,
-        namaPencatat,
-        {
-          status_dari: snapshotBatch.status,
-          pcs_berhasil: fPcsBerhasil,
-          pcs_reject: fPcsReject,
-          ...(catatanTrimmed ? { catatan: catatanTrimmed } : {}),
-        },
-        selectedWorker ? { uid: selectedWorker.uid, nama: selectedWorker.name } : undefined,
-      );
-
-      // Jika batch selesai → tambahkan ke stok barang jadi
       if (snapshotNextStatus === "COMPLETED" && fPcsBerhasil > 0) {
-        const ratio = fPcsBerhasil / snapshotBatch.total_pcs;
-        let sisa = fPcsBerhasil;
-        const detailBerhasil = snapshotBatch.detail_ukuran
-          .map((du, idx) => {
-            const isLast = idx === snapshotBatch.detail_ukuran.length - 1;
-            const jumlah = isLast ? sisa : Math.round(du.jumlah_pcs * ratio);
-            sisa -= jumlah;
-            return { ukuran: du.ukuran, jumlah_pcs: Math.max(0, jumlah) };
-          })
-          .filter((du) => du.jumlah_pcs > 0);
-
-        await tambahStokBarangJadi(
-          snapshotBatch.model_id,
-          snapshotBatch.nama_model,
-          detailBerhasil,
+        await completeBatchProduksi(
+          snapshotBatch.id,
+          $currentUser.uid,
+          namaPencatat,
           {
-            nama_warna: snapshotBatch.nama_warna,
-            kode_hex_warna: snapshotBatch.kode_hex_warna,
+            status_dari: snapshotBatch.status,
+            pcs_berhasil: fPcsBerhasil,
+            pcs_reject: fPcsReject,
+            ...(catatanTrimmed ? { catatan: catatanTrimmed } : {}),
           },
+        );
+      } else {
+        await updateStatusBatch(
+          snapshotBatch.id,
+          snapshotNextStatus,
+          $currentUser.uid,
+          namaPencatat,
+          {
+            status_dari: snapshotBatch.status,
+            pcs_berhasil: fPcsBerhasil,
+            pcs_reject: fPcsReject,
+            ...(catatanTrimmed ? { catatan: catatanTrimmed } : {}),
+          },
+          selectedWorker ? { uid: selectedWorker.uid, nama: selectedWorker.name } : undefined,
         );
       }
 
@@ -507,7 +497,7 @@
         .filter(([, v]) => (v ?? 0) > 0)
         .map(([ukuran, jumlah_pcs]) => ({
           ukuran: ukuran as UkuranBaju,
-          jumlah_pcs: Number(jumlah_pcs),
+          jumlah_pcs: Math.round(Number(jumlah_pcs)),
         }));
       const namaPencatat =
         $currentUser.name || $currentUser.email || $currentUser.uid;

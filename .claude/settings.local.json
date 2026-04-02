@@ -25,7 +25,9 @@
       "Bash(wc:*)",
       "Bash(find \"C:\\\\Dev\\\\Android\\\\zarqa-erp-app/app/src/main/java/com/yoki/zarqaproduction\" -name \"*.kt\" -exec wc -l {} ;)",
       "Bash(./gradlew assembleDebug:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(ls src/routes/\\\\\\(dashboard\\\\\\)/)",
+      "Bash(git checkout:*)"
     ]
   }
 }

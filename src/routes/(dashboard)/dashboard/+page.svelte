@@ -426,19 +426,11 @@
   <div class="flex items-center gap-2">
     {#if lastLoaded && !loading}
       <span class="text-xs text-gray-400">
-        Diperbarui: {lastLoaded.toLocaleTimeString("id-ID", {
+        Diperbarui {lastLoaded.toLocaleTimeString("id-ID", {
           hour: "2-digit",
           minute: "2-digit",
         })}
       </span>
-      {#if batchCache.isFresh()}
-        <span
-          class="rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-[10px] font-medium text-green-600"
-          title="Data diambil dari cache, bukan dari Firestore"
-        >
-          cache
-        </span>
-      {/if}
     {/if}
     <button
       onclick={() => load(true)}
@@ -514,27 +506,28 @@
         onclick={() => applyQuick(key)}
         class="rounded-lg px-3 py-1.5 text-xs font-medium transition
           {activeQuick === key
-          ? 'bg-blue-600 text-white shadow-sm'
-          : 'border border-gray-200 bg-gray-50 text-gray-600 hover:bg-gray-100'}"
+          ? 'bg-gray-900 text-white shadow-sm'
+          : 'border border-gray-200 bg-white text-gray-600 hover:bg-gray-50'}"
       >
         {label}
       </button>
     {/each}
   </div>
 
-  <div class="flex items-center gap-2 ml-auto flex-wrap">
+  <!-- Date range picker -->
+  <div class="ml-auto flex items-center gap-0 rounded-lg border border-gray-200 bg-white shadow-xs overflow-hidden">
     <input
       type="date"
       bind:value={dateFrom}
       onchange={onManualChange}
-      class="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700 shadow-xs focus:outline-none focus:ring-2 focus:ring-gray-400"
+      class="border-0 bg-transparent px-3 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-0"
     />
-    <span class="text-sm text-gray-400">s/d</span>
+    <span class="px-1 text-xs text-gray-300 select-none">—</span>
     <input
       type="date"
       bind:value={dateTo}
       onchange={onManualChange}
-      class="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700 shadow-xs focus:outline-none focus:ring-2 focus:ring-gray-400"
+      class="border-0 bg-transparent px-3 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-0"
     />
   </div>
 </div>
@@ -718,7 +711,7 @@
       <div class="flex items-center gap-2">
         <h2 class="text-sm font-semibold text-gray-800">Ringkasan Keuangan</h2>
         <span
-          class="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700"
+          class="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-400"
           >ESTIMASI DEMO</span
         >
       </div>
@@ -735,38 +728,38 @@
     </span>
   </div>
 
-  <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
-    <div class="rounded-lg bg-blue-50 p-4">
-      <p class="text-xs font-medium text-blue-600">Est. Pendapatan</p>
-      <p class="mt-1.5 text-xl font-bold text-blue-700">
+  <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
+    <div class="rounded-lg border border-gray-100 bg-gray-50 p-4">
+      <p class="text-xs font-medium text-gray-500">Est. Pendapatan</p>
+      <p class="mt-1.5 text-xl font-bold text-gray-900">
         {formatRupiah(estPendapatan)}
       </p>
-      <p class="mt-0.5 text-xs text-blue-500">
+      <p class="mt-0.5 text-xs text-gray-400">
         {totalKeluarPcs} pcs × Rp 85.000
       </p>
     </div>
-    <div class="rounded-lg bg-red-50 p-4">
-      <p class="text-xs font-medium text-red-600">Est. Biaya Produksi</p>
-      <p class="mt-1.5 text-xl font-bold text-red-700">
+    <div class="rounded-lg border border-gray-100 bg-gray-50 p-4">
+      <p class="text-xs font-medium text-gray-500">Est. Biaya Produksi</p>
+      <p class="mt-1.5 text-xl font-bold text-gray-900">
         {formatRupiah(estBiaya)}
       </p>
-      <p class="mt-0.5 text-xs text-red-500">
+      <p class="mt-0.5 text-xs text-gray-400">
         {totalKeluarPcs} pcs × Rp 42.000
       </p>
     </div>
-    <div class="rounded-lg bg-green-50 p-4">
-      <p class="text-xs font-medium text-green-600">Est. Laba Kotor</p>
-      <p class="mt-1.5 text-xl font-bold text-green-700">
+    <div class="rounded-lg border border-gray-100 bg-gray-50 p-4">
+      <p class="text-xs font-medium text-gray-500">Est. Laba Kotor</p>
+      <p class="mt-1.5 text-xl font-bold text-gray-900">
         {formatRupiah(estLaba)}
       </p>
-      <p class="mt-0.5 text-xs text-green-500">Pendapatan − Biaya</p>
+      <p class="mt-0.5 text-xs text-gray-400">Pendapatan − Biaya</p>
     </div>
-    <div class="rounded-lg bg-violet-50 p-4">
-      <p class="text-xs font-medium text-violet-600">Margin Laba</p>
-      <p class="mt-1.5 text-xl font-bold text-violet-700">{marginPersen}%</p>
-      <div class="mt-1.5 h-1.5 w-full rounded-full bg-violet-100">
+    <div class="rounded-lg border border-gray-100 bg-gray-50 p-4">
+      <p class="text-xs font-medium text-gray-500">Margin Laba</p>
+      <p class="mt-1.5 text-xl font-bold text-gray-900">{marginPersen}%</p>
+      <div class="mt-1.5 h-1.5 w-full rounded-full bg-gray-200">
         <div
-          class="h-1.5 rounded-full bg-violet-400"
+          class="h-1.5 rounded-full bg-gray-400"
           style="width: {Math.min(marginPersen, 100)}%"
         ></div>
       </div>

@@ -18,6 +18,7 @@ export interface UserProfile {
   name: string;
   email: string;
   role: UserRole;
+  photoURL?: string;
   tipe_akun?: 'permanent' | 'temporary';
   tanggal_expired?: Timestamp;
   createdAt?: Timestamp;

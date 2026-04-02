@@ -1,7 +1,7 @@
 // src/lib/firebase/stok-kain.ts
 import {
   collection, doc, getDocs, getDoc,
-  addDoc, updateDoc, serverTimestamp,
+  addDoc, updateDoc, serverTimestamp, runTransaction,
   query, orderBy, onSnapshot, deleteField,
   type Unsubscribe,
 } from 'firebase/firestore';
@@ -37,13 +37,18 @@ export async function addStokKain(data: StokKainInput): Promise<string> {
 
 // Restock: tambah jumlah ke stok yang ada
 export async function restockKain(id: string, tambahJumlah: number, catatan?: string): Promise<void> {
-  const kain = await getStokKainById(id);
-  if (!kain) throw new Error('Kain tidak ditemukan');
-  const finalCatatan = catatan ?? kain.catatan;
-  await updateDoc(doc(db, COL, id), {
-    stok_tersedia: kain.stok_tersedia + tambahJumlah,
-    ...(finalCatatan !== undefined ? { catatan: finalCatatan } : {}),
-    updatedAt: serverTimestamp(),
+  const ref = doc(db, COL, id);
+  await runTransaction(db, async (transaction) => {
+    const snap = await transaction.get(ref);
+    if (!snap.exists()) throw new Error('Kain tidak ditemukan');
+
+    const kain = { id: snap.id, ...snap.data() } as StokKain;
+    const finalCatatan = catatan ?? kain.catatan;
+    transaction.update(ref, {
+      stok_tersedia: kain.stok_tersedia + tambahJumlah,
+      ...(finalCatatan !== undefined ? { catatan: finalCatatan } : {}),
+      updatedAt: serverTimestamp(),
+    });
   });
 }
 
@@ -58,36 +63,57 @@ export async function updateStokKain(id: string, data: { nama_kain: string; cata
 
 // Kurangi stok (dipanggil saat order produksi dibuat)
 export async function kurangiStokKain(id: string, jumlah: number): Promise<void> {
-  const kain = await getStokKainById(id);
-  if (!kain) throw new Error('Kain tidak ditemukan');
-  if (kain.stok_tersedia < jumlah) throw new Error(`Stok kain "${kain.nama_kain}" tidak mencukupi`);
-  await updateDoc(doc(db, COL, id), {
-    stok_tersedia: kain.stok_tersedia - jumlah,
-    stok_terpakai: kain.stok_terpakai + jumlah,
-    updatedAt: serverTimestamp(),
+  const ref = doc(db, COL, id);
+  await runTransaction(db, async (transaction) => {
+    const snap = await transaction.get(ref);
+    if (!snap.exists()) throw new Error('Kain tidak ditemukan');
+
+    const kain = { id: snap.id, ...snap.data() } as StokKain;
+    if (kain.stok_tersedia < jumlah) {
+      throw new Error(`Stok kain "${kain.nama_kain}" tidak mencukupi`);
+    }
+
+    transaction.update(ref, {
+      stok_tersedia: kain.stok_tersedia - jumlah,
+      stok_terpakai: kain.stok_terpakai + jumlah,
+      updatedAt: serverTimestamp(),
+    });
   });
 }
 
 // Kembalikan stok kain (dipanggil saat order produksi dibatalkan/dihapus)
 export async function kembalikanStokKain(id: string, jumlah: number): Promise<void> {
-  const kain = await getStokKainById(id);
-  if (!kain) return; // kain mungkin sudah dihapus, abaikan
-  await updateDoc(doc(db, COL, id), {
-    stok_tersedia: kain.stok_tersedia + jumlah,
-    stok_terpakai: Math.max(0, kain.stok_terpakai - jumlah),
-    updatedAt: serverTimestamp(),
+  const ref = doc(db, COL, id);
+  await runTransaction(db, async (transaction) => {
+    const snap = await transaction.get(ref);
+    if (!snap.exists()) return; // kain mungkin sudah dihapus, abaikan
+
+    const kain = { id: snap.id, ...snap.data() } as StokKain;
+    transaction.update(ref, {
+      stok_tersedia: kain.stok_tersedia + jumlah,
+      stok_terpakai: Math.max(0, kain.stok_terpakai - jumlah),
+      updatedAt: serverTimestamp(),
+    });
   });
 }
 
 // Kurangi stok secara manual (koreksi admin)
 // Hanya mengurangi stok_tersedia, tidak menambah stok_terpakai
 export async function kurangiStokManual(id: string, jumlah: number): Promise<void> {
-  const kain = await getStokKainById(id);
-  if (!kain) throw new Error('Kain tidak ditemukan');
-  if (kain.stok_tersedia < jumlah) throw new Error(`Stok kain "${kain.nama_kain}" tidak mencukupi (tersedia: ${kain.stok_tersedia})`);
-  await updateDoc(doc(db, COL, id), {
-    stok_tersedia: kain.stok_tersedia - jumlah,
-    updatedAt: serverTimestamp(),
+  const ref = doc(db, COL, id);
+  await runTransaction(db, async (transaction) => {
+    const snap = await transaction.get(ref);
+    if (!snap.exists()) throw new Error('Kain tidak ditemukan');
+
+    const kain = { id: snap.id, ...snap.data() } as StokKain;
+    if (kain.stok_tersedia < jumlah) {
+      throw new Error(`Stok kain "${kain.nama_kain}" tidak mencukupi (tersedia: ${kain.stok_tersedia})`);
+    }
+
+    transaction.update(ref, {
+      stok_tersedia: kain.stok_tersedia - jumlah,
+      updatedAt: serverTimestamp(),
+    });
   });
 }
 

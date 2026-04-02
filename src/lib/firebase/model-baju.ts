@@ -1,7 +1,7 @@
 // src/lib/firebase/model-baju.ts
 import {
   collection, doc, getDocs, getDoc,
-  addDoc, updateDoc, serverTimestamp,
+  addDoc, updateDoc, deleteDoc, serverTimestamp,
   query, orderBy, where,
 } from 'firebase/firestore';
 import { db } from './config';
@@ -45,10 +45,45 @@ export async function updateModelBaju(id: string, data: Partial<ModelBajuInput>)
 
 // Nonaktifkan model baju (soft delete)
 export async function nonaktifkanModel(id: string): Promise<void> {
-  await updateDoc(doc(db, COL, id), { aktif: false });
+  await updateDoc(doc(db, COL, id), { aktif: false, updatedAt: serverTimestamp() });
 }
 
 // Aktifkan kembali model baju
 export async function aktifkanModel(id: string): Promise<void> {
-  await updateDoc(doc(db, COL, id), { aktif: true });
+  await updateDoc(doc(db, COL, id), { aktif: true, updatedAt: serverTimestamp() });
+}
+
+// Hapus permanen model baju (hanya boleh jika sudah nonaktif)
+export async function deleteModelBaju(id: string): Promise<void> {
+  const modelRef = doc(db, COL, id);
+  const modelSnap = await getDoc(modelRef);
+
+  if (!modelSnap.exists()) {
+    throw new Error('Model baju tidak ditemukan');
+  }
+
+  const model = { id: modelSnap.id, ...modelSnap.data() } as ModelBaju;
+  if (model.aktif) {
+    throw new Error('Nonaktifkan model terlebih dahulu sebelum menghapus permanen');
+  }
+
+  const [batchSnap, stokPotonganSnap, stokBarangJadiSnap] = await Promise.all([
+    getDocs(query(collection(db, 'batch_produksi'), where('model_id', '==', id))),
+    getDocs(query(collection(db, 'stok_potongan'), where('model_id', '==', id))),
+    getDocs(query(collection(db, 'stok_barang_jadi'), where('model_id', '==', id))),
+  ]);
+
+  if (!batchSnap.empty) {
+    throw new Error('Model masih digunakan pada data batch produksi dan tidak dapat dihapus');
+  }
+
+  if (!stokPotonganSnap.empty) {
+    throw new Error('Model masih memiliki stok potongan dan tidak dapat dihapus');
+  }
+
+  if (!stokBarangJadiSnap.empty) {
+    throw new Error('Model masih memiliki stok barang jadi dan tidak dapat dihapus');
+  }
+
+  await deleteDoc(doc(db, COL, id));
 }

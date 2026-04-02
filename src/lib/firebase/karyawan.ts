@@ -2,7 +2,7 @@
 import {
   collection, doc, getDocs, updateDoc,
   deleteDoc, setDoc, serverTimestamp, query, orderBy,
-  type Timestamp,
+  Timestamp, deleteField,
 } from 'firebase/firestore';
 import { PUBLIC_FIREBASE_API_KEY } from '$env/static/public';
 import { db } from './config';
@@ -82,7 +82,7 @@ export async function createAkunKaryawan(data: CreateAkunInput): Promise<string>
   };
 
   if (data.tipe_akun === 'temporary' && data.tanggal_expired) {
-    profileData.tanggal_expired = data.tanggal_expired;
+    profileData.tanggal_expired = Timestamp.fromDate(data.tanggal_expired);
   }
 
   await setDoc(doc(db, COL, uid), profileData);
@@ -116,10 +116,9 @@ export async function updateKaryawan(uid: string, data: UpdateKaryawanInput): Pr
 
   // Tangani tanggal_expired: set atau hapus
   if (data.tipe_akun === 'temporary' && data.tanggal_expired) {
-    updateData.tanggal_expired = data.tanggal_expired;
+    updateData.tanggal_expired = Timestamp.fromDate(data.tanggal_expired);
   } else if (data.tipe_akun === 'permanent') {
     // Hapus field expired jika diganti ke permanent
-    const { deleteField } = await import('firebase/firestore');
     updateData.tanggal_expired = deleteField();
   }
 

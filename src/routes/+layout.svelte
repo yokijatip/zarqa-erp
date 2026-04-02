@@ -10,11 +10,13 @@
     isLoggedIn,
     authLoading,
   } from "$lib/stores/auth.store";
+  import { loadSettings, applySettings } from "$lib/stores/display.store";
 
   let { children } = $props();
 
   onMount(() => {
     initAuthListener();
+    applySettings(loadSettings());
   });
 
   // Guard: redirect ke login jika belum login
