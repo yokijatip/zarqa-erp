@@ -39,13 +39,22 @@ export async function updateWarna(id: string, data: Partial<WarnaInput>): Promis
 
 export async function deleteWarna(id: string): Promise<void> {
   // Cek apakah warna sedang dipakai oleh model baju
-  const modelSnap = await getDocs(
-    query(collection(db, 'model_baju'), where('warna_id', '==', id))
-  );
+  const [modelSnap, stokKainSnap] = await Promise.all([
+    getDocs(query(collection(db, 'model_baju'), where('warna_id', '==', id))),
+    getDocs(query(collection(db, 'stok_kain'), where('warna_id', '==', id))),
+  ]);
+
   if (!modelSnap.empty) {
     throw new Error(
       `Warna sedang digunakan oleh ${modelSnap.size} model baju. Ubah warna model tersebut terlebih dahulu.`
     );
   }
+
+  if (!stokKainSnap.empty) {
+    throw new Error(
+      `Warna sedang digunakan oleh ${stokKainSnap.size} stok kain. Ubah warna kain tersebut terlebih dahulu.`
+    );
+  }
+
   await deleteDoc(doc(db, COL, id));
 }

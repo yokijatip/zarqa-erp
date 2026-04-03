@@ -6,11 +6,12 @@
     updateStokKain,
     kurangiStokManual,
   } from "$lib/firebase/stok-kain";
-  import { stokKainCache } from "$lib/stores/data-cache.svelte";
-  import type { StokKain } from "$lib/types";
+  import { stokKainCache, warnaCache } from "$lib/stores/data-cache.svelte";
+  import type { StokKain, Warna } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
   import * as Table from "$lib/components/ui/table";
   import { Button } from "$lib/components/ui/button";
+  import * as Select from "$lib/components/ui/select/index.js";
   import StatCard from "$lib/components/StatCard.svelte";
   import LayersIcon from "@lucide/svelte/icons/layers";
   import BoxIcon from "@lucide/svelte/icons/box";
@@ -18,6 +19,7 @@
 
   // ── State ──────────────────────────────────────────────────────────
   let stokList = $state<StokKain[]>([]);
+  let warnaList = $state<Warna[]>([]);
   let loading = $state(true);
   let saving = $state(false);
   let errorMsg = $state<string | null>(null);
@@ -38,6 +40,7 @@
 
   // Form: tambah kain
   let fNama = $state("");
+  let fWarnaId = $state("");
   let fSatuan = $state<"yard" | "kg">("yard");
   let fStok = $state<number | "">("");
   let fCatatan = $state("");
@@ -52,6 +55,7 @@
 
   // Form: edit kain
   let eNama = $state("");
+  let eWarnaId = $state("");
   let eCatatan = $state("");
 
   // ── Derived ────────────────────────────────────────────────────────
@@ -74,7 +78,8 @@
     let list = stokList.filter(
       (k) =>
         !searchQuery ||
-        k.nama_kain.toLowerCase().includes(searchQuery.toLowerCase()),
+        k.nama_kain.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (k.nama_warna ?? "").toLowerCase().includes(searchQuery.toLowerCase()),
     );
     if (sortBy === "nama")
       list = [...list].sort((a, b) => a.nama_kain.localeCompare(b.nama_kain));
@@ -121,7 +126,10 @@
     loading = true;
     errorMsg = null;
     try {
-      stokList = await stokKainCache.get(force);
+      [stokList, warnaList] = await Promise.all([
+        stokKainCache.get(force),
+        warnaCache.get(force),
+      ]);
     } catch {
       showError("Gagal memuat data. Periksa koneksi Firebase.");
     } finally {
@@ -129,13 +137,25 @@
     }
   }
 
+  function getSelectedWarna(warnaId: string) {
+    return warnaList.find((w) => w.id === warnaId) ?? null;
+  }
+
   // ── Actions ─────────────────────────────────────────────────────────
   async function submitTambah() {
     if (!fNama.trim() || fStok === "" || Number(fStok) <= 0) return;
     saving = true;
     try {
+      const selectedWarna = getSelectedWarna(fWarnaId);
       await addStokKain({
         nama_kain: fNama.trim(),
+        ...(selectedWarna
+          ? {
+              warna_id: selectedWarna.id,
+              nama_warna: selectedWarna.nama_warna,
+              kode_hex_warna: selectedWarna.kode_hex,
+            }
+          : {}),
         satuan: fSatuan,
         stok_tersedia: Number(fStok),
         ...(fCatatan.trim() ? { catatan: fCatatan.trim() } : {}),
@@ -144,6 +164,7 @@
       await load(true);
       openTambah = false;
       fNama = "";
+      fWarnaId = "";
       fSatuan = "yard";
       fStok = "";
       fCatatan = "";
@@ -182,6 +203,7 @@
 
   function bukaTambah() {
     fNama = "";
+    fWarnaId = "";
     fSatuan = "yard";
     fStok = "";
     fCatatan = "";
@@ -226,6 +248,7 @@
   function bukaEdit(kain: StokKain) {
     editingKain = kain;
     eNama = kain.nama_kain;
+    eWarnaId = kain.warna_id ?? "";
     eCatatan = kain.catatan ?? "";
     openEdit = true;
   }
@@ -234,15 +257,18 @@
     if (!editingKain || !eNama.trim()) return;
     saving = true;
     try {
+      const selectedWarna = getSelectedWarna(eWarnaId);
       await updateStokKain(editingKain.id, {
         nama_kain: eNama.trim(),
         catatan: eCatatan.trim() || undefined,
+        warna: selectedWarna,
       });
       const nama = eNama.trim();
       await load(true);
       openEdit = false;
       editingKain = null;
       eNama = "";
+      eWarnaId = "";
       eCatatan = "";
       showSuccess(`Kain "${nama}" berhasil diperbarui.`);
     } catch {
@@ -469,6 +495,7 @@
       <Table.Header>
         <Table.Row class="bg-gray-50 hover:bg-gray-50">
           <Table.Head>Nama Kain</Table.Head>
+          <Table.Head>Warna</Table.Head>
           <Table.Head class="text-right">Tersedia</Table.Head>
           <Table.Head class="text-center">Status</Table.Head>
           <Table.Head>Catatan</Table.Head>
@@ -481,6 +508,19 @@
           <Table.Row>
             <Table.Cell>
               <p class="text-sm font-medium text-gray-800">{kain.nama_kain}</p>
+            </Table.Cell>
+
+            <Table.Cell>
+              {#if kain.nama_warna}
+                <span class="inline-flex items-center gap-2 rounded-full bg-gray-50 px-2.5 py-1 text-xs font-medium text-gray-700">
+                  {#if kain.kode_hex_warna}
+                    <span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-gray-200" style="background-color: {kain.kode_hex_warna}"></span>
+                  {/if}
+                  {kain.nama_warna}
+                </span>
+              {:else}
+                <span class="text-xs text-gray-400">Tanpa warna</span>
+              {/if}
             </Table.Cell>
 
             <Table.Cell class="text-right">
@@ -633,6 +673,46 @@
       </div>
 
       <div>
+        <label class="mb-1.5 block text-sm font-medium text-gray-700" for="warna-kain">
+          Warna
+          <span class="text-xs font-normal text-gray-400">(opsional, ambil dari master warna)</span>
+        </label>
+        <Select.Root
+          type="single"
+          value={fWarnaId || undefined}
+          onValueChange={(val) => (fWarnaId = val === "__none__" ? "" : (val ?? ""))}
+        >
+          <Select.Trigger class="w-full" id="warna-kain">
+            {#if fWarnaId && getSelectedWarna(fWarnaId)}
+              {@const warna = getSelectedWarna(fWarnaId)!}
+              <span class="flex items-center gap-2">
+                <span class="inline-block h-3.5 w-3.5 shrink-0 rounded-full border border-gray-200" style="background-color: {warna.kode_hex}"></span>
+                {warna.nama_warna}
+              </span>
+            {:else}
+              <span class="text-muted-foreground">-- Pilih warna --</span>
+            {/if}
+          </Select.Trigger>
+          <Select.Content preventScroll={false}>
+            <Select.Item value="__none__">-- Tanpa warna --</Select.Item>
+            {#each warnaList as warna}
+              <Select.Item value={warna.id}>
+                <span class="flex items-center gap-2">
+                  <span class="inline-block h-3 w-3 shrink-0 rounded-full border border-gray-200" style="background-color: {warna.kode_hex}"></span>
+                  {warna.nama_warna}
+                </span>
+              </Select.Item>
+            {/each}
+          </Select.Content>
+        </Select.Root>
+        {#if warnaList.length === 0}
+          <p class="mt-1 text-xs text-gray-400">
+            Belum ada warna terdaftar. <a href="/warna" class="text-blue-500 hover:underline">Tambah warna -></a>
+          </p>
+        {/if}
+      </div>
+
+      <div>
         <p class="mb-1.5 text-sm font-medium text-gray-700">
           Satuan <span class="text-red-500">*</span>
         </p>
@@ -744,6 +824,14 @@
           <p class="mt-1 text-base font-semibold text-gray-800">
             {selectedKain.nama_kain}
           </p>
+          {#if selectedKain.nama_warna}
+            <div class="mt-2 inline-flex items-center gap-2 rounded-full bg-white px-2.5 py-1 text-xs font-medium text-gray-700">
+              {#if selectedKain.kode_hex_warna}
+                <span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-gray-200" style="background-color: {selectedKain.kode_hex_warna}"></span>
+              {/if}
+              {selectedKain.nama_warna}
+            </div>
+          {/if}
           <div class="mt-2 flex items-center gap-4 text-xs text-gray-500">
             <span
               >Saat ini: <strong class="text-gray-700"
@@ -843,6 +931,14 @@
           <p class="mt-1 text-base font-semibold text-gray-800">
             {kurangiKain.nama_kain}
           </p>
+          {#if kurangiKain.nama_warna}
+            <div class="mt-2 inline-flex items-center gap-2 rounded-full bg-white px-2.5 py-1 text-xs font-medium text-gray-700">
+              {#if kurangiKain.kode_hex_warna}
+                <span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-gray-200" style="background-color: {kurangiKain.kode_hex_warna}"></span>
+              {/if}
+              {kurangiKain.nama_warna}
+            </div>
+          {/if}
           <div class="mt-2 flex items-center gap-4 text-xs text-gray-500">
             <span>
               Stok saat ini:
@@ -983,6 +1079,41 @@
           placeholder="Nama kain..."
           class="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none"
         />
+      </div>
+
+      <div>
+        <label class="mb-1.5 block text-sm font-medium text-gray-700" for="edit-warna-kain">
+          Warna
+          <span class="text-xs font-normal text-gray-400">(opsional)</span>
+        </label>
+        <Select.Root
+          type="single"
+          value={eWarnaId || undefined}
+          onValueChange={(val) => (eWarnaId = val === "__none__" ? "" : (val ?? ""))}
+        >
+          <Select.Trigger class="w-full" id="edit-warna-kain">
+            {#if eWarnaId && getSelectedWarna(eWarnaId)}
+              {@const warna = getSelectedWarna(eWarnaId)!}
+              <span class="flex items-center gap-2">
+                <span class="inline-block h-3.5 w-3.5 shrink-0 rounded-full border border-gray-200" style="background-color: {warna.kode_hex}"></span>
+                {warna.nama_warna}
+              </span>
+            {:else}
+              <span class="text-muted-foreground">-- Pilih warna --</span>
+            {/if}
+          </Select.Trigger>
+          <Select.Content preventScroll={false}>
+            <Select.Item value="__none__">-- Tanpa warna --</Select.Item>
+            {#each warnaList as warna}
+              <Select.Item value={warna.id}>
+                <span class="flex items-center gap-2">
+                  <span class="inline-block h-3 w-3 shrink-0 rounded-full border border-gray-200" style="background-color: {warna.kode_hex}"></span>
+                  {warna.nama_warna}
+                </span>
+              </Select.Item>
+            {/each}
+          </Select.Content>
+        </Select.Root>
       </div>
 
       <div>

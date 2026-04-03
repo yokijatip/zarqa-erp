@@ -41,6 +41,9 @@ export type WarnaInput = Omit<Warna, 'id' | 'createdAt' | 'updatedAt'>;
 export interface StokKain {
   id: string;
   nama_kain: string;
+  warna_id?: string;
+  nama_warna?: string;
+  kode_hex_warna?: string;
   satuan: 'yard' | 'kg';
   stok_tersedia: number;
   stok_terpakai: number;

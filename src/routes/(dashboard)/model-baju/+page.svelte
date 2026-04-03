@@ -86,6 +86,14 @@
     return stokKainList.filter((k) => !otherIds.includes(k.id));
   }
 
+  function getKainById(kainId: string): StokKain | null {
+    return stokKainList.find((k) => k.id === kainId) ?? null;
+  }
+
+  function formatKainLabel(kain: Pick<StokKain, "nama_kain" | "nama_warna">): string {
+    return kain.nama_warna ? `${kain.nama_kain} · ${kain.nama_warna}` : kain.nama_kain;
+  }
+
   function tambahKain() {
     fKainList = [
       ...fKainList,
@@ -100,7 +108,7 @@
   function onKainSelect(i: number, kainId: string) {
     const kain = stokKainList.find((k) => k.id === kainId);
     fKainList[i].kain_id = kainId;
-    fKainList[i].nama_kain = kain?.nama_kain ?? "";
+    fKainList[i].nama_kain = kain ? formatKainLabel(kain) : "";
     fKainList[i].satuan = kain?.satuan ?? "yard";
   }
 
@@ -126,7 +134,7 @@
     fUkuran = [...model.ukuran_tersedia];
     fKainList = model.kebutuhan_kain.map((k) => ({
       kain_id: k.kain_id,
-      nama_kain: k.nama_kain,
+      nama_kain: formatKainLabel(getKainById(k.kain_id) ?? { nama_kain: k.nama_kain, nama_warna: undefined }),
       satuan: k.satuan ?? 'yard',
       jumlah_per_ukuran: { ...(k.jumlah_per_ukuran ?? {}) } as Partial<Record<UkuranBaju, number | "">>,
     }));
@@ -162,11 +170,17 @@
   async function load(force = false) {
     loading = true;
     try {
-      [modelList, stokKainList, warnaList] = await Promise.all([
+      const [models, stokKain, warna] = await Promise.all([
         modelBajuCache.get(force),
         stokKainCache.get(force),
         warnaCache.get(force),
       ]);
+      modelList = models;
+      stokKainList = stokKain.map((k) => ({
+        ...k,
+        nama_kain: formatKainLabel(k),
+      }));
+      warnaList = warna;
     } catch {
       showError("Gagal memuat data. Periksa koneksi Firebase.");
     } finally {

@@ -6,7 +6,7 @@ import {
   type Unsubscribe,
 } from 'firebase/firestore';
 import { db } from './config';
-import type { StokKain, StokKainInput } from '$lib/types';
+import type { StokKain, StokKainInput, Warna } from '$lib/types';
 
 const COL = 'stok_kain';
 
@@ -35,6 +35,22 @@ export async function addStokKain(data: StokKainInput): Promise<string> {
   return ref.id;
 }
 
+function buildWarnaFields(warna?: Pick<Warna, 'id' | 'nama_warna' | 'kode_hex'> | null) {
+  if (!warna?.id) {
+    return {
+      warna_id: deleteField(),
+      nama_warna: deleteField(),
+      kode_hex_warna: deleteField(),
+    };
+  }
+
+  return {
+    warna_id: warna.id,
+    nama_warna: warna.nama_warna,
+    kode_hex_warna: warna.kode_hex,
+  };
+}
+
 // Restock: tambah jumlah ke stok yang ada
 export async function restockKain(id: string, tambahJumlah: number, catatan?: string): Promise<void> {
   const ref = doc(db, COL, id);
@@ -53,10 +69,18 @@ export async function restockKain(id: string, tambahJumlah: number, catatan?: st
 }
 
 // Edit informasi kain (nama dan catatan saja, stok dikelola via restock/order)
-export async function updateStokKain(id: string, data: { nama_kain: string; catatan?: string }): Promise<void> {
+export async function updateStokKain(
+  id: string,
+  data: {
+    nama_kain: string;
+    catatan?: string;
+    warna?: Pick<Warna, 'id' | 'nama_warna' | 'kode_hex'> | null;
+  },
+): Promise<void> {
   await updateDoc(doc(db, COL, id), {
     nama_kain: data.nama_kain,
     catatan: data.catatan?.trim() ? data.catatan.trim() : deleteField(),
+    ...buildWarnaFields(data.warna),
     updatedAt: serverTimestamp(),
   });
 }

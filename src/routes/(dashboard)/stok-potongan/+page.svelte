@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { afterNavigate } from "$app/navigation";
   import { stokPotonganCache } from "$lib/stores/data-cache.svelte";
   import type { StokPotongan } from "$lib/types";
@@ -38,6 +39,10 @@
       loading = false;
     }
   }
+
+  onMount(() => {
+    load();
+  });
 
   afterNavigate(() => load());
 </script>
