@@ -5,14 +5,15 @@
   import { getStokPotonganByModel } from "$lib/firebase/stok-potongan";
   import { batchCache, modelBajuCache, stokPotonganCache } from "$lib/stores/data-cache.svelte";
   import { currentUser, isAdmin } from "$lib/stores/auth.store";
-  import type {
-    BatchProduksi,
-    ModelBaju,
-    StatusBatch,
-    StokPotongan,
-    UkuranBaju,
+  import {
+    STATUS_LABEL,
+    UKURAN_ORDER,
+    type BatchProduksi,
+    type ModelBaju,
+    type StatusBatch,
+    type StokPotongan,
+    type UkuranBaju,
   } from "$lib/types";
-  import { STATUS_LABEL } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
   import * as Select from "$lib/components/ui/select/index.js";
   import * as Table from "$lib/components/ui/table";
@@ -23,8 +24,6 @@
   import CircleCheckIcon from "@lucide/svelte/icons/circle-check";
   import { type DateRange, filterByRange } from "$lib/period";
   import PeriodSelector from "$lib/components/period-selector.svelte";
-
-  const UKURAN_ORDER: UkuranBaju[] = ["S", "M", "L", "XL", "XXL"];
 
   const STATUS_STYLE: Record<StatusBatch, string> = {
     PENDING_CUTTING: "bg-slate-100 text-slate-700",

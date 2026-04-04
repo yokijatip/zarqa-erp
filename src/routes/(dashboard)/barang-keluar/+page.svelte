@@ -3,7 +3,7 @@
   import { catatBarangKeluar } from "$lib/firebase/barang-jadi";
   import { barangJadiCache, barangKeluarCache } from "$lib/stores/data-cache.svelte";
   import { currentUser, userRole } from "$lib/stores/auth.store";
-  import type { StokBarangJadi, BarangKeluar, UkuranBaju } from "$lib/types";
+  import { UKURAN_ORDER, type StokBarangJadi, type BarangKeluar, type UkuranBaju } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
   import * as Select from "$lib/components/ui/select/index.js";
   import * as Table from "$lib/components/ui/table";
@@ -16,8 +16,6 @@
   import ShirtIcon from "@lucide/svelte/icons/shirt";
   import { type DateRange, filterByRange, getPeriodRange } from "$lib/period";
   import PeriodSelector from "$lib/components/period-selector.svelte";
-
-  const UKURAN_ORDER: UkuranBaju[] = ["S", "M", "L", "XL", "XXL"];
 
   // ── State ──────────────────────────────────────────────────────────
   let stokList = $state<StokBarangJadi[]>([]);
@@ -39,6 +37,7 @@
   // ── Derived ────────────────────────────────────────────────────────
   let canCatat = $derived(
     $userRole === "admin_gudang" ||
+      $userRole === "owner" ||
       $userRole === "kepala_keluar" ||
       $userRole === "developer",
   );

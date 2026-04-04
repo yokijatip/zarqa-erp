@@ -2,7 +2,7 @@
   import { goto, afterNavigate } from "$app/navigation";
   import { tambahStokBarangJadi } from "$lib/firebase/barang-jadi";
   import { barangJadiCache, modelBajuCache } from "$lib/stores/data-cache.svelte";
-  import type { StokBarangJadi, UkuranBaju, ModelBaju } from "$lib/types";
+  import { UKURAN_ORDER, type StokBarangJadi, type UkuranBaju, type ModelBaju } from "$lib/types";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import * as Dialog from "$lib/components/ui/dialog";
@@ -11,8 +11,6 @@
   import PackageIcon from "@lucide/svelte/icons/package";
   import PackageCheckIcon from "@lucide/svelte/icons/package-check";
   import PackageXIcon from "@lucide/svelte/icons/package-x";
-
-  const UKURAN_ORDER: UkuranBaju[] = ["S", "M", "L", "XL", "XXL"];
 
   // Threshold stok kritis per ukuran
   const KRITIS_THRESHOLD = 5;

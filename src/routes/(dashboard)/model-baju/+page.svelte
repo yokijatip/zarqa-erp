@@ -9,7 +9,7 @@
   } from "$lib/firebase/model-baju";
   import { modelBajuCache, stokKainCache, warnaCache } from "$lib/stores/data-cache.svelte";
   import { isAdmin } from "$lib/stores/auth.store";
-  import type { ModelBaju, StokKain, UkuranBaju, Warna } from "$lib/types";
+  import { UKURAN_ORDER, type ModelBaju, type StokKain, type UkuranBaju, type Warna } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
   import StatCard from "$lib/components/StatCard.svelte";
   import ShirtIcon from "@lucide/svelte/icons/shirt";
@@ -17,8 +17,6 @@
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import * as Select from "$lib/components/ui/select/index.js";
-
-  const UKURAN_ORDER: UkuranBaju[] = ["S", "M", "L", "XL", "XXL"];
 
   // ── State ──────────────────────────────────────────────────────────
   let modelList = $state<ModelBaju[]>([]);

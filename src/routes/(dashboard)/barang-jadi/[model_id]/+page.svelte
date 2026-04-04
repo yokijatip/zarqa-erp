@@ -8,12 +8,11 @@
     kurangiStokManual,
     setStokManual,
   } from "$lib/firebase/barang-jadi";
-  import type { StokBarangJadi, UkuranBaju } from "$lib/types";
+  import { UKURAN_ORDER, type StokBarangJadi, type UkuranBaju } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
 
-  const UKURAN_ORDER: UkuranBaju[] = ["S", "M", "L", "XL", "XXL"];
   const KRITIS_THRESHOLD = 5;
   const LOW_THRESHOLD = 15;
 

@@ -27,7 +27,18 @@
       "Bash(./gradlew assembleDebug:*)",
       "Bash(cat:*)",
       "Bash(ls src/routes/\\\\\\(dashboard\\\\\\)/)",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(find \"/c/Dev/Android/zarqa-erp-app/app/src/main/res/\" -type f -exec ls -lh {})",
+      "Bash(find /c/Dev/Android/zarqa-erp-app/app -type f -name *.so)",
+      "Bash(du -sh /c/Dev/Android/zarqa-erp-app/app/build/outputs/*)",
+      "Bash(du -sh /c/Dev/Android/zarqa-erp-app/app/build/intermediates/dex/debug/mergeLibDexDebug/*)",
+      "Bash(find \"/c/Dev/Android/zarqa-erp-app/app/build/intermediates/dex\" -name \"*.dex\" -exec ls -lh {})",
+      "Bash(du -sh /tmp/apk_contents/lib/*)",
+      "Read(//tmp/apk_contents/**)",
+      "Bash(find /tmp/apk_contents/res -type f -exec ls -lh {})",
+      "Read(//c/Dev/Web/zarqa-erp-web/**)",
+      "Bash(du -sh /tmp/apk_contents/res/drawable*)",
+      "Bash(find /tmp/apk_contents/res/drawable -type f -exec ls -lh {})"
     ]
   }
 }

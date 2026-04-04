@@ -150,18 +150,23 @@
     kepala_steam: "Kepala Steam",
     kepala_keluar: "Kepala Barang Keluar",
     admin_gudang: "Admin Gudang",
+    owner: "Owner",
     developer: "Developer",
   };
 
   const ALLOWED_ROLES: Partial<Record<StatusBatch, UserRole[]>> = {
-    PENDING_CUTTING: ["kepala_cutting", "admin_gudang", "developer"],
-    CUTTING_IN_PROGRESS: ["kepala_cutting", "admin_gudang", "developer"],
-    CUTTING_DONE: ["kepala_jahit", "admin_gudang", "developer"],
-    JAHIT_IN_PROGRESS: ["kepala_jahit", "admin_gudang", "developer"],
-    JAHIT_DONE: ["kepala_steam", "admin_gudang", "developer"],
-    STEAM_IN_PROGRESS: ["kepala_steam", "admin_gudang", "developer"],
-    STEAM_DONE: ["kepala_keluar", "admin_gudang", "developer"],
+    PENDING_CUTTING: ["kepala_cutting", "admin_gudang", "owner", "developer"],
+    CUTTING_IN_PROGRESS: ["kepala_cutting", "admin_gudang", "owner", "developer"],
+    CUTTING_DONE: ["kepala_jahit", "admin_gudang", "owner", "developer"],
+    JAHIT_IN_PROGRESS: ["kepala_jahit", "admin_gudang", "owner", "developer"],
+    JAHIT_DONE: ["kepala_steam", "admin_gudang", "owner", "developer"],
+    STEAM_IN_PROGRESS: ["kepala_steam", "admin_gudang", "owner", "developer"],
+    STEAM_DONE: ["kepala_keluar", "admin_gudang", "owner", "developer"],
   };
+
+  function hasFullAccess(role: UserRole | null | undefined): boolean {
+    return role === "admin_gudang" || role === "owner" || role === "developer";
+  }
 
   // Status transisi yang membutuhkan pemilihan worker, beserta role-nya
   const PENUGASAN_ROLE: Partial<Record<StatusBatch, UserRole>> = {
@@ -221,14 +226,14 @@
 
   // Status yang tersedia untuk admin loncat proses
   let availableTargets = $derived.by((): StatusBatch[] => {
-    if (!batch || ($userRole !== "admin_gudang" && $userRole !== "developer")) return [];
+    if (!batch || !hasFullAccess($userRole)) return [];
     const idx = STATUS_ORDER.indexOf(batch.status);
     return STATUS_ORDER.slice(idx + 1);
   });
 
   // Status tujuan efektif: admin bisa pilih, role lain selalu nextStatus
   let effectiveNext = $derived<StatusBatch | null>(
-    ($userRole === "admin_gudang" || $userRole === "developer")
+    hasFullAccess($userRole)
       ? (fTargetStatus ?? nextStatus)
       : nextStatus,
   );
@@ -237,7 +242,7 @@
   let canUpdate = $derived.by(() => {
     if (!batch || !$userRole) return false;
     if (batch.status === "COMPLETED") return false;
-    if ($userRole === "admin_gudang" || $userRole === "developer")
+    if (hasFullAccess($userRole))
       return availableTargets.length > 0;
     if (!nextStatus) return false;
     const allowed = (ALLOWED_ROLES[batch.status] ?? []) as string[];
@@ -247,11 +252,11 @@
   let canDelete = $derived.by(() => {
     if (!batch || !$userRole) return false;
     if (batch.status === "COMPLETED") return false;
-    return $userRole === "admin_gudang" || $userRole === "developer";
+    return hasFullAccess($userRole);
   });
 
   let canEditKuantitas = $derived(
-    ($userRole === "admin_gudang" || $userRole === "developer") &&
+    hasFullAccess($userRole) &&
       batch !== null &&
       batch.status !== "COMPLETED",
   );

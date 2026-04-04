@@ -56,7 +56,9 @@ export type StokKainInput = Omit<StokKain, 'id' | 'stok_terpakai' | 'updatedAt'>
 
 // ─── MODEL BAJU ──────────────────────────────────────────────────
 
-export type UkuranBaju = 'S' | 'M' | 'L' | 'XL' | 'XXL';
+export type UkuranBaju = 'XS' | 'S' | 'M' | 'L' | 'XL' | 'XXL';
+
+export const UKURAN_ORDER: UkuranBaju[] = ['XS', 'S', 'M', 'L', 'XL', 'XXL'];
 
 export interface KebutuhanKain {
   kain_id: string;

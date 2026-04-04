@@ -7,6 +7,10 @@ import type { UserProfile, UserRole } from '$lib/types';
 export const currentUser = writable<UserProfile | null>(null);
 export const authLoading = writable<boolean>(true);
 
+function isSuperUser(role?: UserRole | null): boolean {
+  return role === 'owner' || role === 'developer';
+}
+
 // Derived: apakah sudah login
 export const isLoggedIn = derived(currentUser, ($user) => $user !== null);
 
@@ -16,7 +20,7 @@ export const userRole = derived(currentUser, ($user): UserRole | null => $user?.
 // Derived: apakah user adalah admin gudang
 export const isAdmin = derived(
   currentUser,
-  ($user) => $user?.role === 'admin_gudang' || $user?.role === 'developer'
+  ($user) => $user?.role === 'admin_gudang' || isSuperUser($user?.role)
 );
 
 // Derived: akses modul Gudang (admin_gudang / owner / developer)
@@ -24,25 +28,20 @@ export const isGudangAccess = derived(
   currentUser,
   ($user) =>
     $user?.role === 'admin_gudang' ||
-    $user?.role === 'owner' ||
-    $user?.role === 'developer'
+    isSuperUser($user?.role)
 );
 
 // Derived: apakah user bisa kelola karyawan (owner / hr / developer)
 export const isKaryawanManager = derived(
   currentUser,
   ($user) =>
-    $user?.role === 'owner' ||
-    $user?.role === 'hr' ||
-    $user?.role === 'developer'
+    isSuperUser($user?.role) || $user?.role === 'hr'
 );
 
 // Derived: owner atau developer (akses penuh)
 export const isOwnerOrDev = derived(
   currentUser,
-  ($user) =>
-    $user?.role === 'owner' ||
-    $user?.role === 'developer'
+  ($user) => isSuperUser($user?.role)
 );
 
 // Inisialisasi listener auth — panggil sekali di root +layout.svelte
