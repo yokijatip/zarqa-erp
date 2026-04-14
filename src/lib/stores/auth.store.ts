@@ -31,6 +31,17 @@ export const isGudangAccess = derived(
     isSuperUser($user?.role)
 );
 
+// Derived: akses modul produksi per divisi + admin
+export const isProduksiAccess = derived(
+  currentUser,
+  ($user) =>
+    $user?.role === 'admin_gudang' ||
+    $user?.role === 'kepala_cutting' ||
+    $user?.role === 'kepala_jahit' ||
+    $user?.role === 'kepala_steam' ||
+    isSuperUser($user?.role)
+);
+
 // Derived: apakah user bisa kelola karyawan (owner / hr / developer)
 export const isKaryawanManager = derived(
   currentUser,

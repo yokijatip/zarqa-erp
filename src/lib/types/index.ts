@@ -126,6 +126,7 @@ export interface BatchProduksi {
   dibuat_oleh: string;
   catatan_admin?: string;
   dari_potongan?: boolean;
+  stok_potongan_synced?: boolean;
   penugasan?: {
     cutting?: PenugasanWorker;
     jahit?: PenugasanWorker;

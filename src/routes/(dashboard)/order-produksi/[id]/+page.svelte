@@ -10,6 +10,7 @@
     deleteBatchProduksi,
     editKuantitasBatch,
     updatePenugasanBatch,
+    sinkronStokPotonganBatch,
   } from "$lib/firebase/batch-produksi";
   import { getKaryawanList } from "$lib/firebase/karyawan";
   import { currentUser, userRole } from "$lib/stores/auth.store";
@@ -181,6 +182,12 @@
     STEAM_IN_PROGRESS:   "Kepala Steam",
   };
 
+  const PENUGASAN_BATCH_KEY: Partial<Record<StatusBatch, "cutting" | "jahit" | "steam">> = {
+    CUTTING_IN_PROGRESS: "cutting",
+    JAHIT_IN_PROGRESS: "jahit",
+    STEAM_IN_PROGRESS: "steam",
+  };
+
   // ── State ──────────────────────────────────────────────────────────
   let batch = $state<BatchProduksi | null>(null);
   let riwayat = $state<RiwayatProses[]>([]);
@@ -192,6 +199,7 @@
   let openUpdate = $state(false);
   let openHapus = $state(false);
   let deletingSaving = $state(false);
+  let stokSyncWarning = $state(false);
 
   // Update form
   let fPcsBerhasil = $state<number>(0);
@@ -216,6 +224,18 @@
   let fEditSteamUid = $state("");
   let savingPenugasan = $state(false);;
 
+  const BACK_LINK_MAP: Record<string, { href: string; label: string }> = {
+    "/produksi/cutting": { href: "/produksi/cutting", label: "Produksi Cutting" },
+    "/produksi/jahit": { href: "/produksi/jahit", label: "Produksi Jahit" },
+    "/produksi/steam": { href: "/produksi/steam", label: "Produksi Steam" },
+  };
+
+  const NEXT_STAGE_ROUTE: Partial<Record<StatusBatch, string>> = {
+    CUTTING_DONE: "/produksi/jahit",
+    JAHIT_DONE: "/produksi/steam",
+    STEAM_DONE: "/order-produksi",
+  };
+
   // ── Derived ────────────────────────────────────────────────────────
   let currentStage = $derived(batch ? STAGE_MAP[batch.status] : null);
   let stageIndex = $derived(
@@ -223,6 +243,10 @@
   );
   let nextStatus = $derived(batch ? (NEXT_STATUS[batch.status] ?? null) : null);
   let actionLabel = $derived(batch ? (ACTION_LABEL[batch.status] ?? "") : "");
+  let backTarget = $derived.by(() => {
+    const from = $page.url.searchParams.get("from");
+    return (from && BACK_LINK_MAP[from]) || { href: "/order-produksi", label: "Order Produksi" };
+  });
 
   // Status yang tersedia untuk admin loncat proses
   let availableTargets = $derived.by((): StatusBatch[] => {
@@ -275,6 +299,15 @@
 
   // Apakah transisi ini membutuhkan pilihan worker (pakai effectiveNext)
   let needsPenugasan = $derived(effectiveNext ? effectiveNext in PENUGASAN_ROLE : false);
+  let existingAssignedWorker = $derived.by(() => {
+    if (!batch || !effectiveNext) return undefined;
+    const key = PENUGASAN_BATCH_KEY[effectiveNext];
+    if (!key) return undefined;
+    return batch.penugasan?.[key];
+  });
+  let shouldShowPenugasanPicker = $derived(
+    needsPenugasan && !existingAssignedWorker,
+  );
   // Daftar worker yang tersedia untuk transisi ini
   let filteredWorkers = $derived.by(() => {
     if (!effectiveNext) return [];
@@ -360,6 +393,22 @@
         return;
       }
       riwayat = await getRiwayatBatch(id);
+
+      // Jika batch masih di STEAM_DONE (belum selesai otomatis), langsung selesaikan
+      if (batch.status === 'STEAM_DONE' && $currentUser) {
+        try {
+          const nama = $currentUser.name || $currentUser.email || $currentUser.uid;
+          await completeBatchProduksi(batch.id, $currentUser.uid, nama, {
+            status_dari: 'STEAM_DONE',
+            pcs_berhasil: batch.pcs_saat_ini ?? batch.total_pcs,
+            pcs_reject: 0,
+          });
+          batch = await getBatchById(id);
+          if (batch) riwayat = await getRiwayatBatch(id);
+        } catch (e) {
+          console.error('[auto-complete] Gagal complete STEAM_DONE:', e);
+        }
+      }
     } catch {
       errorMsg = "Gagal memuat data order produksi.";
     } finally {
@@ -372,7 +421,7 @@
     fPcsBerhasil = batch?.pcs_saat_ini ?? batch?.total_pcs ?? 0;
     fPcsReject = 0;
     fCatatan = "";
-    fPenugasanUid = "";
+    fPenugasanUid = existingAssignedWorker?.uid ?? "";
     fTargetStatus = nextStatus; // default ke step berikutnya
     openUpdate = true;
   }
@@ -394,7 +443,7 @@
       // Siapkan data penugasan jika transisi ini membutuhkan pilihan worker
       const selectedWorker = needsPenugasan && fPenugasanUid
         ? karyawanList.find((k) => k.uid === fPenugasanUid)
-        : undefined;
+        : existingAssignedWorker;
 
       if (snapshotNextStatus === "COMPLETED" && fPcsBerhasil > 0) {
         await completeBatchProduksi(
@@ -420,17 +469,49 @@
             pcs_reject: fPcsReject,
             ...(catatanTrimmed ? { catatan: catatanTrimmed } : {}),
           },
-          selectedWorker ? { uid: selectedWorker.uid, nama: selectedWorker.name } : undefined,
+          selectedWorker
+            ? {
+                uid: selectedWorker.uid,
+                nama: "name" in selectedWorker ? selectedWorker.name : selectedWorker.nama,
+              }
+            : undefined,
         );
+
+        // Setelah status berubah ke CUTTING_DONE, otomatis sync stok potongan
+        if (snapshotNextStatus === 'CUTTING_DONE' && !snapshotBatch.dari_potongan && fPcsBerhasil > 0) {
+          try {
+            await sinkronStokPotonganBatch(snapshotBatch.id);
+          } catch (syncErr) {
+            console.error('[auto-sync] Gagal sync stok potongan:', syncErr);
+            stokSyncWarning = true;
+          }
+        }
+
+        // Setelah STEAM_DONE, langsung selesaikan dan masukkan ke barang jadi
+        if (snapshotNextStatus === 'STEAM_DONE') {
+          await completeBatchProduksi(snapshotBatch.id, $currentUser.uid, namaPencatat, {
+            status_dari: 'STEAM_DONE',
+            pcs_berhasil: fPcsBerhasil,
+            pcs_reject: fPcsReject,
+            ...(catatanTrimmed ? { catatan: catatanTrimmed } : {}),
+          });
+        }
       }
 
       await load();
       openUpdate = false;
       showSuccess(
-        snapshotNextStatus === "COMPLETED"
+        snapshotNextStatus === "COMPLETED" || snapshotNextStatus === "STEAM_DONE"
           ? `Batch selesai! ${fPcsBerhasil} pcs ditambahkan ke stok barang jadi.`
           : `Status diperbarui ke "${STATUS_LABEL[snapshotNextStatus]}".`,
       );
+
+      const nextRoute = NEXT_STAGE_ROUTE[snapshotNextStatus];
+      if (nextRoute) {
+        setTimeout(() => {
+          goto(`${nextRoute}`);
+        }, 600);
+      }
     } catch (e: any) {
       showError(e?.message ?? "Gagal memperbarui status.");
     } finally {
@@ -443,7 +524,7 @@
     deletingSaving = true;
     try {
       await deleteBatchProduksi(batch.id);
-      goto("/order-produksi");
+      goto(backTarget.href);
     } catch (e: unknown) {
       showError(e instanceof Error ? e.message : "Gagal menghapus batch.");
       openHapus = false;
@@ -548,6 +629,20 @@
     <p class="text-sm text-green-800">{successMsg}</p>
   </div>
 {/if}
+{#if stokSyncWarning}
+  <div
+    class="fixed right-5 top-5 z-[9999] flex max-w-sm items-start gap-3 rounded-xl border border-yellow-200 bg-yellow-50 px-4 py-3 shadow-lg"
+  >
+    <svg class="mt-0.5 h-4 w-4 shrink-0 text-yellow-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+    </svg>
+    <div class="flex-1">
+      <p class="text-sm font-medium text-yellow-800">Cutting selesai</p>
+      <p class="mt-0.5 text-xs text-yellow-700">Stok potongan belum otomatis diperbarui. Buka halaman <strong>Stok Potongan</strong> — sinkronisasi akan berjalan otomatis saat halaman dimuat.</p>
+      <button onclick={() => stokSyncWarning = false} class="mt-2 text-xs font-medium text-yellow-700 underline">Tutup</button>
+    </div>
+  </div>
+{/if}
 {#if errorMsg}
   <div
     class="fixed right-5 top-5 z-[9999] flex max-w-sm items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 shadow-lg"
@@ -611,7 +706,7 @@
       </svg>
     </div>
     <p class="text-sm font-medium text-gray-600">Order tidak ditemukan</p>
-    <Button variant="outline" onclick={() => goto("/order-produksi")}>
+    <Button variant="outline" onclick={() => goto(backTarget.href)}>
       ← Kembali ke Daftar
     </Button>
   </div>
@@ -634,7 +729,7 @@
     <Button
       variant="ghost"
       size="sm"
-      onclick={() => goto("/order-produksi")}
+      onclick={() => goto(backTarget.href)}
       class="mb-3 -ml-2 gap-1.5 text-gray-400 hover:text-gray-700"
     >
       <svg
@@ -651,7 +746,7 @@
           d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18"
         />
       </svg>
-      Order Produksi
+      {backTarget.label}
     </Button>
 
     <div class="flex flex-wrap items-start justify-between gap-3">
@@ -740,9 +835,9 @@
         {/if}
         {#if canDelete}
           <Button
-            variant="outline"
+            variant="default"
             onclick={() => (openHapus = true)}
-            class="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+            class="bg-red-600 text-white hover:bg-red-700"
           >
             <svg
               class="h-4 w-4"
@@ -1224,11 +1319,21 @@
           <div>
             <p class="mb-1.5 text-sm font-medium text-gray-700">
               {PENUGASAN_LABEL[effectiveNext] ?? "Petugas"}
-              <span class="ml-1 text-xs font-normal text-gray-400">(opsional)</span>
+              <span class="ml-1 text-xs font-normal text-gray-400">
+                {#if existingAssignedWorker}
+                  (sudah dipilih)
+                {:else}
+                  (wajib)
+                {/if}
+              </span>
             </p>
-            {#if filteredWorkers.length === 0}
+            {#if existingAssignedWorker}
+              <div class="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700">
+                {existingAssignedWorker.nama}
+              </div>
+            {:else if filteredWorkers.length === 0}
               <p class="text-xs text-amber-600">Belum ada akun {PENUGASAN_LABEL[effectiveNext]} di sistem.</p>
-            {:else}
+            {:else if shouldShowPenugasanPicker}
               <Select.Root
                 type="single"
                 value={fPenugasanUid || undefined}

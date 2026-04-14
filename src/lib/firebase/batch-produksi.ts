@@ -8,6 +8,7 @@ import {
 } from 'firebase/firestore';
 import { db } from './config';
 import { getModelBajuById } from './model-baju';
+import { tambahStokPotongan } from './stok-potongan';
 import type { BatchProduksi, BatchProduksiInput, StatusBatch, RiwayatProses, PenugasanWorker, DetailUkuran } from '$lib/types';
 
 const COL = 'batch_produksi';
@@ -198,6 +199,39 @@ export async function updateStatusBatch(
       timestamp: serverTimestamp(),
     });
   });
+}
+
+// Sinkronkan hasil cutting batch ke stok_potongan
+// Dipakai untuk batch CUTTING_DONE yang hasil cuttingnya belum masuk stok_potongan
+export async function sinkronStokPotonganBatch(batchId: string): Promise<void> {
+  const batch = await getBatchById(batchId);
+  if (!batch) throw new Error('Batch tidak ditemukan');
+  if (batch.status !== 'CUTTING_DONE') throw new Error('Hanya batch Cutting Selesai yang bisa disinkronkan');
+  if (batch.dari_potongan) throw new Error('Batch ini bukan batch cutting original');
+  if (batch.stok_potongan_synced) return; // sudah pernah disinkronkan, skip
+
+  const pcsBerhasil = batch.pcs_saat_ini ?? batch.total_pcs;
+  if (pcsBerhasil <= 0 || batch.total_pcs <= 0) throw new Error('PCS batch tidak valid');
+
+  const ratio = pcsBerhasil / batch.total_pcs;
+  let sisa = pcsBerhasil;
+  const detailBerhasil = batch.detail_ukuran
+    .map((du, idx) => {
+      const isLast = idx === batch.detail_ukuran.length - 1;
+      const jumlah = isLast ? sisa : Math.floor(du.jumlah_pcs * ratio);
+      sisa -= jumlah;
+      return { ukuran: du.ukuran, jumlah_pcs: Math.max(0, jumlah) };
+    })
+    .filter((du) => du.jumlah_pcs > 0);
+
+  await tambahStokPotongan(
+    batch.model_id,
+    batch.nama_model,
+    detailBerhasil,
+    { nama_warna: batch.nama_warna, kode_hex_warna: batch.kode_hex_warna },
+  );
+
+  await updateDoc(doc(db, COL, batchId), { stok_potongan_synced: true, updatedAt: serverTimestamp() });
 }
 
 // Selesaikan batch + tambah stok barang jadi dalam satu transaction

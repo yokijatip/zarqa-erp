@@ -1,7 +1,7 @@
 // src/lib/firebase/stok-kain.ts
 import {
   collection, doc, getDocs, getDoc,
-  addDoc, updateDoc, serverTimestamp, runTransaction,
+  addDoc, updateDoc, deleteDoc, serverTimestamp, runTransaction,
   query, orderBy, onSnapshot, deleteField,
   type Unsubscribe,
 } from 'firebase/firestore';
@@ -139,6 +139,11 @@ export async function kurangiStokManual(id: string, jumlah: number): Promise<voi
       updatedAt: serverTimestamp(),
     });
   });
+}
+
+// Hapus jenis kain dari inventaris
+export async function deleteStokKain(id: string): Promise<void> {
+  await deleteDoc(doc(db, COL, id));
 }
 
 // Real-time listener untuk dashboard

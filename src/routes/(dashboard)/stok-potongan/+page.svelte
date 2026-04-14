@@ -1,14 +1,15 @@
 <script lang="ts">
-  import { onMount } from "svelte";
   import { afterNavigate } from "$app/navigation";
-  import { stokPotonganCache } from "$lib/stores/data-cache.svelte";
-  import type { StokPotongan } from "$lib/types";
-  import * as Table from "$lib/components/ui/table";
+  import { stokPotonganCache, batchCache } from "$lib/stores/data-cache.svelte";
+  import { sinkronStokPotonganBatch } from "$lib/firebase/batch-produksi";
+  import type { StokPotongan, UkuranBaju } from "$lib/types";
   import { Button } from "$lib/components/ui/button";
   import StatCard from "$lib/components/StatCard.svelte";
   import ScissorsIcon from "@lucide/svelte/icons/scissors";
   import PackageIcon from "@lucide/svelte/icons/package";
   import PackageXIcon from "@lucide/svelte/icons/package-x";
+
+  const URUTAN_UKURAN: UkuranBaju[] = ['XS', 'S', 'M', 'L', 'XL', 'XXL'];
 
   // ── State ──────────────────────────────────────────────────────────
   let stokList = $state<StokPotongan[]>([]);
@@ -16,18 +17,62 @@
   let errorMsg = $state<string | null>(null);
   let searchQuery = $state("");
 
-  // ── Derived stats ──────────────────────────────────────────────────
-  let totalJenis = $derived(stokList.filter((s) => s.stok_tersedia > 0).length);
-  let totalPcs = $derived(stokList.reduce((sum, s) => sum + s.stok_tersedia, 0));
-  let stokHabis = $derived(stokList.filter((s) => s.stok_tersedia === 0).length);
+  // ── Group per model+warna ─────────────────────────────────────────
+  type ModelGroup = {
+    key: string;
+    model_id: string;
+    nama_model: string;
+    nama_warna?: string;
+    kode_hex_warna?: string;
+    items: StokPotongan[];
+    totalTersedia: number;
+    totalMasuk: number;
+    totalTerpakai: number;
+  };
 
-  let filteredList = $derived.by(() => {
-    if (!searchQuery.trim()) return stokList;
-    const q = searchQuery.toLowerCase().trim();
-    return stokList.filter((s) => s.nama_model.toLowerCase().includes(q));
+  let groupedList = $derived.by((): ModelGroup[] => {
+    const map = new Map<string, ModelGroup>();
+    for (const s of stokList) {
+      // key: model_id + warna (satu model bisa multi warna)
+      const key = `${s.model_id}__${s.nama_warna ?? ''}`;
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          model_id: s.model_id,
+          nama_model: s.nama_model,
+          nama_warna: s.nama_warna,
+          kode_hex_warna: s.kode_hex_warna,
+          items: [],
+          totalTersedia: 0,
+          totalMasuk: 0,
+          totalTerpakai: 0,
+        });
+      }
+      const g = map.get(key)!;
+      g.items.push(s);
+      g.totalTersedia += s.stok_tersedia;
+      g.totalMasuk += s.total_masuk;
+      g.totalTerpakai += s.total_terpakai;
+    }
+    // Urutkan items dalam setiap group sesuai urutan ukuran
+    for (const g of map.values()) {
+      g.items.sort((a, b) => URUTAN_UKURAN.indexOf(a.ukuran) - URUTAN_UKURAN.indexOf(b.ukuran));
+    }
+    return [...map.values()].sort((a, b) => a.nama_model.localeCompare(b.nama_model, 'id'));
   });
 
-  // ── Data ──────────────────────────────────────────────────────────
+  let filteredGroups = $derived.by(() => {
+    if (!searchQuery.trim()) return groupedList;
+    const q = searchQuery.toLowerCase().trim();
+    return groupedList.filter((g) => g.nama_model.toLowerCase().includes(q));
+  });
+
+  // ── Stats ─────────────────────────────────────────────────────────
+  let totalJenis = $derived(stokList.filter((s) => s.stok_tersedia > 0).length);
+  let totalPcs   = $derived(stokList.reduce((sum, s) => sum + s.stok_tersedia, 0));
+  let stokHabis  = $derived(stokList.filter((s) => s.stok_tersedia === 0).length);
+
+  // ── Data ─────────────────────────────────────────────────────────
   async function load(force = false) {
     loading = true;
     errorMsg = null;
@@ -40,41 +85,59 @@
     }
   }
 
-  onMount(() => {
-    load();
+  async function autoSyncPending() {
+    try {
+      const batches = await batchCache.get();
+      const pending = batches.filter(
+        (b) => b.status === 'CUTTING_DONE' && !b.dari_potongan && !b.stok_potongan_synced
+      );
+      if (pending.length === 0) return;
+      let synced = false;
+      for (const b of pending) {
+        try {
+          await sinkronStokPotonganBatch(b.id);
+          synced = true;
+        } catch (e) {
+          console.error('[auto-sync] Gagal sync batch', b.id, e);
+        }
+      }
+      if (synced) {
+        stokPotonganCache.invalidate();
+        batchCache.invalidate();
+        await load(true);
+      }
+    } catch {
+      // silent — auto-sync gagal tidak boleh mengganggu tampilan halaman
+    }
+  }
+
+  afterNavigate(async () => {
+    await load();
+    await autoSyncPending();
   });
 
-  afterNavigate(() => load());
+  function stokColor(stok: number) {
+    if (stok === 0) return 'bg-red-100 text-red-600 border-red-200';
+    if (stok < 10)  return 'bg-amber-50 text-amber-700 border-amber-200';
+    return 'bg-green-50 text-green-700 border-green-200';
+  }
 </script>
 
-<!-- ── Header ─────────────────────────────────────────────────────── -->
+<!-- ── Header ──────────────────────────────────────────────────────── -->
 <div class="mb-5 flex flex-wrap items-start justify-between gap-4">
   <div>
     <h1 class="text-xl font-semibold text-gray-900">Stok Potongan Kain</h1>
-    <p class="mt-0.5 text-sm text-gray-500">
-      Sisa hasil cutting yang belum dikirim ke jahit
-    </p>
+    <p class="mt-0.5 text-sm text-gray-500">Sisa hasil cutting yang belum dikirim ke jahit</p>
   </div>
-  <Button variant="outline" size="sm" onclick={() => load(true)} class="ml-auto">
-    <svg
-      class="h-3.5 w-3.5 {loading ? 'animate-spin' : ''}"
-      xmlns="http://www.w3.org/2000/svg"
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke-width="2"
-      stroke="currentColor"
-    >
-      <path
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"
-      />
+  <Button variant="outline" size="sm" onclick={() => load(true)}>
+    <svg class="h-3.5 w-3.5 {loading ? 'animate-spin' : ''}" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
     </svg>
     Refresh
   </Button>
 </div>
 
-<!-- ── Stats ──────────────────────────────────────────────────────── -->
+<!-- ── Stats ───────────────────────────────────────────────────────── -->
 <div class="mb-5 grid grid-cols-3 gap-4">
   {#if loading}
     {#each Array(3) as _}
@@ -83,47 +146,17 @@
       </div>
     {/each}
   {:else}
-    <StatCard
-      title="Jenis Tersedia"
-      value={totalJenis}
-      icon={ScissorsIcon}
-      footerSubtext="model + ukuran dengan stok > 0"
-    />
-    <StatCard
-      title="Total PCS Tersedia"
-      value={totalPcs}
-      icon={PackageIcon}
-      footerSubtext="pcs potongan siap pakai"
-      class="border-blue-100 bg-blue-50"
-      valueClass="text-blue-700"
-    />
-    <StatCard
-      title="Stok Habis"
-      value={stokHabis}
-      icon={PackageXIcon}
-      footerSubtext="jenis dengan stok 0"
-      class="border-red-100 bg-red-50"
-      valueClass="text-red-700"
-    />
+    <StatCard title="Jenis Tersedia" value={totalJenis} icon={ScissorsIcon} footerSubtext="jenis ukuran dengan stok > 0" />
+    <StatCard title="Total PCS Tersedia" value={totalPcs} icon={PackageIcon} footerSubtext="pcs potongan siap pakai" class="border-blue-100 bg-blue-50" valueClass="text-blue-700" />
+    <StatCard title="Stok Habis" value={stokHabis} icon={PackageXIcon} footerSubtext="jenis ukuran dengan stok 0" class="border-red-100 bg-red-50" valueClass="text-red-700" />
   {/if}
 </div>
 
-<!-- ── Search ─────────────────────────────────────────────────────── -->
+<!-- ── Search ──────────────────────────────────────────────────────── -->
 <div class="mb-4">
   <div class="relative max-w-sm">
-    <svg
-      class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400"
-      xmlns="http://www.w3.org/2000/svg"
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke-width="2"
-      stroke="currentColor"
-    >
-      <path
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"
-      />
+    <svg class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+      <path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
     </svg>
     <input
       type="text"
@@ -134,123 +167,96 @@
   </div>
 </div>
 
-<!-- ── Table ──────────────────────────────────────────────────────── -->
+<!-- ── Content ─────────────────────────────────────────────────────── -->
 {#if errorMsg}
-  <div class="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-    {errorMsg}
+  <div class="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{errorMsg}</div>
+
+{:else if loading}
+  <div class="space-y-3">
+    {#each Array(4) as _}
+      <div class="h-20 animate-pulse rounded-xl border border-gray-100 bg-white"></div>
+    {/each}
   </div>
-{:else}
-  <div class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
-    {#if loading}
-      <div class="space-y-0">
-        {#each Array(6) as _}
-          <div class="flex items-center gap-4 border-b border-gray-50 px-5 py-4">
-            <div class="h-4 w-44 animate-pulse rounded bg-gray-100"></div>
-            <div class="ml-auto h-4 w-20 animate-pulse rounded bg-gray-100"></div>
-            <div class="h-4 w-12 animate-pulse rounded bg-gray-100"></div>
-            <div class="h-4 w-16 animate-pulse rounded bg-gray-100"></div>
-            <div class="h-4 w-16 animate-pulse rounded bg-gray-100"></div>
-            <div class="h-4 w-16 animate-pulse rounded bg-gray-100"></div>
-          </div>
-        {/each}
-      </div>
-    {:else if filteredList.length === 0}
-      <div class="flex flex-col items-center justify-center gap-3 py-16">
-        <div class="flex h-14 w-14 items-center justify-center rounded-full bg-gray-100">
-          <svg
-            class="h-7 w-7 text-gray-300"
-            xmlns="http://www.w3.org/2000/svg"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke-width="1.5"
-            stroke="currentColor"
-          >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              d="M7.848 8.25l1.536.887M7.848 8.25a3 3 0 1 1-5.196-3 3 3 0 0 1 5.196 3Zm1.536.887a2.165 2.165 0 0 1 1.083 1.839c.005.351.054.695.14 1.024M9.384 9.137l2.077 1.199M7.848 15.75l1.536-.887m-1.536.887a3 3 0 1 1-5.196 3 3 3 0 0 1 5.196-3Zm1.536-.887a2.165 2.165 0 0 1 1.083-1.838c.355-.193.704-.402 1.042-.629m-2.125 2.467 2.077-1.199m0-3.328a4.323 4.323 0 0 1 2.068-1.379l5.325-1.628a4.5 4.5 0 0 1 2.48-.044l.803.215-7.794 4.5m-2.882-1.664A4.33 4.33 0 0 0 10.607 12m3.736 0 7.794 4.5-.802.215a4.5 4.5 0 0 1-2.48-.044l-5.326-1.629a4.324 4.324 0 0 1-2.068-1.379M14.343 12l-2.882 1.664"
-            />
-          </svg>
-        </div>
-        {#if searchQuery}
-          <p class="text-sm font-medium text-gray-500">Tidak ada hasil untuk "{searchQuery}"</p>
-          <Button variant="link" size="sm" onclick={() => (searchQuery = "")}>Hapus pencarian</Button>
-        {:else}
-          <p class="text-sm font-medium text-gray-500">Belum ada stok potongan</p>
-          <p class="text-xs text-gray-400">Stok akan muncul saat worker cutting menyimpan sisa potongan</p>
-        {/if}
-      </div>
+
+{:else if filteredGroups.length === 0}
+  <div class="flex flex-col items-center justify-center gap-3 rounded-xl border border-gray-100 bg-white py-16 shadow-sm">
+    <div class="flex h-14 w-14 items-center justify-center rounded-full bg-gray-100">
+      <ScissorsIcon class="h-7 w-7 text-gray-300" />
+    </div>
+    {#if searchQuery}
+      <p class="text-sm font-medium text-gray-500">Tidak ada hasil untuk "{searchQuery}"</p>
+      <Button variant="link" size="sm" onclick={() => (searchQuery = "")}>Hapus pencarian</Button>
     {:else}
-      <Table.Root>
-        <Table.Header>
-          <Table.Row class="bg-gray-50 hover:bg-gray-50">
-            <Table.Head>Nama Model</Table.Head>
-            <Table.Head>Warna</Table.Head>
-            <Table.Head class="text-center">Ukuran</Table.Head>
-            <Table.Head class="text-center">Stok Tersedia</Table.Head>
-            <Table.Head class="text-center">Total Masuk</Table.Head>
-            <Table.Head class="text-center">Total Terpakai</Table.Head>
-          </Table.Row>
-        </Table.Header>
-        <Table.Body>
-          {#each filteredList as stok}
-            <Table.Row>
-              <Table.Cell>
-                <p class="text-sm font-medium text-gray-800">{stok.nama_model}</p>
-              </Table.Cell>
-
-              <Table.Cell>
-                {#if stok.nama_warna}
-                  <span class="inline-flex items-center gap-1.5 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
-                    <span
-                      class="inline-block h-2.5 w-2.5 rounded-full shrink-0"
-                      style="background-color: {stok.kode_hex_warna}"
-                    ></span>
-                    {stok.nama_warna}
-                  </span>
-                {:else}
-                  <span class="text-xs text-gray-400">—</span>
-                {/if}
-              </Table.Cell>
-
-              <Table.Cell class="text-center">
-                <span class="rounded bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-600">
-                  {stok.ukuran}
-                </span>
-              </Table.Cell>
-
-              <Table.Cell class="text-center">
-                <span
-                  class="text-sm font-semibold {stok.stok_tersedia === 0
-                    ? 'text-red-500'
-                    : stok.stok_tersedia < 10
-                      ? 'text-amber-600'
-                      : 'text-gray-800'}"
-                >
-                  {stok.stok_tersedia}
-                </span>
-                <span class="ml-1 text-xs text-gray-400">pcs</span>
-              </Table.Cell>
-
-              <Table.Cell class="text-center">
-                <span class="text-sm text-gray-600">{stok.total_masuk}</span>
-                <span class="ml-1 text-xs text-gray-400">pcs</span>
-              </Table.Cell>
-
-              <Table.Cell class="text-center">
-                <span class="text-sm text-gray-600">{stok.total_terpakai}</span>
-                <span class="ml-1 text-xs text-gray-400">pcs</span>
-              </Table.Cell>
-            </Table.Row>
-          {/each}
-        </Table.Body>
-      </Table.Root>
-
-      <div class="border-t border-gray-100 bg-gray-50 px-5 py-3">
-        <p class="text-xs text-gray-400">
-          Menampilkan {filteredList.length} dari {stokList.length} entri total
-        </p>
-      </div>
+      <p class="text-sm font-medium text-gray-500">Belum ada stok potongan</p>
+      <p class="text-xs text-gray-400">Stok akan muncul otomatis saat cutting selesai</p>
     {/if}
+  </div>
+
+{:else}
+  <!-- ── Table header ─────────────────────────────────────────────── -->
+  <div class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
+    <div class="grid grid-cols-[1fr_auto_auto_auto] items-center border-b border-gray-100 bg-gray-50 px-5 py-2.5 text-xs font-semibold uppercase tracking-wide text-gray-400">
+      <span>Model & Ukuran</span>
+      <span class="w-32 text-right">Total Tersedia</span>
+      <span class="w-28 text-right">Masuk</span>
+      <span class="w-28 text-right">Terpakai</span>
+    </div>
+
+    <div class="divide-y divide-gray-50">
+      {#each filteredGroups as group}
+        {@const habis = group.totalTersedia === 0}
+        <div class="grid grid-cols-[1fr_auto_auto_auto] items-center gap-4 px-5 py-4 {habis ? 'opacity-60' : ''}">
+          <!-- Model + warna + ukuran pills -->
+          <div class="min-w-0">
+            <div class="mb-2 flex flex-wrap items-center gap-2">
+              <p class="text-sm font-semibold text-gray-800">{group.nama_model}</p>
+              {#if group.nama_warna}
+                <span class="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
+                  {#if group.kode_hex_warna}
+                    <span class="h-2 w-2 rounded-full shrink-0" style="background:{group.kode_hex_warna}"></span>
+                  {/if}
+                  {group.nama_warna}
+                </span>
+              {/if}
+            </div>
+            <!-- Ukuran pills -->
+            <div class="flex flex-wrap gap-1.5">
+              {#each group.items as item}
+                <span class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-medium {stokColor(item.stok_tersedia)}">
+                  <span class="font-bold">{item.ukuran}</span>
+                  <span class="text-[11px] opacity-80">{item.stok_tersedia}</span>
+                </span>
+              {/each}
+            </div>
+          </div>
+
+          <!-- Total tersedia -->
+          <div class="w-32 text-right">
+            <span class="text-base font-bold {group.totalTersedia === 0 ? 'text-red-500' : group.totalTersedia < 20 ? 'text-amber-600' : 'text-gray-800'}">
+              {group.totalTersedia}
+            </span>
+            <span class="ml-1 text-xs text-gray-400">pcs</span>
+          </div>
+
+          <!-- Total masuk -->
+          <div class="w-28 text-right">
+            <span class="text-sm text-gray-600">{group.totalMasuk}</span>
+            <span class="ml-1 text-xs text-gray-400">pcs</span>
+          </div>
+
+          <!-- Total terpakai -->
+          <div class="w-28 text-right">
+            <span class="text-sm text-gray-600">{group.totalTerpakai}</span>
+            <span class="ml-1 text-xs text-gray-400">pcs</span>
+          </div>
+        </div>
+      {/each}
+    </div>
+
+    <div class="border-t border-gray-100 bg-gray-50 px-5 py-3">
+      <p class="text-xs text-gray-400">
+        {filteredGroups.length} model · {stokList.length} jenis ukuran total
+      </p>
+    </div>
   </div>
 {/if}

@@ -5,6 +5,7 @@
     restockKain,
     updateStokKain,
     kurangiStokManual,
+    deleteStokKain,
   } from "$lib/firebase/stok-kain";
   import { stokKainCache, warnaCache } from "$lib/stores/data-cache.svelte";
   import type { StokKain, Warna } from "$lib/types";
@@ -57,6 +58,8 @@
   let eNama = $state("");
   let eWarnaId = $state("");
   let eCatatan = $state("");
+  let eKonfirmasiHapus = $state(false);
+  let deleting = $state(false);
 
   // ── Derived ────────────────────────────────────────────────────────
   let totalYard = $derived(
@@ -250,7 +253,28 @@
     eNama = kain.nama_kain;
     eWarnaId = kain.warna_id ?? "";
     eCatatan = kain.catatan ?? "";
+    eKonfirmasiHapus = false;
     openEdit = true;
+  }
+
+  async function submitHapusKain() {
+    if (!editingKain) return;
+    deleting = true;
+    try {
+      await deleteStokKain(editingKain.id);
+      await load(true);
+      openEdit = false;
+      editingKain = null;
+      eKonfirmasiHapus = false;
+      showSuccess(`Kain "${eNama}" berhasil dihapus.`);
+      eNama = "";
+      eWarnaId = "";
+      eCatatan = "";
+    } catch (e: any) {
+      showError(e?.message ?? "Gagal menghapus kain.");
+    } finally {
+      deleting = false;
+    }
   }
 
   async function submitEdit() {
@@ -419,7 +443,12 @@
     {/each}
   </div>
 
-  <Button variant="outline" size="sm" onclick={() => load(true)} class="ml-auto">
+  <Button
+    variant="outline"
+    size="sm"
+    onclick={() => load(true)}
+    class="ml-auto"
+  >
     <svg
       class="h-3.5 w-3.5 {loading ? 'animate-spin' : ''}"
       xmlns="http://www.w3.org/2000/svg"
@@ -512,9 +541,14 @@
 
             <Table.Cell>
               {#if kain.nama_warna}
-                <span class="inline-flex items-center gap-2 rounded-full bg-gray-50 px-2.5 py-1 text-xs font-medium text-gray-700">
+                <span
+                  class="inline-flex items-center gap-2 rounded-full bg-gray-50 px-2.5 py-1 text-xs font-medium text-gray-700"
+                >
                   {#if kain.kode_hex_warna}
-                    <span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-gray-200" style="background-color: {kain.kode_hex_warna}"></span>
+                    <span
+                      class="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-gray-200"
+                      style="background-color: {kain.kode_hex_warna}"
+                    ></span>
                   {/if}
                   {kain.nama_warna}
                 </span>
@@ -673,20 +707,29 @@
       </div>
 
       <div>
-        <label class="mb-1.5 block text-sm font-medium text-gray-700" for="warna-kain">
+        <label
+          class="mb-1.5 block text-sm font-medium text-gray-700"
+          for="warna-kain"
+        >
           Warna
-          <span class="text-xs font-normal text-gray-400">(opsional, ambil dari master warna)</span>
+          <span class="text-xs font-normal text-gray-400"
+            >(opsional, ambil dari master warna)</span
+          >
         </label>
         <Select.Root
           type="single"
           value={fWarnaId || undefined}
-          onValueChange={(val) => (fWarnaId = val === "__none__" ? "" : (val ?? ""))}
+          onValueChange={(val) =>
+            (fWarnaId = val === "__none__" ? "" : (val ?? ""))}
         >
           <Select.Trigger class="w-full" id="warna-kain">
             {#if fWarnaId && getSelectedWarna(fWarnaId)}
               {@const warna = getSelectedWarna(fWarnaId)!}
               <span class="flex items-center gap-2">
-                <span class="inline-block h-3.5 w-3.5 shrink-0 rounded-full border border-gray-200" style="background-color: {warna.kode_hex}"></span>
+                <span
+                  class="inline-block h-3.5 w-3.5 shrink-0 rounded-full border border-gray-200"
+                  style="background-color: {warna.kode_hex}"
+                ></span>
                 {warna.nama_warna}
               </span>
             {:else}
@@ -698,7 +741,10 @@
             {#each warnaList as warna}
               <Select.Item value={warna.id}>
                 <span class="flex items-center gap-2">
-                  <span class="inline-block h-3 w-3 shrink-0 rounded-full border border-gray-200" style="background-color: {warna.kode_hex}"></span>
+                  <span
+                    class="inline-block h-3 w-3 shrink-0 rounded-full border border-gray-200"
+                    style="background-color: {warna.kode_hex}"
+                  ></span>
                   {warna.nama_warna}
                 </span>
               </Select.Item>
@@ -707,7 +753,10 @@
         </Select.Root>
         {#if warnaList.length === 0}
           <p class="mt-1 text-xs text-gray-400">
-            Belum ada warna terdaftar. <a href="/warna" class="text-blue-500 hover:underline">Tambah warna -></a>
+            Belum ada warna terdaftar. <a
+              href="/warna"
+              class="text-blue-500 hover:underline">Tambah warna -></a
+            >
           </p>
         {/if}
       </div>
@@ -825,9 +874,14 @@
             {selectedKain.nama_kain}
           </p>
           {#if selectedKain.nama_warna}
-            <div class="mt-2 inline-flex items-center gap-2 rounded-full bg-white px-2.5 py-1 text-xs font-medium text-gray-700">
+            <div
+              class="mt-2 inline-flex items-center gap-2 rounded-full bg-white px-2.5 py-1 text-xs font-medium text-gray-700"
+            >
               {#if selectedKain.kode_hex_warna}
-                <span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-gray-200" style="background-color: {selectedKain.kode_hex_warna}"></span>
+                <span
+                  class="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-gray-200"
+                  style="background-color: {selectedKain.kode_hex_warna}"
+                ></span>
               {/if}
               {selectedKain.nama_warna}
             </div>
@@ -932,9 +986,14 @@
             {kurangiKain.nama_kain}
           </p>
           {#if kurangiKain.nama_warna}
-            <div class="mt-2 inline-flex items-center gap-2 rounded-full bg-white px-2.5 py-1 text-xs font-medium text-gray-700">
+            <div
+              class="mt-2 inline-flex items-center gap-2 rounded-full bg-white px-2.5 py-1 text-xs font-medium text-gray-700"
+            >
               {#if kurangiKain.kode_hex_warna}
-                <span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-gray-200" style="background-color: {kurangiKain.kode_hex_warna}"></span>
+                <span
+                  class="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-gray-200"
+                  style="background-color: {kurangiKain.kode_hex_warna}"
+                ></span>
               {/if}
               {kurangiKain.nama_warna}
             </div>
@@ -1082,20 +1141,27 @@
       </div>
 
       <div>
-        <label class="mb-1.5 block text-sm font-medium text-gray-700" for="edit-warna-kain">
+        <label
+          class="mb-1.5 block text-sm font-medium text-gray-700"
+          for="edit-warna-kain"
+        >
           Warna
           <span class="text-xs font-normal text-gray-400">(opsional)</span>
         </label>
         <Select.Root
           type="single"
           value={eWarnaId || undefined}
-          onValueChange={(val) => (eWarnaId = val === "__none__" ? "" : (val ?? ""))}
+          onValueChange={(val) =>
+            (eWarnaId = val === "__none__" ? "" : (val ?? ""))}
         >
           <Select.Trigger class="w-full" id="edit-warna-kain">
             {#if eWarnaId && getSelectedWarna(eWarnaId)}
               {@const warna = getSelectedWarna(eWarnaId)!}
               <span class="flex items-center gap-2">
-                <span class="inline-block h-3.5 w-3.5 shrink-0 rounded-full border border-gray-200" style="background-color: {warna.kode_hex}"></span>
+                <span
+                  class="inline-block h-3.5 w-3.5 shrink-0 rounded-full border border-gray-200"
+                  style="background-color: {warna.kode_hex}"
+                ></span>
                 {warna.nama_warna}
               </span>
             {:else}
@@ -1107,7 +1173,10 @@
             {#each warnaList as warna}
               <Select.Item value={warna.id}>
                 <span class="flex items-center gap-2">
-                  <span class="inline-block h-3 w-3 shrink-0 rounded-full border border-gray-200" style="background-color: {warna.kode_hex}"></span>
+                  <span
+                    class="inline-block h-3 w-3 shrink-0 rounded-full border border-gray-200"
+                    style="background-color: {warna.kode_hex}"
+                  ></span>
                   {warna.nama_warna}
                 </span>
               </Select.Item>
@@ -1135,12 +1204,30 @@
     </div>
 
     <Dialog.Footer class="gap-2">
-      <Button variant="outline" onclick={() => (openEdit = false)}>
-        Batal
-      </Button>
-      <Button onclick={submitEdit} disabled={saving || !eNama.trim()}>
-        {saving ? "Menyimpan..." : "Simpan Perubahan"}
-      </Button>
+      {#if eKonfirmasiHapus}
+        <p class="mr-auto text-sm text-red-600">Yakin hapus kain ini?</p>
+        <Button variant="outline" onclick={() => (eKonfirmasiHapus = false)} disabled={deleting}>
+          Batal
+        </Button>
+        <Button variant="destructive" onclick={submitHapusKain} disabled={deleting}>
+          {deleting ? "Menghapus..." : "Ya, Hapus"}
+        </Button>
+      {:else}
+        <Button
+          variant="outline"
+          class="mr-auto border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+          onclick={() => (eKonfirmasiHapus = true)}
+          disabled={saving}
+        >
+          Hapus Kain
+        </Button>
+        <Button variant="outline" onclick={() => (openEdit = false)} disabled={saving}>
+          Batal
+        </Button>
+        <Button onclick={submitEdit} disabled={saving || !eNama.trim()}>
+          {saving ? "Menyimpan..." : "Simpan Perubahan"}
+        </Button>
+      {/if}
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>

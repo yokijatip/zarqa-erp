@@ -8,6 +8,7 @@
   import BarChartIcon from "@lucide/svelte/icons/bar-chart-2";
   import SettingsIcon from "@lucide/svelte/icons/settings";
   import HandbagIcon from "@lucide/svelte/icons/handbag";
+  import FactoryIcon from "@lucide/svelte/icons/factory";
 </script>
 
 <script lang="ts">
@@ -15,7 +16,7 @@
   import NavSecondary from "./nav-secondary.svelte";
   import NavUser from "./nav-user.svelte";
   import * as Sidebar from "$lib/components/ui/sidebar/index.js";
-  import { currentUser, isGudangAccess, isKaryawanManager, isOwnerOrDev } from "$lib/stores/auth.store";
+  import { currentUser, isGudangAccess, isKaryawanManager, isOwnerOrDev, isProduksiAccess, userRole } from "$lib/stores/auth.store";
   import type { ComponentProps } from "svelte";
 
   let {
@@ -44,11 +45,21 @@
       items: [
         { title: "Stok Kain", url: "/stok-kain" },
         { title: "Model Baju", url: "/model-baju" },
-        { title: "Order Produksi", url: "/order-produksi" },
         { title: "Stok Potongan", url: "/stok-potongan" },
         { title: "Barang Jadi", url: "/barang-jadi" },
         { title: "Barang Keluar", url: "/barang-keluar" },
         { title: "Warna", url: "/warna" },
+      ],
+    },
+    {
+      title: "Produksi",
+      url: "/monitor-produksi",
+      icon: FactoryIcon,
+      items: [
+        { title: "Monitor Produksi", url: "/monitor-produksi" },
+        { title: "Produksi Cutting", url: "/produksi/cutting" },
+        { title: "Produksi Jahit", url: "/produksi/jahit" },
+        { title: "Produksi Steam", url: "/produksi/steam" },
       ],
     },
     {
@@ -115,15 +126,35 @@
   ];
 
   const navMain = $derived(
-    allNavMain.filter((item) => {
-      if (item.title === "Gudang")    return $isGudangAccess;
-      if (item.title === "Karyawan")  return $isKaryawanManager;
-      if (item.title === "Penjualan") return $isOwnerOrDev;
-      if (item.title === "Pengiriman") return $isOwnerOrDev;
-      if (item.title === "Keuangan")  return $isOwnerOrDev;
-      if (item.title === "Laporan")   return $isOwnerOrDev;
-      return true; // Dashboard selalu tampil
-    })
+    allNavMain
+      .filter((item) => {
+        if (item.title === "Gudang")     return $isGudangAccess;
+        if (item.title === "Produksi")   return $isProduksiAccess;
+        if (item.title === "Karyawan")   return $isKaryawanManager;
+        if (item.title === "Penjualan")  return $isOwnerOrDev;
+        if (item.title === "Pengiriman") return $isOwnerOrDev;
+        if (item.title === "Keuangan")   return $isOwnerOrDev;
+        if (item.title === "Laporan")    return $isOwnerOrDev;
+        return true;
+      })
+      .map((item) => {
+        if (item.title !== "Produksi") return item;
+        const role = $userRole;
+        const isAdminLike = role === "admin_gudang" || role === "owner" || role === "developer";
+        const subitems = [
+          ...(isAdminLike ? [{ title: "Monitor Produksi", url: "/monitor-produksi" }] : []),
+          ...(role === "kepala_cutting" || isAdminLike ? [{ title: "Produksi Cutting", url: "/produksi/cutting" }] : []),
+          ...(role === "kepala_jahit"   || isAdminLike ? [{ title: "Produksi Jahit",   url: "/produksi/jahit"   }] : []),
+          ...(role === "kepala_steam"   || isAdminLike ? [{ title: "Produksi Steam",   url: "/produksi/steam"   }] : []),
+        ];
+        // Arahkan top-level klik ke halaman relevan per role
+        const topUrl =
+          role === "kepala_cutting" ? "/produksi/cutting" :
+          role === "kepala_jahit"   ? "/produksi/jahit"   :
+          role === "kepala_steam"   ? "/produksi/steam"   :
+          "/monitor-produksi";
+        return { ...item, url: topUrl, items: subitems };
+      })
   );
 </script>
 
