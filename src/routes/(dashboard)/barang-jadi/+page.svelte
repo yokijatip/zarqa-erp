@@ -1,5 +1,6 @@
 <script lang="ts">
   import { goto, afterNavigate } from "$app/navigation";
+  import { onMount } from "svelte";
   import { tambahStokBarangJadi } from "$lib/firebase/barang-jadi";
   import { barangJadiCache, modelBajuCache } from "$lib/stores/data-cache.svelte";
   import { UKURAN_ORDER, type StokBarangJadi, type UkuranBaju, type ModelBaju } from "$lib/types";
@@ -10,7 +11,6 @@
   import ShirtIcon from "@lucide/svelte/icons/shirt";
   import PackageIcon from "@lucide/svelte/icons/package";
   import PackageCheckIcon from "@lucide/svelte/icons/package-check";
-  import PackageXIcon from "@lucide/svelte/icons/package-x";
 
   // Threshold stok kritis per ukuran
   const KRITIS_THRESHOLD = 5;
@@ -152,55 +152,33 @@
 
   const STATUS_STYLE = {
     kosong: {
-      card: "bg-gray-50 border-gray-200",
       badge: "bg-gray-100 text-gray-500",
       label: "Habis",
-      dot: "bg-gray-300",
       num: "text-gray-400",
       bar: "bg-gray-300",
-      ukuran: "bg-gray-100 text-gray-500",
+      ukuran: "bg-gray-100 text-gray-600",
     },
     kritis: {
-      card: "bg-red-50/60 border-red-200",
       badge: "bg-red-100 text-red-600",
       label: "Kritis",
-      dot: "bg-red-500",
       num: "text-red-600",
       bar: "bg-red-400",
-      ukuran: "bg-red-100 text-red-700",
+      ukuran: "bg-gray-100 text-gray-700",
     },
     low: {
-      card: "bg-amber-50/40 border-amber-200",
       badge: "bg-amber-100 text-amber-600",
       label: "Menipis",
-      dot: "bg-amber-400",
       num: "text-amber-600",
       bar: "bg-amber-400",
-      ukuran: "bg-amber-100 text-amber-700",
+      ukuran: "bg-gray-100 text-gray-700",
     },
     aman: {
-      card: "bg-white border-gray-100",
       badge: "bg-teal-100 text-teal-700",
       label: "Aman",
-      dot: "bg-teal-400",
       num: "text-gray-900",
       bar: "bg-teal-400",
-      ukuran: "bg-teal-100 text-teal-700",
+      ukuran: "bg-gray-100 text-gray-700",
     },
-  };
-
-  const MODEL_HEADER_STYLE = {
-    kosong: "border-gray-100 bg-gray-50",
-    kritis: "border-red-100 bg-red-50",
-    low: "border-amber-100 bg-amber-50",
-    aman: "border-gray-100 bg-gray-50",
-  };
-
-  const MODEL_NAME_STYLE = {
-    kosong: "text-gray-500",
-    kritis: "text-red-700",
-    low: "text-amber-700",
-    aman: "text-gray-800",
   };
 
   function formatDate(ts: any): string {
@@ -268,6 +246,10 @@
       savingTambah = false;
     }
   }
+
+  // onMount: handles hard refresh (afterNavigate doesn't fire when component
+  // mounts late due to auth guard delaying render past initial navigation)
+  onMount(() => { load(); });
 
   afterNavigate(({ from }) => {
     if (from?.url.pathname.startsWith("/barang-jadi/")) {
@@ -382,96 +364,8 @@
       icon={PackageIcon}
       footerSubtext="pcs dari produksi"
     />
-    <!-- Stat kritis: klik langsung filter -->
-    <button
-      onclick={() => {
-        filterStatus =
-          modelKritis > 0 ? "kritis" : modelKosong > 0 ? "kosong" : "semua";
-      }}
-      class="group rounded-xl border text-left shadow-sm transition {modelKritis >
-      0
-        ? 'border-red-200 bg-red-50 hover:bg-red-100'
-        : modelKosong > 0
-          ? 'border-amber-100 bg-amber-50 hover:bg-amber-100'
-          : 'border-gray-100 bg-white hover:bg-gray-50'} p-4"
-    >
-      <div class="flex items-start justify-between">
-        <p
-          class="text-xs font-medium uppercase tracking-wider {modelKritis > 0
-            ? 'text-red-500'
-            : modelKosong > 0
-              ? 'text-amber-500'
-              : 'text-gray-400'}"
-        >
-          Perlu Perhatian
-        </p>
-        <PackageXIcon
-          class="h-4 w-4 {modelKritis > 0
-            ? 'text-red-400'
-            : modelKosong > 0
-              ? 'text-amber-400'
-              : 'text-gray-300'}"
-        />
-      </div>
-      <p
-        class="mt-1.5 text-2xl font-bold {modelKritis > 0
-          ? 'text-red-700'
-          : modelKosong > 0
-            ? 'text-amber-600'
-            : 'text-gray-900'}"
-      >
-        {modelKritis + modelKosong}
-      </p>
-      <p
-        class="text-xs {modelKritis > 0
-          ? 'text-red-500'
-          : modelKosong > 0
-            ? 'text-amber-500'
-            : 'text-gray-400'}"
-      >
-        {modelKritis} kritis · {modelKosong} habis
-        {#if modelKritis + modelKosong > 0}
-          <span class="ml-1 opacity-60 group-hover:opacity-100">→ filter</span>
-        {/if}
-      </p>
-    </button>
   {/if}
 </div>
-
-<!-- ── Alert Banner jika ada yang kritis ──────────────────────────── -->
-{#if !loading && modelKritis > 0}
-  <div
-    class="mb-4 flex items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3"
-  >
-    <svg
-      class="h-4 w-4 shrink-0 text-red-500"
-      xmlns="http://www.w3.org/2000/svg"
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke-width="2"
-      stroke="currentColor"
-    >
-      <path
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z"
-      />
-    </svg>
-    <p class="flex-1 text-sm text-red-700">
-      <span class="font-semibold">{modelKritis} model</span> memiliki ukuran
-      dengan stok ≤{KRITIS_THRESHOLD} pcs — segera rencanakan produksi ulang.
-    </p>
-    <button
-      onclick={() => {
-        filterStatus = "kritis";
-        sortBy = "kritis";
-      }}
-      class="shrink-0 rounded-lg bg-red-100 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-200 transition"
-    >
-      Lihat Semua
-    </button>
-  </div>
-{/if}
 
 <!-- ── Filter & Sort Bar ──────────────────────────────────────────── -->
 <div class="mb-4 flex flex-wrap items-center gap-3">
@@ -615,38 +509,15 @@
       {@const statusModel = getStatusModel(group)}
       {@const st = STATUS_STYLE[statusModel]}
       {@const totalGrup = getTotalTersedia(group)}
-      {@const totalMasukG = group.items.reduce((s, i) => s + i.total_masuk, 0)}
-      {@const totalKeluarG = group.items.reduce(
-        (s, i) => s + i.total_keluar,
-        0,
-      )}
-      {@const pctSisa =
-        totalMasukG > 0 ? Math.round((totalGrup / totalMasukG) * 100) : 0}
-      {@const ukuranKritis = group.items.filter(
-        (i) => getUkuranStatus(i) === "kritis",
-      ).length}
-      {@const ukuranLow = group.items.filter(
-        (i) => getUkuranStatus(i) === "low",
-      ).length}
-
-      <div
-        class="overflow-hidden rounded-xl border {statusModel === 'kritis'
-          ? 'border-red-200'
-          : statusModel === 'low'
-            ? 'border-amber-200'
-            : statusModel === 'kosong'
-              ? 'border-gray-200'
-              : 'border-gray-100'} bg-white shadow-sm"
-      >
+<div class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
         <!-- ── Model Header ── -->
-        <div class="border-b {MODEL_HEADER_STYLE[statusModel]} px-5 py-3">
+        <div class="border-b border-gray-100 bg-gray-50 px-5 py-3">
           <div class="flex flex-wrap items-center justify-between gap-2">
             <!-- Kiri: nama + badges -->
             <div class="flex items-center gap-2.5">
-              <span class="h-2.5 w-2.5 shrink-0 rounded-full {st.dot}"></span>
               <a
                 href="/barang-jadi/{group.model_id}"
-                class="text-sm font-semibold {MODEL_NAME_STYLE[statusModel]} hover:underline"
+                class="text-sm font-semibold text-gray-800 hover:underline"
               >
                 {group.nama_model}
               </a>
@@ -658,57 +529,13 @@
                   {group.nama_warna}
                 </span>
               {/if}
-              <!-- Status badge -->
-              <span
-                class="rounded-full px-2 py-0.5 text-[11px] font-semibold {st.badge}"
-              >
-                {st.label}
-              </span>
-              <!-- Ukuran kritis/low badges -->
-              {#if ukuranKritis > 0}
-                <span
-                  class="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-medium text-red-600"
-                >
-                  {ukuranKritis} ukuran kritis
-                </span>
-              {/if}
-              {#if ukuranLow > 0}
-                <span
-                  class="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-600"
-                >
-                  {ukuranLow} ukuran menipis
-                </span>
-              {/if}
             </div>
 
-            <!-- Kanan: ringkasan angka -->
-            <div class="flex items-center gap-4 text-xs text-gray-500">
+            <!-- Kanan: total + tombol detail -->
+            <div class="flex items-center gap-3 text-xs text-gray-500">
               <div class="text-right">
-                <p
-                  class="font-semibold {statusModel === 'kosong'
-                    ? 'text-gray-400'
-                    : statusModel === 'kritis'
-                      ? 'text-red-600'
-                      : statusModel === 'low'
-                        ? 'text-amber-600'
-                        : 'text-teal-700'} text-base leading-tight"
-                >
-                  {totalGrup}
-                </p>
+                <p class="text-base font-semibold leading-tight text-gray-800">{totalGrup}</p>
                 <p>pcs tersedia</p>
-              </div>
-              <div class="h-8 w-px bg-gray-200"></div>
-              <div class="text-right">
-                <p class="font-semibold text-gray-700">{totalMasukG}</p>
-                <p>masuk</p>
-              </div>
-              <div class="text-right">
-                <p class="font-semibold text-gray-700">{totalKeluarG}</p>
-                <p>keluar</p>
-              </div>
-              <div class="text-right">
-                <p class="font-semibold text-gray-700">{pctSisa}%</p>
-                <p>sisa</p>
               </div>
               <div class="h-8 w-px bg-gray-200"></div>
               <a
@@ -720,16 +547,6 @@
             </div>
           </div>
 
-          <!-- Progress bar total model -->
-          <div class="mt-2.5 flex items-center gap-2">
-            <div class="h-1.5 flex-1 rounded-full bg-gray-200">
-              <div
-                class="h-1.5 rounded-full transition-all {st.bar}"
-                style="width: {pctSisa}%"
-              ></div>
-            </div>
-            <span class="text-[10px] text-gray-400">{pctSisa}% stok awal</span>
-          </div>
         </div>
 
         <!-- ── Ukuran Grid ── -->
@@ -744,12 +561,8 @@
           {#each group.items as item}
             {@const uStatus = getUkuranStatus(item)}
             {@const uSt = STATUS_STYLE[uStatus]}
-            {@const pct =
-              item.total_masuk > 0
-                ? Math.round((item.stok_tersedia / item.total_masuk) * 100)
-                : 0}
 
-            <div class="p-4 {uStatus !== 'aman' ? uSt.card.split(' ')[0] : ''}">
+            <div class="p-4">
               <!-- Ukuran badge + status -->
               <div class="mb-2.5 flex items-center justify-between gap-1">
                 <span
@@ -772,49 +585,9 @@
               </p>
               <p class="mt-0.5 text-[11px] text-gray-400">pcs tersedia</p>
 
-              <!-- Mini stats -->
-              <div
-                class="mt-2 space-y-0.5 text-[11px] text-gray-400 border-t border-gray-100 pt-2"
-              >
-                <p class="flex justify-between">
-                  <span>Masuk</span>
-                  <span class="font-medium text-gray-600"
-                    >{item.total_masuk}</span
-                  >
-                </p>
-                <p class="flex justify-between">
-                  <span>Keluar</span>
-                  <span class="font-medium text-gray-600"
-                    >{item.total_keluar}</span
-                  >
-                </p>
-              </div>
-
-              <!-- Progress bar per ukuran -->
-              {#if item.total_masuk > 0}
-                <div class="mt-2 h-1.5 w-full rounded-full bg-gray-100">
-                  <div
-                    class="h-1.5 rounded-full {uSt.bar}"
-                    style="width: {pct}%"
-                  ></div>
-                </div>
-                <p class="mt-0.5 text-[10px] text-gray-400">{pct}% sisa</p>
-              {/if}
-
-              <!-- Threshold warning -->
-              {#if uStatus === "kritis" && item.stok_tersedia > 0}
-                <p class="mt-1.5 text-[10px] font-medium text-red-500">
-                  ≤ {KRITIS_THRESHOLD} pcs!
-                </p>
-              {:else if uStatus === "low"}
-                <p class="mt-1.5 text-[10px] font-medium text-amber-500">
-                  ≤ {LOW_THRESHOLD} pcs
-                </p>
-              {/if}
-
               <!-- Last update -->
               {#if item.updatedAt}
-                <p class="mt-1.5 text-[10px] text-gray-300">
+                <p class="mt-2 text-[10px] text-gray-300">
                   {formatDate(item.updatedAt)}
                 </p>
               {/if}

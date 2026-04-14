@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { catatBarangKeluar } from "$lib/firebase/barang-jadi";
-  import { barangJadiCache, barangKeluarCache } from "$lib/stores/data-cache.svelte";
+  import { catatBarangKeluar, getRiwayatBarangKeluarByPeriod } from "$lib/firebase/barang-jadi";
+  import { barangJadiCache } from "$lib/stores/data-cache.svelte";
   import { currentUser, userRole } from "$lib/stores/auth.store";
   import { UKURAN_ORDER, type StokBarangJadi, type BarangKeluar, type UkuranBaju } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
@@ -14,7 +14,7 @@
   import PackageCheckIcon from "@lucide/svelte/icons/package-check";
   import BoxesIcon from "@lucide/svelte/icons/boxes";
   import ShirtIcon from "@lucide/svelte/icons/shirt";
-  import { type DateRange, filterByRange, getPeriodRange } from "$lib/period";
+  import { type DateRange, getPeriodRange } from "$lib/period";
   import PeriodSelector from "$lib/components/period-selector.svelte";
 
   // ── State ──────────────────────────────────────────────────────────
@@ -38,7 +38,6 @@
   let canCatat = $derived(
     $userRole === "admin_gudang" ||
       $userRole === "owner" ||
-      $userRole === "kepala_keluar" ||
       $userRole === "developer",
   );
 
@@ -82,10 +81,8 @@
     fModelId !== "" && fTujuan.trim() !== "" && totalPcs > 0,
   );
 
-  // Filter riwayat berdasarkan periode
-  let riwayatPeriod = $derived(
-    filterByRange(riwayat, dateRange, (r) => r.tanggal_keluar),
-  );
+  // riwayat sudah difilter dari Firestore sesuai periode — tidak perlu filter ulang
+  let riwayatPeriod = $derived(riwayat);
 
   // Stats (totalPengiriman & totalPcsKeluar ikut periode; stok & model = current state)
   let totalPengiriman = $derived(riwayatPeriod.length);
@@ -161,7 +158,7 @@
     try {
       [stokList, riwayat] = await Promise.all([
         barangJadiCache.get(force),
-        barangKeluarCache.get(force),
+        getRiwayatBarangKeluarByPeriod(dateRange),
       ]);
     } catch {
       showError("Gagal memuat data. Periksa koneksi Firebase.");
@@ -169,6 +166,14 @@
       loading = false;
     }
   }
+
+  // Re-fetch riwayat saat periode berubah
+  $effect(() => {
+    const range = dateRange;
+    getRiwayatBarangKeluarByPeriod(range).then((data) => {
+      riwayat = data;
+    });
+  });
 
   // ── Actions ──────────────────────────────────────────────────────
   function bukaCatat() {

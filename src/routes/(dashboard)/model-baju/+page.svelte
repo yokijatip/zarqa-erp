@@ -1,5 +1,6 @@
 <script lang="ts">
   import { afterNavigate } from "$app/navigation";
+  import { onMount } from "svelte";
   import {
     addModelBaju,
     updateModelBaju,
@@ -267,6 +268,8 @@
       saving = false;
     }
   }
+
+  onMount(() => { load(); });
 
   afterNavigate(({ from }) => {
     if (from?.url.pathname.startsWith("/model-baju/")) {

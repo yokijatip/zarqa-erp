@@ -2,7 +2,7 @@
 import {
   collection, doc, getDocs,
   serverTimestamp, runTransaction,
-  query, orderBy, where,
+  query, orderBy, where, limit, Timestamp,
 } from 'firebase/firestore';
 import { db } from './config';
 import type { StokBarangJadi, BarangKeluar, BarangKeluarInput } from '$lib/types';
@@ -175,9 +175,55 @@ export async function setStokManual(stokId: string, jumlahBaru: number): Promise
 
 // ─── BARANG KELUAR ───────────────────────────────────────────────
 
-// Ambil riwayat barang keluar
+// Ambil riwayat keluar untuk satu model spesifik (halaman detail)
+// Tanpa orderBy agar tidak perlu composite index — sort dilakukan di JS
+export async function getRiwayatKeluarByModel(modelId: string): Promise<BarangKeluar[]> {
+  const q = query(
+    collection(db, COL_KELUAR),
+    where('model_id', '==', modelId),
+    limit(100),
+  );
+  const snap = await getDocs(q);
+  const results = snap.docs.map((d) => ({ id: d.id, ...d.data() }) as BarangKeluar);
+  return results.sort((a, b) => {
+    const ta = a.tanggal_keluar?.toMillis?.() ?? 0;
+    const tb = b.tanggal_keluar?.toMillis?.() ?? 0;
+    return tb - ta;
+  });
+}
+
+// Ambil riwayat barang keluar — hanya 30 hari terakhir, max 200 dokumen (untuk dashboard/cache)
 export async function getRiwayatBarangKeluar(): Promise<BarangKeluar[]> {
-  const q = query(collection(db, COL_KELUAR), orderBy('tanggal_keluar', 'desc'));
+  const since = new Date();
+  since.setDate(since.getDate() - 30);
+  const q = query(
+    collection(db, COL_KELUAR),
+    where('tanggal_keluar', '>=', Timestamp.fromDate(since)),
+    orderBy('tanggal_keluar', 'desc'),
+    limit(200),
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as BarangKeluar);
+}
+
+// Ambil riwayat barang keluar berdasarkan rentang tanggal — untuk halaman Barang Keluar.
+// Jika range null (periode "Semua"), ambil 500 dokumen terbaru saja.
+export async function getRiwayatBarangKeluarByPeriod(
+  range: { start: Date; end: Date } | null,
+): Promise<BarangKeluar[]> {
+  const q = range
+    ? query(
+        collection(db, COL_KELUAR),
+        where('tanggal_keluar', '>=', Timestamp.fromDate(range.start)),
+        where('tanggal_keluar', '<=', Timestamp.fromDate(range.end)),
+        orderBy('tanggal_keluar', 'desc'),
+        limit(500),
+      )
+    : query(
+        collection(db, COL_KELUAR),
+        orderBy('tanggal_keluar', 'desc'),
+        limit(500),
+      );
   const snap = await getDocs(q);
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as BarangKeluar);
 }

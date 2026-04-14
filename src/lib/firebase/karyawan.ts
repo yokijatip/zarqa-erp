@@ -16,10 +16,8 @@ export const ROLE_LABEL: Record<UserRole, string> = {
   kepala_cutting: 'Kepala Cutting',
   kepala_jahit: 'Kepala Jahit',
   kepala_steam: 'Kepala Steam',
-  kepala_keluar: 'Kepala Keluar',
   developer: 'Developer',
   owner: 'Owner',
-  hr: 'HR',
 };
 
 // Role yang bisa dipilih saat buat akun karyawan
@@ -27,9 +25,7 @@ export const ROLE_KARYAWAN: UserRole[] = [
   'kepala_cutting',
   'kepala_jahit',
   'kepala_steam',
-  'kepala_keluar',
   'admin_gudang',
-  'hr',
   'owner',
 ];
 

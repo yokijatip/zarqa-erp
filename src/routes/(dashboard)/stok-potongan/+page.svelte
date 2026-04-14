@@ -1,5 +1,6 @@
 <script lang="ts">
   import { afterNavigate } from "$app/navigation";
+  import { onMount } from "svelte";
   import { stokPotonganCache, batchCache } from "$lib/stores/data-cache.svelte";
   import { sinkronStokPotonganBatch } from "$lib/firebase/batch-produksi";
   import type { StokPotongan, UkuranBaju } from "$lib/types";
@@ -110,6 +111,11 @@
       // silent — auto-sync gagal tidak boleh mengganggu tampilan halaman
     }
   }
+
+  onMount(async () => {
+    await load();
+    await autoSyncPending();
+  });
 
   afterNavigate(async () => {
     await load();

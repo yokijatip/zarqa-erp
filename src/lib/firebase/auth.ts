@@ -14,11 +14,21 @@ import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { auth, db, storage } from './config';
 import type { UserProfile } from '$lib/types';
 
+// Role yang diizinkan login ke web admin
+const WEB_ALLOWED_ROLES = ['admin_gudang', 'owner', 'developer'];
+
 // Login dengan email & password
 export async function login(email: string, password: string): Promise<UserProfile> {
   const credential = await signInWithEmailAndPassword(auth, email, password);
   const profile = await getUserProfile(credential.user.uid);
-  if (!profile) throw new Error('Profil user tidak ditemukan.');
+  if (!profile) {
+    await signOut(auth);
+    throw new Error('Profil user tidak ditemukan.');
+  }
+  if (!WEB_ALLOWED_ROLES.includes(profile.role)) {
+    await signOut(auth);
+    throw new Error('Akun ini hanya bisa digunakan di aplikasi Zarqa ERP, bukan di web admin.');
+  }
   return profile;
 }
 

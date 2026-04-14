@@ -38,7 +38,8 @@
       "Bash(find /tmp/apk_contents/res -type f -exec ls -lh {})",
       "Read(//c/Dev/Web/zarqa-erp-web/**)",
       "Bash(du -sh /tmp/apk_contents/res/drawable*)",
-      "Bash(find /tmp/apk_contents/res/drawable -type f -exec ls -lh {})"
+      "Bash(find /tmp/apk_contents/res/drawable -type f -exec ls -lh {})",
+      "Bash(npm run:*)"
     ]
   }
 }

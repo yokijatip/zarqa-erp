@@ -4,6 +4,7 @@
   import { ROLE_LABEL } from '$lib/firebase/karyawan';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
+  import * as Dialog from '$lib/components/ui/dialog/index.js';
   import CameraIcon from '@lucide/svelte/icons/camera';
   import LoaderIcon from '@lucide/svelte/icons/loader';
 
@@ -20,36 +21,184 @@
     setTimeout(() => (errorMsg = null), 6000);
   }
 
-  // ── Ganti Foto ────────────────────────────────────────────────────
+  // ── Crop Modal ────────────────────────────────────────────────────
+  const CROP_SIZE = 280; // px — displayed canvas size
+
   let fileInput: HTMLInputElement;
+  let cropOpen    = $state(false);
+  let cropCanvas: HTMLCanvasElement;
+  let cropImg     = $state<HTMLImageElement | null>(null);
+
+  // state for pan + zoom
+  let imgX    = $state(0);
+  let imgY    = $state(0);
+  let scale   = $state(1);
+  let isDragging = $state(false);
+  let dragStartX = 0;
+  let dragStartY = 0;
+  let dragImgX   = 0;
+  let dragImgY   = 0;
+
   let uploadingPhoto = $state(false);
 
-  async function onFileSelected(e: Event) {
+  function onFileSelected(e: Event) {
     const file = (e.target as HTMLInputElement).files?.[0];
-    if (!file || !$currentUser) return;
+    if (!file) return;
 
     if (!file.type.startsWith('image/')) {
       showError('File harus berupa gambar (JPG, PNG, WebP).');
+      if (fileInput) fileInput.value = '';
       return;
     }
-    if (file.size > 2 * 1024 * 1024) {
-      showError('Ukuran foto maksimal 2 MB.');
+    if (file.size > 10 * 1024 * 1024) {
+      showError('Ukuran foto maksimal 10 MB.');
+      if (fileInput) fileInput.value = '';
       return;
     }
 
-    uploadingPhoto = true;
-    try {
-      const url = await uploadProfilePhoto($currentUser.uid, file);
-      $currentUser.photoURL = url;
-      showSuccess('Foto profil berhasil diperbarui.');
-    } catch (e: unknown) {
-      showError(e instanceof Error ? e.message : 'Gagal mengunggah foto.');
-    } finally {
-      uploadingPhoto = false;
-      // Reset input agar file yang sama bisa dipilih ulang
-      if (fileInput) fileInput.value = '';
-    }
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const img = new Image();
+      img.onload = () => {
+        cropImg = img;
+        // Initial scale: fit the short side to CROP_SIZE
+        const fit = CROP_SIZE / Math.min(img.naturalWidth, img.naturalHeight);
+        scale = fit;
+        imgX = (CROP_SIZE - img.naturalWidth * scale) / 2;
+        imgY = (CROP_SIZE - img.naturalHeight * scale) / 2;
+        cropOpen = true;
+        requestAnimationFrame(drawCrop);
+      };
+      img.src = ev.target!.result as string;
+    };
+    reader.readAsDataURL(file);
   }
+
+  function drawCrop() {
+    if (!cropCanvas || !cropImg) return;
+    const ctx = cropCanvas.getContext('2d')!;
+    const S = CROP_SIZE;
+
+    ctx.clearRect(0, 0, S, S);
+
+    // Draw image
+    ctx.drawImage(cropImg, imgX, imgY, cropImg.naturalWidth * scale, cropImg.naturalHeight * scale);
+
+    // Dark overlay outside circle
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.beginPath();
+    ctx.rect(0, 0, S, S);
+    ctx.arc(S / 2, S / 2, S / 2 - 2, 0, Math.PI * 2, true); // cutout
+    ctx.fill('evenodd');
+    ctx.restore();
+
+    // Circle border
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(S / 2, S / 2, S / 2 - 2, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // ── Drag handlers ─────────────────────────────────────────────────
+  function onPointerDown(e: PointerEvent) {
+    isDragging = true;
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+    dragImgX   = imgX;
+    dragImgY   = imgY;
+    (e.currentTarget as HTMLCanvasElement).setPointerCapture(e.pointerId);
+  }
+
+  function onPointerMove(e: PointerEvent) {
+    if (!isDragging || !cropImg) return;
+    imgX = dragImgX + (e.clientX - dragStartX);
+    imgY = dragImgY + (e.clientY - dragStartY);
+    requestAnimationFrame(drawCrop);
+  }
+
+  function onPointerUp() {
+    isDragging = false;
+  }
+
+  function onWheel(e: WheelEvent) {
+    e.preventDefault();
+    if (!cropImg) return;
+    const delta = e.deltaY < 0 ? 1.08 : 0.93;
+    const newScale = Math.min(Math.max(scale * delta, CROP_SIZE / Math.max(cropImg.naturalWidth, cropImg.naturalHeight)), 10);
+    // Scale around canvas center
+    const cx = CROP_SIZE / 2;
+    const cy = CROP_SIZE / 2;
+    imgX = cx - (cx - imgX) * (newScale / scale);
+    imgY = cy - (cy - imgY) * (newScale / scale);
+    scale = newScale;
+    requestAnimationFrame(drawCrop);
+  }
+
+  // ── Crop & upload ─────────────────────────────────────────────────
+  async function confirmCrop() {
+    if (!cropImg || !$currentUser) return;
+
+    // Draw the cropped circle to an output canvas
+    const outputSize = 400;
+    const out = document.createElement('canvas');
+    out.width = outputSize;
+    out.height = outputSize;
+    const ctx = out.getContext('2d')!;
+
+    // Ratio between output and display canvas
+    const ratio = outputSize / CROP_SIZE;
+
+    ctx.beginPath();
+    ctx.arc(outputSize / 2, outputSize / 2, outputSize / 2, 0, Math.PI * 2);
+    ctx.clip();
+
+    ctx.drawImage(
+      cropImg,
+      imgX * ratio,
+      imgY * ratio,
+      cropImg.naturalWidth * scale * ratio,
+      cropImg.naturalHeight * scale * ratio,
+    );
+
+    uploadingPhoto = true;
+    cropOpen = false;
+
+    out.toBlob(
+      async (blob) => {
+        if (!blob || !$currentUser) { uploadingPhoto = false; return; }
+        try {
+          const file = new File([blob], 'profile.jpg', { type: 'image/jpeg' });
+          const url = await uploadProfilePhoto($currentUser.uid, file);
+          $currentUser.photoURL = url;
+          showSuccess('Foto profil berhasil diperbarui.');
+        } catch (err: unknown) {
+          showError(err instanceof Error ? err.message : 'Gagal mengunggah foto.');
+        } finally {
+          uploadingPhoto = false;
+          if (fileInput) fileInput.value = '';
+        }
+      },
+      'image/jpeg',
+      0.9,
+    );
+  }
+
+  function closeCrop() {
+    cropOpen = false;
+    cropImg = null;
+    if (fileInput) fileInput.value = '';
+  }
+
+  // Redraw whenever the canvas becomes visible
+  $effect(() => {
+    if (cropOpen && cropCanvas && cropImg) {
+      requestAnimationFrame(drawCrop);
+    }
+  });
 
   // ── Edit Nama ─────────────────────────────────────────────────────
   let namaBaru     = $state($currentUser?.name ?? '');
@@ -121,6 +270,45 @@
   class="hidden"
   onchange={onFileSelected}
 />
+
+<!-- ── Crop Dialog ─────────────────────────────────────────────────── -->
+<Dialog.Root bind:open={cropOpen}>
+  <Dialog.Content
+    class="w-auto max-w-none p-6"
+    showCloseButton={false}
+    onInteractOutside={(e) => e.preventDefault()}
+  >
+    <Dialog.Header class="mb-4">
+      <Dialog.Title class="text-sm font-semibold text-gray-800">Sesuaikan Foto Profil</Dialog.Title>
+      <Dialog.Description class="text-xs text-gray-500">
+        Geser untuk memposisikan • Scroll untuk zoom
+      </Dialog.Description>
+    </Dialog.Header>
+
+    <!-- Canvas crop area -->
+    <div class="flex justify-center">
+      <canvas
+        bind:this={cropCanvas}
+        width={CROP_SIZE}
+        height={CROP_SIZE}
+        class="cursor-grab rounded-full active:cursor-grabbing"
+        style="width:{CROP_SIZE}px;height:{CROP_SIZE}px"
+        onpointerdown={onPointerDown}
+        onpointermove={onPointerMove}
+        onpointerup={onPointerUp}
+        onpointercancel={onPointerUp}
+        onwheel={onWheel}
+      ></canvas>
+    </div>
+
+    <div class="mt-5 flex justify-end gap-2">
+      <Button variant="outline" onclick={closeCrop}>Batal</Button>
+      <Button onclick={confirmCrop} disabled={uploadingPhoto}>
+        {uploadingPhoto ? 'Mengunggah...' : 'Pakai Foto Ini'}
+      </Button>
+    </div>
+  </Dialog.Content>
+</Dialog.Root>
 
 <!-- ── Toast ──────────────────────────────────────────────────────── -->
 {#if successMsg}

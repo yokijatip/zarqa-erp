@@ -149,7 +149,6 @@
     kepala_cutting: "Kepala Cutting",
     kepala_jahit: "Kepala Jahit",
     kepala_steam: "Kepala Steam",
-    kepala_keluar: "Kepala Barang Keluar",
     admin_gudang: "Admin Gudang",
     owner: "Owner",
     developer: "Developer",
@@ -162,7 +161,7 @@
     JAHIT_IN_PROGRESS: ["kepala_jahit", "admin_gudang", "owner", "developer"],
     JAHIT_DONE: ["kepala_steam", "admin_gudang", "owner", "developer"],
     STEAM_IN_PROGRESS: ["kepala_steam", "admin_gudang", "owner", "developer"],
-    STEAM_DONE: ["kepala_keluar", "admin_gudang", "owner", "developer"],
+    STEAM_DONE: ["admin_gudang", "owner", "developer"],
   };
 
   function hasFullAccess(role: UserRole | null | undefined): boolean {

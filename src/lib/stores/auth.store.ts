@@ -42,11 +42,10 @@ export const isProduksiAccess = derived(
     isSuperUser($user?.role)
 );
 
-// Derived: apakah user bisa kelola karyawan (owner / hr / developer)
+// Derived: apakah user bisa kelola karyawan (owner / developer)
 export const isKaryawanManager = derived(
   currentUser,
-  ($user) =>
-    isSuperUser($user?.role) || $user?.role === 'hr'
+  ($user) => isSuperUser($user?.role)
 );
 
 // Derived: owner atau developer (akses penuh)

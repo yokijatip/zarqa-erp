@@ -16,7 +16,7 @@
   import NavSecondary from "./nav-secondary.svelte";
   import NavUser from "./nav-user.svelte";
   import * as Sidebar from "$lib/components/ui/sidebar/index.js";
-  import { currentUser, isGudangAccess, isKaryawanManager, isOwnerOrDev, isProduksiAccess, userRole } from "$lib/stores/auth.store";
+  import { currentUser, isKaryawanManager, userRole } from "$lib/stores/auth.store";
   import type { ComponentProps } from "svelte";
 
   let {
@@ -27,7 +27,7 @@
   const user = $derived({
     name: $currentUser?.name ?? "Admin",
     email: $currentUser?.email ?? "",
-    avatar: "",
+    avatar: $currentUser?.photoURL ?? "",
   });
 
   const allNavMain = [
@@ -128,13 +128,7 @@
   const navMain = $derived(
     allNavMain
       .filter((item) => {
-        if (item.title === "Gudang")     return $isGudangAccess;
-        if (item.title === "Produksi")   return $isProduksiAccess;
-        if (item.title === "Karyawan")   return $isKaryawanManager;
-        if (item.title === "Penjualan")  return $isOwnerOrDev;
-        if (item.title === "Pengiriman") return $isOwnerOrDev;
-        if (item.title === "Keuangan")   return $isOwnerOrDev;
-        if (item.title === "Laporan")    return $isOwnerOrDev;
+        if (item.title === "Karyawan") return $isKaryawanManager;
         return true;
       })
       .map((item) => {
