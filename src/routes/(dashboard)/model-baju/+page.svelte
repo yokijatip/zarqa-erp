@@ -107,7 +107,7 @@
   function onKainSelect(i: number, kainId: string) {
     const kain = stokKainList.find((k) => k.id === kainId);
     fKainList[i].kain_id = kainId;
-    fKainList[i].nama_kain = kain ? formatKainLabel(kain) : "";
+    fKainList[i].nama_kain = kain ? kain.nama_kain : "";
     fKainList[i].satuan = kain?.satuan ?? "yard";
   }
 
@@ -133,7 +133,7 @@
     fUkuran = [...model.ukuran_tersedia];
     fKainList = model.kebutuhan_kain.map((k) => ({
       kain_id: k.kain_id,
-      nama_kain: formatKainLabel(getKainById(k.kain_id) ?? { nama_kain: k.nama_kain, nama_warna: undefined }),
+      nama_kain: getKainById(k.kain_id)?.nama_kain ?? k.nama_kain,
       satuan: k.satuan ?? 'yard',
       jumlah_per_ukuran: { ...(k.jumlah_per_ukuran ?? {}) } as Partial<Record<UkuranBaju, number | "">>,
     }));
@@ -175,10 +175,7 @@
         warnaCache.get(force),
       ]);
       modelList = models;
-      stokKainList = stokKain.map((k) => ({
-        ...k,
-        nama_kain: formatKainLabel(k),
-      }));
+      stokKainList = stokKain;
       warnaList = warna;
     } catch {
       showError("Gagal memuat data. Periksa koneksi Firebase.");
@@ -586,12 +583,13 @@
               <div class="space-y-1.5">
                 {#each model.kebutuhan_kain as kain}
                   {@const ukuranAda = UKURAN_ORDER.filter((u) => (kain.jumlah_per_ukuran ?? {})[u])}
+                  {@const kainStok = getKainById(kain.kain_id)}
                   <div class="rounded-md bg-gray-50 px-2.5 py-2 text-xs">
                     <!-- Nama kain + badge satuan -->
                     <div class="mb-1.5 flex items-center justify-between">
                       <div class="flex items-center gap-1.5">
                         <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400"></span>
-                        <span class="font-semibold text-gray-700">{kain.nama_kain}</span>
+                        <span class="font-semibold text-gray-700">{kainStok ? formatKainLabel(kainStok) : kain.nama_kain}</span>
                       </div>
                       <span class="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">{kain.satuan}</span>
                     </div>
@@ -996,12 +994,12 @@
                           ? "text-foreground"
                           : "text-muted-foreground"}
                       >
-                        {entry.kain_id ? entry.nama_kain : "— Pilih kain —"}
+                        {entry.kain_id ? formatKainLabel({ nama_kain: entry.nama_kain, nama_warna: getKainById(entry.kain_id)?.nama_warna }) : "— Pilih kain —"}
                       </span>
                     </Select.Trigger>
                     <Select.Content preventScroll={false}>
                       {#each availableKain(i) as kain}
-                        <Select.Item value={kain.id}>{kain.nama_kain}</Select.Item>
+                        <Select.Item value={kain.id}>{formatKainLabel(kain)}</Select.Item>
                       {/each}
                       {#if entry.kain_id && !availableKain(i).find((k) => k.id === entry.kain_id)}
                         <Select.Item value={entry.kain_id}>{entry.nama_kain}</Select.Item>
@@ -1059,7 +1057,7 @@
                 class="grid text-xs"
                 style="grid-template-columns: 1fr {fUkuran.map(() => '2.5rem').join(' ')} 2rem"
               >
-                <span class="truncate text-blue-700">{k.nama_kain}</span>
+                <span class="truncate text-blue-700">{formatKainLabel({ nama_kain: k.nama_kain, nama_warna: getKainById(k.kain_id)?.nama_warna })}</span>
                 {#each fUkuran as u}
                   <span class="text-right font-semibold text-blue-800">
                     {Number(k.jumlah_per_ukuran[u] ?? 0) > 0
