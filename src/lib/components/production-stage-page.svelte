@@ -386,10 +386,10 @@
               {@const isDone = (config.doneStatuses ?? []).includes(batch.status)}
               {@const useQuick = config.quickAction && !isDone}
               <Table.Row
-                class={useQuick ? 'cursor-pointer' : isDone ? 'opacity-60 bg-gray-50/50' : ''}
-                onclick={() => useQuick && openQuickAction(batch)}
-                tabindex={useQuick ? 0 : undefined}
-                onkeydown={(event) => event.key === "Enter" && useQuick && openQuickAction(batch)}
+                class="cursor-pointer {isDone ? 'opacity-60 bg-gray-50/50' : ''}"
+                onclick={() => goto(`/monitor-produksi/${batch.id}`)}
+                tabindex={0}
+                onkeydown={(event) => event.key === "Enter" && goto(`/monitor-produksi/${batch.id}`)}
               >
                 <Table.Cell>
                   <div class="space-y-1">

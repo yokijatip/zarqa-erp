@@ -2,9 +2,15 @@
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
-  import { getBatchById, getRiwayatBatch } from '$lib/firebase/batch-produksi';
-  import type { BatchProduksi, RiwayatProses, StatusBatch } from '$lib/types';
+  import { getBatchById, getRiwayatBatch, updateStatusBatch, completeBatchProduksi, sinkronStokPotonganBatch } from '$lib/firebase/batch-produksi';
+  import { karyawanCache, batchCache } from '$lib/stores/data-cache.svelte';
+  import { userRole, currentUser } from '$lib/stores/auth.store';
+  import type { BatchProduksi, RiwayatProses, StatusBatch, UserProfile, UserRole } from '$lib/types';
   import { STATUS_LABEL } from '$lib/types';
+  import * as Dialog from '$lib/components/ui/dialog';
+  import * as Select from '$lib/components/ui/select';
+  import { Button } from '$lib/components/ui/button';
+  import { Input } from '$lib/components/ui/input';
   import ArrowLeftIcon from '@lucide/svelte/icons/arrow-left';
   import ClockIcon from '@lucide/svelte/icons/clock';
   import UsersIcon from '@lucide/svelte/icons/users';
@@ -13,6 +19,7 @@
   import ZapIcon from '@lucide/svelte/icons/zap';
   import CheckCircleIcon from '@lucide/svelte/icons/check-circle';
   import CircleIcon from '@lucide/svelte/icons/circle';
+  import LoaderIcon from '@lucide/svelte/icons/loader';
 
   const STATUS_STYLE: Record<StatusBatch, string> = {
     PENDING_CUTTING:     'bg-slate-100 text-slate-600',
@@ -44,11 +51,81 @@
     { label: 'Selesai',  statuses: ['COMPLETED'] as StatusBatch[],                                              icon: CheckCircleIcon },
   ];
 
+  // ─── Action config ────────────────────────────────────────────────
+  type ActionInfo = {
+    label: string;
+    nextStatus: StatusBatch;
+    needsWorker: boolean;
+    workerRole?: UserRole;
+    needsPcs: boolean;
+    isFinal: boolean;
+  };
+
+  // Maps current status → what action can be taken
+  function getAction(b: BatchProduksi): ActionInfo | null {
+    switch (b.status) {
+      case 'PENDING_CUTTING':
+        return { label: 'Mulai Cutting', nextStatus: 'CUTTING_IN_PROGRESS', needsWorker: true, workerRole: 'kepala_cutting', needsPcs: false, isFinal: false };
+      case 'CUTTING_IN_PROGRESS':
+        return { label: 'Selesaikan Cutting', nextStatus: 'CUTTING_DONE', needsWorker: false, needsPcs: true, isFinal: false };
+      case 'CUTTING_DONE':
+        // Hanya batch dari_potongan yang bisa dilanjut ke jahit
+        if (!b.dari_potongan) return null;
+        return { label: 'Mulai Jahit', nextStatus: 'JAHIT_IN_PROGRESS', needsWorker: true, workerRole: 'kepala_jahit', needsPcs: false, isFinal: false };
+      case 'JAHIT_IN_PROGRESS':
+        return { label: 'Selesaikan Jahit', nextStatus: 'JAHIT_DONE', needsWorker: false, needsPcs: true, isFinal: false };
+      case 'JAHIT_DONE':
+        return { label: 'Mulai Steam', nextStatus: 'STEAM_IN_PROGRESS', needsWorker: true, workerRole: 'kepala_steam', needsPcs: false, isFinal: false };
+      case 'STEAM_IN_PROGRESS':
+        return { label: 'Selesaikan Steam & Kirim ke Barang Jadi', nextStatus: 'STEAM_DONE', needsWorker: false, needsPcs: true, isFinal: true };
+      default:
+        return null;
+    }
+  }
+
+  const ACTION_ROLES: UserRole[] = ['kepala_cutting', 'kepala_jahit', 'kepala_steam', 'admin_gudang', 'owner', 'developer'];
+
+  // ─── State ────────────────────────────────────────────────────────
   let batch = $state<BatchProduksi | null>(null);
   let riwayat = $state<RiwayatProses[]>([]);
   let loading = $state(true);
   let notFound = $state(false);
+  let karyawanList = $state<UserProfile[]>([]);
 
+  // Action dialog
+  let actionOpen = $state(false);
+  let actionSaving = $state(false);
+  let actionError = $state<string | null>(null);
+  let actionWorkerUid = $state('');
+  let actionPcsBerhasil = $state(0);
+  let actionPcsReject = $state(0);
+
+  let canAction = $derived(
+    !!$userRole && ACTION_ROLES.includes($userRole as UserRole) &&
+    !!batch && getAction(batch) !== null
+  );
+
+  let currentAction = $derived(batch ? getAction(batch) : null);
+
+  let actionWorkers = $derived(
+    currentAction?.workerRole
+      ? karyawanList.filter((k) => k.role === currentAction!.workerRole)
+      : []
+  );
+
+  let actionMaxPcs = $derived(batch ? (batch.pcs_saat_ini ?? batch.total_pcs) : 0);
+
+  let actionFormValid = $derived.by(() => {
+    if (!currentAction) return false;
+    if (currentAction.needsWorker && !actionWorkerUid) return false;
+    if (currentAction.needsPcs) {
+      if (actionPcsBerhasil + actionPcsReject <= 0) return false;
+      if (actionPcsBerhasil + actionPcsReject > actionMaxPcs) return false;
+    }
+    return true;
+  });
+
+  // ─── Helpers ──────────────────────────────────────────────────────
   function stepState(step: typeof STAGE_STEPS[0], currentStatus: StatusBatch): 'done' | 'active' | 'pending' {
     const currentIdx = STAGES.indexOf(currentStatus);
     const stepMax = Math.max(...step.statuses.map(s => STAGES.indexOf(s)));
@@ -76,12 +153,74 @@
     return d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   }
 
+  // ─── Action handlers ──────────────────────────────────────────────
+  function openActionDialog() {
+    if (!batch) return;
+    actionWorkerUid = '';
+    actionPcsBerhasil = batch.pcs_saat_ini ?? batch.total_pcs;
+    actionPcsReject = 0;
+    actionError = null;
+    actionOpen = true;
+  }
+
+  async function submitAction() {
+    if (!batch || !currentAction || !$currentUser || !actionFormValid) return;
+    actionSaving = true;
+    actionError = null;
+    const uid = $currentUser.uid;
+    const nama = $currentUser.name || $currentUser.email || $currentUser.uid;
+    try {
+      const worker = currentAction.needsWorker
+        ? actionWorkers.find((k) => k.uid === actionWorkerUid)
+        : undefined;
+      const pcsBerhasil = currentAction.needsPcs ? actionPcsBerhasil : (batch.pcs_saat_ini ?? batch.total_pcs);
+      const pcsReject  = currentAction.needsPcs ? actionPcsReject  : 0;
+
+      await updateStatusBatch(
+        batch.id,
+        currentAction.nextStatus,
+        uid,
+        nama,
+        { status_dari: batch.status, pcs_berhasil: pcsBerhasil, pcs_reject: pcsReject },
+        worker ? { uid: worker.uid, nama: worker.name } : undefined,
+      );
+
+      // Setelah STEAM_DONE, selesaikan batch & masuk ke barang jadi
+      if (currentAction.isFinal) {
+        await completeBatchProduksi(batch.id, uid, nama, {
+          status_dari: currentAction.nextStatus,
+          pcs_berhasil: pcsBerhasil,
+          pcs_reject: pcsReject,
+        });
+      }
+
+      // Setelah CUTTING_DONE, sinkronkan stok potongan (untuk batch original, bukan dari_potongan)
+      if (currentAction.nextStatus === 'CUTTING_DONE' && !batch.dari_potongan) {
+        try { await sinkronStokPotonganBatch(batch.id); } catch { /* auto-sync will handle */ }
+      }
+
+      batchCache.invalidate();
+      actionOpen = false;
+
+      // Reload data
+      const id = $page.params.id ?? '';
+      const [b, r] = await Promise.all([getBatchById(id), getRiwayatBatch(id)]);
+      if (b) { batch = b; riwayat = r; }
+    } catch (e: any) {
+      actionError = e?.message ?? 'Gagal memperbarui status.';
+    } finally {
+      actionSaving = false;
+    }
+  }
+
+  // ─── Load ─────────────────────────────────────────────────────────
   onMount(async () => {
     const id = $page.params.id ?? '';
-    const [b, r] = await Promise.all([getBatchById(id), getRiwayatBatch(id)]);
+    const [b, r, karyawan] = await Promise.all([getBatchById(id), getRiwayatBatch(id), karyawanCache.get()]);
     if (!b) { notFound = true; loading = false; return; }
     batch = b;
     riwayat = r;
+    karyawanList = karyawan;
     loading = false;
   });
 </script>
@@ -142,9 +281,16 @@
         {/if}
       </div>
     </div>
-    <div class="text-right">
-      <p class="text-2xl font-bold text-gray-900">{(batch.pcs_saat_ini ?? batch.total_pcs).toLocaleString('id-ID')}</p>
-      <p class="text-xs text-gray-400">pcs saat ini</p>
+    <div class="flex items-center gap-3">
+      <div class="text-right">
+        <p class="text-2xl font-bold text-gray-900">{(batch.pcs_saat_ini ?? batch.total_pcs).toLocaleString('id-ID')}</p>
+        <p class="text-xs text-gray-400">pcs saat ini</p>
+      </div>
+      {#if canAction && currentAction}
+        <Button onclick={openActionDialog} class="shrink-0">
+          {currentAction.label}
+        </Button>
+      {/if}
     </div>
   </div>
 
@@ -175,7 +321,7 @@
   </div>
 
   <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
-    <!-- Left col: info + ukuran + kain -->
+    <!-- Left col: info + ukuran + penugasan + kain -->
     <div class="space-y-4 lg:col-span-2">
 
       <!-- Info umum -->
@@ -306,4 +452,120 @@
       {/if}
     </div>
   </div>
+{/if}
+
+<!-- Action Dialog -->
+{#if batch && currentAction}
+  <Dialog.Root bind:open={actionOpen}>
+    <Dialog.Content class="max-w-md">
+      <Dialog.Header>
+        <Dialog.Title>{currentAction.label}</Dialog.Title>
+        <Dialog.Description>
+          <span class="font-medium text-gray-800">{batch.nama_model}</span>
+          {#if batch.nama_warna}
+            · <span class="text-gray-600">{batch.nama_warna}</span>
+          {/if}
+          · {batch.pcs_saat_ini ?? batch.total_pcs} pcs
+          {#if currentAction.isFinal}
+            <span class="mt-1 block text-xs text-emerald-600">Batch akan langsung diselesaikan dan masuk ke stok barang jadi.</span>
+          {/if}
+        </Dialog.Description>
+      </Dialog.Header>
+
+      <div class="space-y-4 py-2">
+        <!-- Ukuran detail -->
+        <div class="flex flex-wrap gap-1">
+          {#each batch.detail_ukuran as ukuran}
+            <span class="rounded bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
+              {ukuran.ukuran}: {ukuran.jumlah_pcs}
+            </span>
+          {/each}
+        </div>
+
+        {#if currentAction.needsWorker}
+          <div class="space-y-1.5">
+            <p class="text-sm font-medium text-gray-700">
+              Petugas {currentAction.workerRole === 'kepala_cutting' ? 'Cutting' : currentAction.workerRole === 'kepala_jahit' ? 'Jahit' : 'Steam'}
+            </p>
+            {#if actionWorkers.length === 0}
+              <p class="text-xs text-amber-600">Belum ada akun petugas yang sesuai di sistem.</p>
+            {:else}
+              <Select.Root
+                type="single"
+                value={actionWorkerUid || undefined}
+                onValueChange={(val) => { actionWorkerUid = val ?? ''; }}
+              >
+                <Select.Trigger class="w-full">
+                  {#if actionWorkerUid}
+                    <span>{actionWorkers.find((k) => k.uid === actionWorkerUid)?.name ?? '—'}</span>
+                  {:else}
+                    <span class="text-muted-foreground">— Pilih petugas —</span>
+                  {/if}
+                </Select.Trigger>
+                <Select.Content preventScroll={false}>
+                  {#each actionWorkers as k}
+                    <Select.Item value={k.uid}>{k.name}</Select.Item>
+                  {/each}
+                </Select.Content>
+              </Select.Root>
+            {/if}
+          </div>
+        {/if}
+
+        {#if currentAction.needsPcs}
+          <div class="rounded-lg border border-gray-100 bg-gray-50 px-4 py-3 text-sm text-gray-600">
+            Stok saat ini: <strong class="text-gray-800">{actionMaxPcs} pcs</strong>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div class="space-y-1.5">
+              <label for="action-pcs-berhasil" class="text-sm font-medium text-gray-700">PCS Berhasil</label>
+              <Input
+                id="action-pcs-berhasil"
+                type="number"
+                min="0"
+                max={actionMaxPcs}
+                bind:value={actionPcsBerhasil}
+                placeholder="0"
+              />
+            </div>
+            <div class="space-y-1.5">
+              <label for="action-pcs-reject" class="text-sm font-medium text-gray-700">PCS Reject</label>
+              <Input
+                id="action-pcs-reject"
+                type="number"
+                min="0"
+                max={actionMaxPcs}
+                bind:value={actionPcsReject}
+                placeholder="0"
+              />
+            </div>
+          </div>
+          {#if actionPcsBerhasil + actionPcsReject > actionMaxPcs}
+            <p class="text-xs text-red-500">Total melebihi stok saat ini ({actionMaxPcs} pcs)</p>
+          {/if}
+        {/if}
+
+        {#if actionError}
+          <p class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{actionError}</p>
+        {/if}
+      </div>
+
+      <Dialog.Footer class="gap-2">
+        <Button variant="outline" onclick={() => { actionOpen = false; }} disabled={actionSaving}>
+          Batal
+        </Button>
+        <Button
+          onclick={submitAction}
+          disabled={actionSaving || !actionFormValid}
+        >
+          {#if actionSaving}
+            <LoaderIcon class="mr-2 h-4 w-4 animate-spin" />
+            Menyimpan...
+          {:else}
+            {currentAction.isFinal ? 'Selesaikan & Kirim ke Barang Jadi' : currentAction.label}
+          {/if}
+        </Button>
+      </Dialog.Footer>
+    </Dialog.Content>
+  </Dialog.Root>
 {/if}
