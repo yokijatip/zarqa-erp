@@ -1,11 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { goto } from '$app/navigation';
   import { subscribeBatchAktif } from '$lib/firebase/batch-produksi';
   import type { BatchProduksi, StatusBatch } from '$lib/types';
   import { STATUS_LABEL } from '$lib/types';
-  import { Button } from '$lib/components/ui/button';
-  import StatCard from '$lib/components/StatCard.svelte';
   import ActivityIcon from '@lucide/svelte/icons/activity';
   import ScissorsIcon from '@lucide/svelte/icons/scissors';
   import ZapIcon from '@lucide/svelte/icons/zap';
@@ -15,6 +12,9 @@
   import LayoutIcon from '@lucide/svelte/icons/layout-dashboard';
   import CalendarIcon from '@lucide/svelte/icons/calendar';
   import XIcon from '@lucide/svelte/icons/x';
+  import AlertTriangleIcon from '@lucide/svelte/icons/triangle-alert';
+  import ClockIcon from '@lucide/svelte/icons/clock';
+  import { goto } from '$app/navigation';
 
   type ViewMode = 'tahap' | 'kepala' | 'model';
 
@@ -25,37 +25,41 @@
     bgColor: string;
     borderColor: string;
     textColor: string;
+    barColor: string;
   };
 
   const STAGE_GROUPS: StageGroup[] = [
     {
       label: 'Divisi Cutting',
       stages: ['PENDING_CUTTING', 'CUTTING_IN_PROGRESS', 'CUTTING_DONE'],
-      dotColor: 'bg-orange-500',
-      bgColor: 'bg-orange-50',
-      borderColor: 'border-orange-200',
-      textColor: 'text-orange-700',
+      dotColor: 'bg-gray-400',
+      bgColor: 'bg-gray-50',
+      borderColor: 'border-gray-200',
+      textColor: 'text-gray-700',
+      barColor: 'bg-gray-400',
     },
     {
       label: 'Divisi Jahit',
       stages: ['JAHIT_IN_PROGRESS', 'JAHIT_DONE'],
-      dotColor: 'bg-blue-500',
-      bgColor: 'bg-blue-50',
-      borderColor: 'border-blue-200',
-      textColor: 'text-blue-700',
+      dotColor: 'bg-gray-400',
+      bgColor: 'bg-gray-50',
+      borderColor: 'border-gray-200',
+      textColor: 'text-gray-700',
+      barColor: 'bg-gray-400',
     },
     {
       label: 'Divisi Steam',
       stages: ['STEAM_IN_PROGRESS', 'STEAM_DONE'],
-      dotColor: 'bg-purple-500',
-      bgColor: 'bg-purple-50',
-      borderColor: 'border-purple-200',
-      textColor: 'text-purple-700',
+      dotColor: 'bg-gray-400',
+      bgColor: 'bg-gray-50',
+      borderColor: 'border-gray-200',
+      textColor: 'text-gray-700',
+      barColor: 'bg-gray-400',
     },
   ];
 
   const STATUS_STYLE: Record<StatusBatch, string> = {
-    PENDING_CUTTING:     'bg-slate-100 text-slate-700',
+    PENDING_CUTTING:     'bg-slate-100 text-slate-600',
     CUTTING_IN_PROGRESS: 'bg-orange-100 text-orange-700',
     CUTTING_DONE:        'bg-yellow-100 text-yellow-700',
     JAHIT_IN_PROGRESS:   'bg-blue-100 text-blue-700',
@@ -71,8 +75,18 @@
   let unsubscribe: (() => void) | null = null;
 
   let viewMode = $state<ViewMode>('tahap');
-  let filterTanggalDari = $state('');
-  let filterTanggalSampai = $state('');
+
+  function defaultDari(): string {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+  }
+  function defaultSampai(): string {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  }
+
+  let filterTanggalDari = $state(defaultDari());
+  let filterTanggalSampai = $state(defaultSampai());
 
   // ── Filtered list ──────────────────────────────────────────────────
   let filteredBatches = $derived.by(() => {
@@ -96,26 +110,22 @@
     return list;
   });
 
-  // ── Stats (from full list, not filtered) ──────────────────────────
-  let totalAktif = $derived(filteredBatches.length);
-  let cuttingCount = $derived(
-    filteredBatches.filter((b) =>
-      (['PENDING_CUTTING', 'CUTTING_IN_PROGRESS', 'CUTTING_DONE'] as StatusBatch[]).includes(b.status)
-    ).length
-  );
-  let jahitCount = $derived(
-    filteredBatches.filter((b) =>
-      (['JAHIT_IN_PROGRESS', 'JAHIT_DONE'] as StatusBatch[]).includes(b.status)
-    ).length
-  );
-  let steamCount = $derived(
-    filteredBatches.filter((b) =>
-      (['STEAM_IN_PROGRESS', 'STEAM_DONE'] as StatusBatch[]).includes(b.status)
-    ).length
-  );
+  // ── Stats per stage ────────────────────────────────────────────────
+  const CUTTING_STAGES: StatusBatch[] = ['PENDING_CUTTING', 'CUTTING_IN_PROGRESS', 'CUTTING_DONE'];
+  const JAHIT_STAGES:   StatusBatch[] = ['JAHIT_IN_PROGRESS', 'JAHIT_DONE'];
+  const STEAM_STAGES:   StatusBatch[] = ['STEAM_IN_PROGRESS', 'STEAM_DONE'];
+
+  let cuttingBatches = $derived(filteredBatches.filter(b => CUTTING_STAGES.includes(b.status)));
+  let jahitBatches   = $derived(filteredBatches.filter(b => JAHIT_STAGES.includes(b.status)));
+  let steamBatches   = $derived(filteredBatches.filter(b => STEAM_STAGES.includes(b.status)));
+
+  let cuttingPcs = $derived(cuttingBatches.reduce((s, b) => s + (b.pcs_saat_ini ?? b.total_pcs), 0));
+  let jahitPcs   = $derived(jahitBatches.reduce((s, b) => s + (b.pcs_saat_ini ?? b.total_pcs), 0));
+  let steamPcs   = $derived(steamBatches.reduce((s, b) => s + (b.pcs_saat_ini ?? b.total_pcs), 0));
+  let terlambatBatches = $derived(filteredBatches.filter(b => hitungHari(b.createdAt) > 5));
 
   // ── Grouping helpers ───────────────────────────────────────────────
-  type Group = { key: string; label: string; sub?: string; batches: BatchProduksi[] };
+  type Group = { key: string; label: string; batches: BatchProduksi[] };
 
   let groupsByKepala = $derived.by((): Group[] => {
     const map = new Map<string, BatchProduksi[]>();
@@ -197,14 +207,11 @@
       </span>
     </p>
   </div>
-  <Button variant="outline" onclick={() => goto('/order-produksi')}>
-    Lihat Semua Order
-  </Button>
 </div>
 
-<!-- ── Stats Row ─────────────────────────────────────────────────── -->
-<div class="mb-5 grid grid-cols-2 gap-4 sm:grid-cols-4">
-  {#if loading}
+<!-- ── Stats Cards ────────────────────────────────────────────────── -->
+{#if loading}
+  <div class="mb-5 grid grid-cols-2 gap-4 sm:grid-cols-4">
     {#each Array(4) as _}
       <div class="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
         <div class="mb-2 h-3 w-16 animate-pulse rounded bg-gray-100"></div>
@@ -212,43 +219,74 @@
         <div class="mt-1 h-3 w-24 animate-pulse rounded bg-gray-100"></div>
       </div>
     {/each}
-  {:else}
-    <StatCard
-      title="Total Aktif"
-      value={totalAktif}
-      icon={ActivityIcon}
-      footerSubtext="batch berjalan"
-    />
-    <StatCard
-      title="Cutting"
-      value={cuttingCount}
-      icon={ScissorsIcon}
-      footerSubtext="batch"
-      class="border-orange-100 bg-orange-50"
-      valueClass="text-orange-700"
-    />
-    <StatCard
-      title="Jahit"
-      value={jahitCount}
-      icon={PackageIcon}
-      footerSubtext="batch"
-      class="border-blue-100 bg-blue-50"
-      valueClass="text-blue-700"
-    />
-    <StatCard
-      title="Steam"
-      value={steamCount}
-      icon={ZapIcon}
-      footerSubtext="batch"
-      class="border-purple-100 bg-purple-50"
-      valueClass="text-purple-700"
-    />
+  </div>
+{:else}
+  <div class="mb-5 grid grid-cols-2 gap-4 sm:grid-cols-4">
+    <!-- Total -->
+    <div class="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
+      <div class="mb-2 flex items-center justify-between">
+        <p class="text-xs font-medium text-gray-500">Total Aktif</p>
+        <ActivityIcon class="h-4 w-4 text-gray-300" />
+      </div>
+      <p class="text-2xl font-bold text-gray-900">{filteredBatches.length}</p>
+      <p class="mt-1 text-xs text-gray-400">{(cuttingPcs + jahitPcs + steamPcs).toLocaleString('id-ID')} pcs total</p>
+    </div>
+    <!-- Cutting -->
+    <div class="rounded-xl border border-orange-100 bg-orange-50 p-4 shadow-sm">
+      <div class="mb-2 flex items-center justify-between">
+        <p class="text-xs font-medium text-orange-600">Cutting</p>
+        <ScissorsIcon class="h-4 w-4 text-orange-300" />
+      </div>
+      <p class="text-2xl font-bold text-orange-700">{cuttingBatches.length}</p>
+      <p class="mt-1 text-xs text-orange-500">{cuttingPcs.toLocaleString('id-ID')} pcs</p>
+    </div>
+    <!-- Jahit -->
+    <div class="rounded-xl border border-blue-100 bg-blue-50 p-4 shadow-sm">
+      <div class="mb-2 flex items-center justify-between">
+        <p class="text-xs font-medium text-blue-600">Jahit</p>
+        <PackageIcon class="h-4 w-4 text-blue-300" />
+      </div>
+      <p class="text-2xl font-bold text-blue-700">{jahitBatches.length}</p>
+      <p class="mt-1 text-xs text-blue-500">{jahitPcs.toLocaleString('id-ID')} pcs</p>
+    </div>
+    <!-- Steam -->
+    <div class="rounded-xl border border-purple-100 bg-purple-50 p-4 shadow-sm">
+      <div class="mb-2 flex items-center justify-between">
+        <p class="text-xs font-medium text-purple-600">Steam</p>
+        <ZapIcon class="h-4 w-4 text-purple-300" />
+      </div>
+      <p class="text-2xl font-bold text-purple-700">{steamBatches.length}</p>
+      <p class="mt-1 text-xs text-purple-500">{steamPcs.toLocaleString('id-ID')} pcs</p>
+    </div>
+  </div>
+
+  <!-- ── Terlambat Alert ──────────────────────────────────────────── -->
+  {#if terlambatBatches.length > 0}
+    <div class="mb-5 flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
+      <AlertTriangleIcon class="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
+      <div class="min-w-0 flex-1">
+        <p class="text-sm font-semibold text-red-800">
+          {terlambatBatches.length} Batch Melebihi 5 Hari
+        </p>
+        <div class="mt-1.5 flex flex-wrap gap-1.5">
+          {#each terlambatBatches as b}
+            {@const hari = hitungHari(b.createdAt)}
+            <span class="inline-flex items-center gap-1 rounded-full border border-red-200 bg-white px-2 py-0.5 text-[11px] font-medium text-red-700">
+              {#if b.kode_hex_warna}
+                <span class="h-1.5 w-1.5 rounded-full shrink-0" style="background:{b.kode_hex_warna}"></span>
+              {/if}
+              {b.nama_model}
+              <span class="font-semibold text-red-600">{hari}h</span>
+            </span>
+          {/each}
+        </div>
+      </div>
+    </div>
   {/if}
-</div>
+{/if}
 
 <!-- ── Filter & View Mode Bar ─────────────────────────────────────── -->
 <div class="mb-5 flex flex-wrap items-end gap-3 rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
-  <!-- Date filters -->
   <div class="flex flex-wrap items-end gap-3 flex-1">
     <div class="flex flex-col gap-1 min-w-[140px]">
       <label for="dari" class="flex items-center gap-1 text-xs font-medium text-gray-500">
@@ -283,7 +321,6 @@
     {/if}
   </div>
 
-  <!-- View mode toggle -->
   <div class="flex items-center gap-1 rounded-lg border border-gray-200 p-1">
     <button
       onclick={() => viewMode = 'tahap'}
@@ -314,7 +351,7 @@
         <div class="h-11 animate-pulse border-b border-gray-100 bg-gray-50"></div>
         <div class="grid grid-cols-1 gap-4 p-5 sm:grid-cols-2 lg:grid-cols-3">
           {#each Array(3) as _}
-            <div class="h-28 animate-pulse rounded-xl bg-gray-50"></div>
+            <div class="h-32 animate-pulse rounded-xl bg-gray-50"></div>
           {/each}
         </div>
       </div>
@@ -333,9 +370,7 @@
       {hasFilter ? 'Coba ubah filter tanggal' : 'Semua produksi telah selesai atau belum ada order yang dibuat'}
     </p>
     {#if !hasFilter}
-      <Button variant="outline" onclick={() => goto('/order-produksi')} class="mt-1">
-        Buat Order Produksi
-      </Button>
+      <p class="mt-1 text-xs text-gray-400">Buat order baru via halaman Model Baju</p>
     {:else}
       <button onclick={clearFilter} class="mt-1 text-xs text-gray-400 underline">Reset filter</button>
     {/if}
@@ -349,15 +384,18 @@
     {#each STAGE_GROUPS as group}
       {@const groupBatches = getBatchesForStage(group.stages)}
       {#if groupBatches.length > 0}
+        {@const groupPcs = groupBatches.reduce((s, b) => s + (b.pcs_saat_ini ?? b.total_pcs), 0)}
         <div class="overflow-hidden rounded-xl border {group.borderColor} bg-white shadow-sm">
           <div class="flex items-center justify-between border-b {group.borderColor} {group.bgColor} px-5 py-3">
             <div class="flex items-center gap-2">
-              <span class="inline-block h-2.5 w-2.5 rounded-full {group.dotColor}"></span>
               <p class="text-sm font-semibold {group.textColor}">{group.label}</p>
             </div>
-            <span class="inline-flex items-center rounded-full border {group.borderColor} {group.bgColor} px-2.5 py-0.5 text-xs font-semibold {group.textColor}">
-              {groupBatches.length} batch
-            </span>
+            <div class="flex items-center gap-2">
+              <span class="text-xs {group.textColor} opacity-70">{groupPcs.toLocaleString('id-ID')} pcs</span>
+              <span class="inline-flex items-center rounded-full border {group.borderColor} {group.bgColor} px-2.5 py-0.5 text-xs font-semibold {group.textColor}">
+                {groupBatches.length} batch
+              </span>
+            </div>
           </div>
           <div class="grid grid-cols-1 gap-4 p-5 sm:grid-cols-2 lg:grid-cols-3">
             {#each groupBatches as batch}
@@ -384,6 +422,7 @@
         acc[lbl].push(b);
         return acc;
       }, {})}
+      {@const groupPcs = group.batches.reduce((s, b) => s + (b.pcs_saat_ini ?? b.total_pcs), 0)}
       <div class="overflow-hidden rounded-xl border {belumDitugaskan ? 'border-gray-200' : 'border-blue-200'} bg-white shadow-sm">
         <div class="flex items-center justify-between border-b {belumDitugaskan ? 'border-gray-200 bg-gray-50' : 'border-blue-200 bg-blue-50'} px-5 py-3">
           <div class="flex items-center gap-2">
@@ -392,11 +431,13 @@
               {belumDitugaskan ? 'Belum Ditugaskan' : group.label}
             </p>
           </div>
-          <span class="inline-flex items-center rounded-full border {belumDitugaskan ? 'border-gray-200 bg-gray-50 text-gray-600' : 'border-blue-200 bg-blue-50 text-blue-700'} px-2.5 py-0.5 text-xs font-semibold">
-            {group.batches.length} batch
-          </span>
+          <div class="flex items-center gap-2">
+            <span class="text-xs {belumDitugaskan ? 'text-gray-400' : 'text-blue-500'}">{groupPcs.toLocaleString('id-ID')} pcs</span>
+            <span class="inline-flex items-center rounded-full border {belumDitugaskan ? 'border-gray-200 bg-gray-50 text-gray-600' : 'border-blue-200 bg-blue-50 text-blue-700'} px-2.5 py-0.5 text-xs font-semibold">
+              {group.batches.length} batch
+            </span>
+          </div>
         </div>
-
         <div class="divide-y divide-gray-50">
           {#each Object.entries(byStatus) as [statusLabel, batches]}
             <div class="px-5 py-4">
@@ -423,36 +464,25 @@
     {#each groupsByModel as group}
       {@const sample = group.batches[0]}
       <div class="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-        <!-- Model header -->
         <div class="flex items-center justify-between border-b border-gray-200 bg-gray-50 px-5 py-3">
           <div class="flex items-center gap-2">
-            {#if sample.kode_hex_warna}
-              <span class="h-3 w-3 rounded-full border border-gray-300 shrink-0" style="background:{sample.kode_hex_warna}"></span>
-            {:else}
-              <ShirtIcon class="h-4 w-4 text-gray-400" />
-            {/if}
+            <ShirtIcon class="h-4 w-4 text-gray-400" />
             <p class="text-sm font-semibold text-gray-800">{group.label}</p>
-            {#if sample.nama_warna}
-              <span class="text-xs text-gray-400">· {sample.nama_warna}</span>
-            {/if}
           </div>
           <span class="inline-flex items-center rounded-full border border-gray-200 bg-white px-2.5 py-0.5 text-xs font-semibold text-gray-600">
-            {group.batches.length} batch · {group.batches.reduce((s, b) => s + (b.pcs_saat_ini ?? b.total_pcs), 0)} pcs
+            {group.batches.length} batch · {group.batches.reduce((s, b) => s + (b.pcs_saat_ini ?? b.total_pcs), 0).toLocaleString('id-ID')} pcs
           </span>
         </div>
-
-        <!-- Batches as rows table -->
         <div class="overflow-x-auto">
           <table class="w-full text-sm">
             <thead>
               <tr class="border-b border-gray-100 bg-gray-50/50">
                 <th class="px-5 py-2.5 text-left text-xs font-semibold text-gray-400">Status</th>
+                <th class="px-5 py-2.5 text-left text-xs font-semibold text-gray-400">Warna</th>
                 <th class="px-5 py-2.5 text-left text-xs font-semibold text-gray-400">Ukuran</th>
                 <th class="px-5 py-2.5 text-right text-xs font-semibold text-gray-400">PCS</th>
                 <th class="px-5 py-2.5 text-left text-xs font-semibold text-gray-400">Kepala Jahit</th>
                 <th class="px-5 py-2.5 text-left text-xs font-semibold text-gray-400">Tanggal</th>
-                <th class="px-5 py-2.5 text-left text-xs font-semibold text-gray-400">Warna</th>
-                <th class="px-5 py-2.5"></th>
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-50">
@@ -461,12 +491,22 @@
                 {@const lambat = hari > 5}
                 <tr
                   class="cursor-pointer transition hover:bg-gray-50"
-                  onclick={() => goto(`/order-produksi/${batch.id}`)}
+                  onclick={() => goto(`/monitor-produksi/${batch.id}`)}
                 >
                   <td class="px-5 py-3">
                     <span class="inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold {STATUS_STYLE[batch.status]}">
                       {STATUS_LABEL[batch.status]}
                     </span>
+                  </td>
+                  <td class="px-5 py-3">
+                    {#if batch.kode_hex_warna}
+                      <span class="inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-xs font-medium text-gray-700">
+                        <span class="h-3 w-3 rounded-full shrink-0 border border-gray-200" style="background:{batch.kode_hex_warna}"></span>
+                        {batch.nama_warna ?? ''}
+                      </span>
+                    {:else}
+                      <span class="text-gray-300">—</span>
+                    {/if}
                   </td>
                   <td class="px-5 py-3">
                     <div class="flex flex-wrap gap-1">
@@ -480,7 +520,9 @@
                   <td class="px-5 py-3 text-right">
                     <span class="font-semibold text-gray-800">{batch.pcs_saat_ini ?? batch.total_pcs}</span>
                     {#if lambat}
-                      <span class="ml-1 inline-flex items-center rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-600">{hari}h</span>
+                      <span class="ml-1 inline-flex items-center gap-0.5 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-600">
+                        <ClockIcon class="h-2.5 w-2.5" />{hari}h
+                      </span>
                     {/if}
                   </td>
                   <td class="px-5 py-3 text-xs text-gray-600">
@@ -491,19 +533,6 @@
                     {/if}
                   </td>
                   <td class="px-5 py-3 text-xs text-gray-500">{formatDate(batch.createdAt)}</td>
-                  <td class="px-5 py-3">
-                    {#if batch.kode_hex_warna}
-                      <div class="flex items-center gap-1.5">
-                        <span class="h-3 w-3 rounded-full border border-gray-200 shrink-0" style="background:{batch.kode_hex_warna}"></span>
-                        <span class="text-xs text-gray-500">{batch.nama_warna ?? ''}</span>
-                      </div>
-                    {:else}
-                      <span class="text-gray-300">—</span>
-                    {/if}
-                  </td>
-                  <td class="px-5 py-3 text-right">
-                    <span class="text-[10px] font-medium text-gray-400 hover:text-gray-600">Detail →</span>
-                  </td>
                 </tr>
               {/each}
             </tbody>
@@ -516,40 +545,46 @@
 
 <!-- ── Shared BatchCard snippet ──────────────────────────────────── -->
 {#snippet BatchCard(batch: BatchProduksi, hari: number, lambat: boolean)}
-  <div
-    class="group cursor-pointer rounded-xl border border-gray-100 bg-gray-50 p-4 transition hover:border-gray-200 hover:bg-white hover:shadow-sm"
-    onclick={() => goto(`/order-produksi/${batch.id}`)}
-    role="button"
-    tabindex="0"
-    onkeydown={(e) => e.key === 'Enter' && goto(`/order-produksi/${batch.id}`)}
-  >
+  <a href="/monitor-produksi/{batch.id}" class="flex flex-col rounded-xl border border-gray-100 bg-gray-50 p-4 transition hover:border-gray-200 hover:bg-white hover:shadow-sm">
+    <!-- Header: nama + hari -->
     <div class="mb-2 flex items-start justify-between gap-2">
-      <div class="flex items-center gap-1.5 min-w-0">
-        {#if batch.kode_hex_warna}
-          <span class="h-2.5 w-2.5 shrink-0 rounded-full border border-gray-200" style="background:{batch.kode_hex_warna}"></span>
-        {/if}
-        <p class="truncate text-sm font-semibold leading-tight text-gray-800">{batch.nama_model}</p>
-      </div>
+      <p class="truncate text-sm font-semibold leading-tight text-gray-800">{batch.nama_model}</p>
       {#if lambat}
-        <span class="inline-flex shrink-0 items-center rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-600">
-          {hari}h
+        <span class="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-600">
+          <ClockIcon class="h-2.5 w-2.5" />{hari}h
         </span>
+      {:else}
+        <span class="shrink-0 text-[10px] text-gray-300">{hari}h</span>
       {/if}
     </div>
 
-    <span class="inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold {STATUS_STYLE[batch.status]}">
+    <!-- Warna chip -->
+    {#if batch.kode_hex_warna}
+      <div class="mb-2">
+        <span class="inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-600">
+          <span class="h-3 w-3 rounded-full shrink-0" style="background:{batch.kode_hex_warna}"></span>
+          {batch.nama_warna ?? 'Warna'}
+        </span>
+      </div>
+    {/if}
+
+    <!-- Status badge -->
+    <span class="mb-2 inline-block self-start rounded-full px-2 py-0.5 text-[10px] font-semibold {STATUS_STYLE[batch.status]}">
       {STATUS_LABEL[batch.status]}
     </span>
 
+    <!-- Kepala jahit -->
     {#if batch.penugasan?.jahit?.nama}
-      <p class="mt-1.5 text-[11px] text-gray-400">
-        <span class="font-medium text-gray-500">{batch.penugasan.jahit.nama}</span>
+      <p class="mb-2 text-[11px] text-gray-400">
+        <UsersIcon class="inline h-2.5 w-2.5" />
+        <span class="ml-0.5 font-medium text-gray-500">{batch.penugasan.jahit.nama}</span>
       </p>
     {/if}
 
-    <div class="mt-3 flex items-center justify-between gap-2">
-      <p class="shrink-0 text-xs text-gray-500">
-        <span class="font-semibold text-gray-700">{batch.pcs_saat_ini ?? batch.total_pcs}</span> pcs
+    <!-- PCS + ukuran -->
+    <div class="mt-auto flex items-center justify-between gap-2 pt-2">
+      <p class="shrink-0 text-xs font-semibold text-gray-700">
+        {(batch.pcs_saat_ini ?? batch.total_pcs).toLocaleString('id-ID')} pcs
       </p>
       <div class="flex flex-wrap justify-end gap-1">
         {#each batch.detail_ukuran as du}
@@ -560,11 +595,9 @@
       </div>
     </div>
 
-    <div class="mt-3 flex items-center justify-between border-t border-gray-100 pt-2.5">
+    <!-- Tanggal -->
+    <div class="mt-2.5 border-t border-gray-100 pt-2">
       <p class="text-[10px] text-gray-400">{formatDate(batch.createdAt)}</p>
-      <p class="text-[10px] font-medium text-gray-400 transition group-hover:text-gray-600">
-        Lihat Detail →
-      </p>
     </div>
-  </div>
+  </a>
 {/snippet}

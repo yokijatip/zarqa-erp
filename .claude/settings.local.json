@@ -39,7 +39,12 @@
       "Read(//c/Dev/Web/zarqa-erp-web/**)",
       "Bash(du -sh /tmp/apk_contents/res/drawable*)",
       "Bash(find /tmp/apk_contents/res/drawable -type f -exec ls -lh {})",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "Bash(npx firebase-tools:*)",
+      "Bash(firebase storage:cors set cors.json)",
+      "Bash(firebase --help)",
+      "Bash(yes)",
+      "Bash(npx svelte-check:*)"
     ]
   }
 }

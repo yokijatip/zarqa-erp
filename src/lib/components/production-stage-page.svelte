@@ -386,10 +386,10 @@
               {@const isDone = (config.doneStatuses ?? []).includes(batch.status)}
               {@const useQuick = config.quickAction && !isDone}
               <Table.Row
-                class={isDone ? 'opacity-60 bg-gray-50/50' : 'cursor-pointer'}
-                onclick={() => useQuick ? openQuickAction(batch) : (!isDone && goto(`/order-produksi/${batch.id}?from=/produksi/${config.key}`))}
-                tabindex={isDone ? undefined : 0}
-                onkeydown={(event) => event.key === "Enter" && (useQuick ? openQuickAction(batch) : (!isDone && goto(`/order-produksi/${batch.id}?from=/produksi/${config.key}`)))}
+                class={useQuick ? 'cursor-pointer' : isDone ? 'opacity-60 bg-gray-50/50' : ''}
+                onclick={() => useQuick && openQuickAction(batch)}
+                tabindex={useQuick ? 0 : undefined}
+                onkeydown={(event) => event.key === "Enter" && useQuick && openQuickAction(batch)}
               >
                 <Table.Cell>
                   <div class="space-y-1">
@@ -427,22 +427,13 @@
                   <p class="text-xs text-gray-600">{formatDate(batch.createdAt)}</p>
                 </Table.Cell>
                 <Table.Cell class="text-right">
-                  <Button
-                    variant={useQuick ? "default" : "outline"}
-                    size="sm"
-                    onclick={(e: MouseEvent) => { e.stopPropagation(); useQuick ? openQuickAction(batch) : goto(`/order-produksi/${batch.id}?from=/produksi/${config.key}`); }}
-                  >
-                    {useQuick ? (batch.status === "JAHIT_DONE" ? "Mulai Steam" : "Selesaikan") : "Detail"}
-
-                  </Button>
                   {#if useQuick}
                     <Button
-                      variant="outline"
+                      variant="default"
                       size="sm"
-                      class="ml-1"
-                      onclick={(e: MouseEvent) => { e.stopPropagation(); goto(`/order-produksi/${batch.id}?from=/produksi/${config.key}`); }}
+                      onclick={(e: MouseEvent) => { e.stopPropagation(); openQuickAction(batch); }}
                     >
-                      Detail
+                      {batch.status === "JAHIT_DONE" ? "Mulai Steam" : "Selesaikan"}
                     </Button>
                   {/if}
                 </Table.Cell>

@@ -825,7 +825,7 @@
         <p class="text-xs text-gray-400">{batchAktif.length} batch aktif</p>
       </div>
       <a
-        href="/order-produksi"
+        href="/monitor-produksi"
         class="text-xs font-medium text-blue-600 hover:underline"
         >Lihat semua →</a
       >

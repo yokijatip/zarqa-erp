@@ -14,7 +14,6 @@
     '/gudang':           [{ label: 'Gudang' }],
     '/stok-kain':        [{ label: 'Gudang', href: '/gudang' }, { label: 'Stok Kain' }],
     '/model-baju':       [{ label: 'Gudang', href: '/gudang' }, { label: 'Model Baju' }],
-    '/order-produksi':   [{ label: 'Gudang', href: '/gudang' }, { label: 'Order Produksi' }],
     '/monitor-produksi': [{ label: 'Monitor Produksi' }],
     '/produksi/cutting': [{ label: 'Monitor Produksi', href: '/monitor-produksi' }, { label: 'Produksi Cutting' }],
     '/produksi/jahit':   [{ label: 'Monitor Produksi', href: '/monitor-produksi' }, { label: 'Produksi Jahit' }],

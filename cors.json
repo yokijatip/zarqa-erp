@@ -1,6 +1,6 @@
 [
   {
-    "origin": ["http://localhost:5173", "http://localhost:4173", "https://zarqa-erp.web.app", "https://zarqa-erp.firebaseapp.com"],
+    "origin": ["http://localhost:5173", "http://localhost:4173", "https://zarqa-erp-firebase.web.app", "https://zarqa-erp-firebase.firebaseapp.com"],
     "method": ["GET", "PUT", "POST", "DELETE", "HEAD"],
     "maxAgeSeconds": 3600,
     "responseHeader": ["Content-Type", "Authorization", "Content-Length", "User-Agent"]

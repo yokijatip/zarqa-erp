@@ -497,9 +497,9 @@
       <Button
         variant="outline"
         class="mt-1"
-        onclick={() => goto("/order-produksi")}
+        onclick={() => goto("/monitor-produksi")}
       >
-        Lihat Order Produksi →
+        Monitor Produksi →
       </Button>
     {/if}
   </div>
