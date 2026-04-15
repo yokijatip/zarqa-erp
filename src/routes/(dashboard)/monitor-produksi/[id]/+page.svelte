@@ -97,8 +97,11 @@
   let actionSaving = $state(false);
   let actionError = $state<string | null>(null);
   let actionWorkerUid = $state('');
-  let actionPcsBerhasil = $state(0);
-  let actionPcsReject = $state(0);
+  // Per-ukuran PCS input — hanya reject yang diinput, berhasil = stok - reject (auto)
+  let actionUkuranReject   = $state<number[]>([]);
+  let actionUkuranBerhasil = $derived(
+    batch?.detail_ukuran.map((du, i) => Math.max(0, du.jumlah_pcs - (Number(actionUkuranReject[i]) || 0))) ?? []
+  );
 
   let canAction = $derived(
     !!$userRole && ACTION_ROLES.includes($userRole as UserRole) &&
@@ -113,14 +116,18 @@
       : []
   );
 
+  // Totals derived dari per-ukuran
+  let actionTotalBerhasil = $derived(actionUkuranBerhasil.reduce((s, n) => s + n, 0));
+  let actionTotalReject   = $derived(actionUkuranReject.reduce((s, n) => s + (Number(n) || 0), 0));
   let actionMaxPcs = $derived(batch ? (batch.pcs_saat_ini ?? batch.total_pcs) : 0);
 
   let actionFormValid = $derived.by(() => {
     if (!currentAction) return false;
     if (currentAction.needsWorker && !actionWorkerUid) return false;
     if (currentAction.needsPcs) {
-      if (actionPcsBerhasil + actionPcsReject <= 0) return false;
-      if (actionPcsBerhasil + actionPcsReject > actionMaxPcs) return false;
+      if (actionTotalReject > actionMaxPcs) return false;
+      // Minimal harus ada 1 pcs berhasil
+      if (actionTotalBerhasil <= 0 && !currentAction.isFinal) return false;
     }
     return true;
   });
@@ -157,8 +164,7 @@
   function openActionDialog() {
     if (!batch) return;
     actionWorkerUid = '';
-    actionPcsBerhasil = batch.pcs_saat_ini ?? batch.total_pcs;
-    actionPcsReject = 0;
+    actionUkuranReject = batch.detail_ukuran.map(() => 0);
     actionError = null;
     actionOpen = true;
   }
@@ -173,8 +179,16 @@
       const worker = currentAction.needsWorker
         ? actionWorkers.find((k) => k.uid === actionWorkerUid)
         : undefined;
-      const pcsBerhasil = currentAction.needsPcs ? actionPcsBerhasil : (batch.pcs_saat_ini ?? batch.total_pcs);
-      const pcsReject  = currentAction.needsPcs ? actionPcsReject  : 0;
+      const pcsBerhasil = currentAction.needsPcs ? actionTotalBerhasil : (batch.pcs_saat_ini ?? batch.total_pcs);
+      const pcsReject   = currentAction.needsPcs ? actionTotalReject   : 0;
+
+      // Buat detail_ukuran baru berisi hasil berhasil per ukuran
+      const newDetailUkuran = currentAction.needsPcs
+        ? batch.detail_ukuran.map((du, i) => ({
+            ukuran: du.ukuran,
+            jumlah_pcs: Number(actionUkuranBerhasil[i]) || 0,
+          })).filter((du) => du.jumlah_pcs > 0)
+        : undefined;
 
       await updateStatusBatch(
         batch.id,
@@ -183,6 +197,7 @@
         nama,
         { status_dari: batch.status, pcs_berhasil: pcsBerhasil, pcs_reject: pcsReject },
         worker ? { uid: worker.uid, nama: worker.name } : undefined,
+        newDetailUkuran,
       );
 
       // Setelah STEAM_DONE, selesaikan batch & masuk ke barang jadi
@@ -466,22 +481,10 @@
             · <span class="text-gray-600">{batch.nama_warna}</span>
           {/if}
           · {batch.pcs_saat_ini ?? batch.total_pcs} pcs
-          {#if currentAction.isFinal}
-            <span class="mt-1 block text-xs text-emerald-600">Batch akan langsung diselesaikan dan masuk ke stok barang jadi.</span>
-          {/if}
         </Dialog.Description>
       </Dialog.Header>
 
       <div class="space-y-4 py-2">
-        <!-- Ukuran detail -->
-        <div class="flex flex-wrap gap-1">
-          {#each batch.detail_ukuran as ukuran}
-            <span class="rounded bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
-              {ukuran.ukuran}: {ukuran.jumlah_pcs}
-            </span>
-          {/each}
-        </div>
-
         {#if currentAction.needsWorker}
           <div class="space-y-1.5">
             <p class="text-sm font-medium text-gray-700">
@@ -513,35 +516,55 @@
         {/if}
 
         {#if currentAction.needsPcs}
-          <div class="rounded-lg border border-gray-100 bg-gray-50 px-4 py-3 text-sm text-gray-600">
-            Stok saat ini: <strong class="text-gray-800">{actionMaxPcs} pcs</strong>
+          <!-- Tabel per-ukuran: Ukuran | Stok | Berhasil | Reject -->
+          <div class="overflow-hidden rounded-lg border border-gray-200">
+            <table class="w-full text-sm">
+              <thead class="bg-gray-50">
+                <tr>
+                  <th class="px-3 py-2 text-left text-xs font-semibold text-gray-500">Ukuran</th>
+                  <th class="px-3 py-2 text-center text-xs font-semibold text-gray-500">Stok</th>
+                  <th class="px-3 py-2 text-center text-xs font-semibold text-gray-500">Berhasil</th>
+                  <th class="px-3 py-2 text-center text-xs font-semibold text-gray-500">Reject</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each batch.detail_ukuran as du, i}
+                  {@const reject = Number(actionUkuranReject[i]) || 0}
+                  {@const berhasil = actionUkuranBerhasil[i] ?? 0}
+                  {@const overLimit = reject > du.jumlah_pcs}
+                  <tr class="border-t border-gray-100">
+                    <td class="px-3 py-2 font-semibold text-gray-700">{du.ukuran}</td>
+                    <td class="px-3 py-2 text-center text-gray-500">{du.jumlah_pcs}</td>
+                    <td class="px-3 py-2 text-center">
+                      <span class="text-sm font-semibold text-gray-800">{berhasil}</span>
+                    </td>
+                    <td class="px-2 py-1.5">
+                      <Input
+                        type="number"
+                        min="0"
+                        max={du.jumlah_pcs}
+                        class="h-8 text-center text-sm {overLimit ? 'border-red-400' : ''}"
+                        bind:value={actionUkuranReject[i]}
+                      />
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+              <tfoot class="border-t border-gray-200 bg-gray-50">
+                <tr>
+                  <td class="px-3 py-2 text-xs font-semibold text-gray-500">Total</td>
+                  <td class="px-3 py-2 text-center text-xs font-semibold text-gray-700">{actionMaxPcs}</td>
+                  <td class="px-3 py-2 text-center text-xs font-semibold text-gray-700">{actionTotalBerhasil}</td>
+                  <td class="px-3 py-2 text-center text-xs font-semibold text-red-600">{actionTotalReject}</td>
+                </tr>
+              </tfoot>
+            </table>
           </div>
-          <div class="grid grid-cols-2 gap-3">
-            <div class="space-y-1.5">
-              <label for="action-pcs-berhasil" class="text-sm font-medium text-gray-700">PCS Berhasil</label>
-              <Input
-                id="action-pcs-berhasil"
-                type="number"
-                min="0"
-                max={actionMaxPcs}
-                bind:value={actionPcsBerhasil}
-                placeholder="0"
-              />
-            </div>
-            <div class="space-y-1.5">
-              <label for="action-pcs-reject" class="text-sm font-medium text-gray-700">PCS Reject</label>
-              <Input
-                id="action-pcs-reject"
-                type="number"
-                min="0"
-                max={actionMaxPcs}
-                bind:value={actionPcsReject}
-                placeholder="0"
-              />
-            </div>
-          </div>
-          {#if actionPcsBerhasil + actionPcsReject > actionMaxPcs}
-            <p class="text-xs text-red-500">Total melebihi stok saat ini ({actionMaxPcs} pcs)</p>
+          {#if actionTotalReject > actionMaxPcs}
+            <p class="text-xs text-red-500">Total reject melebihi stok saat ini ({actionMaxPcs} pcs)</p>
+          {/if}
+          {#if currentAction.isFinal}
+            <p class="text-xs text-emerald-600">Batch akan langsung diselesaikan dan masuk ke stok barang jadi.</p>
           {/if}
         {/if}
 

@@ -154,13 +154,15 @@ const PENUGASAN_KEY: Partial<Record<StatusBatch, 'cutting' | 'jahit' | 'steam'>>
 
 // Update status batch + catat riwayat
 // penugasan: worker yang ditugaskan (hanya untuk transisi ke *_IN_PROGRESS)
+// newDetailUkuran: jika diisi, detail_ukuran batch diperbarui dengan hasil aktual per ukuran
 export async function updateStatusBatch(
   batchId: string,
   statusBaru: StatusBatch,
   updatedByUid: string,
   updatedByNama: string,
   riwayat: Omit<RiwayatProses, 'status_ke' | 'updated_by_uid' | 'updated_by_nama' | 'timestamp'>,
-  penugasan?: PenugasanWorker
+  penugasan?: PenugasanWorker,
+  newDetailUkuran?: DetailUkuran[]
 ): Promise<void> {
   const batchRef = doc(db, COL, batchId);
   const riwayatRef = doc(collection(db, COL, batchId, 'riwayat_proses'));
@@ -186,6 +188,10 @@ export async function updateStatusBatch(
 
     if (riwayat.pcs_berhasil != null) {
       updatePayload['pcs_saat_ini'] = riwayat.pcs_berhasil;
+    }
+
+    if (newDetailUkuran && newDetailUkuran.length > 0) {
+      updatePayload['detail_ukuran'] = newDetailUkuran;
     }
 
     transaction.update(batchRef, updatePayload);
@@ -250,16 +256,24 @@ export async function completeBatchProduksi(
     throw new Error('PCS berhasil harus lebih dari 0 untuk menyelesaikan batch');
   }
 
-  const ratio = riwayat.pcs_berhasil / batch.total_pcs;
-  let sisa = riwayat.pcs_berhasil;
-  const detailBerhasil = batch.detail_ukuran
-    .map((du, idx) => {
-      const isLast = idx === batch.detail_ukuran.length - 1;
-      const jumlah = isLast ? sisa : Math.floor(du.jumlah_pcs * ratio);
-      sisa -= jumlah;
-      return { ukuran: du.ukuran, jumlah_pcs: Math.max(0, jumlah) };
-    })
-    .filter((du) => du.jumlah_pcs > 0);
+  // Jika detail_ukuran sudah diperbarui dengan hasil aktual (sum == pcs_berhasil),
+  // gunakan langsung. Jika tidak (masih data awal), hitung proporsional.
+  const sumDetailUkuran = batch.detail_ukuran.reduce((s, du) => s + du.jumlah_pcs, 0);
+  let detailBerhasil: DetailUkuran[];
+  if (sumDetailUkuran === riwayat.pcs_berhasil) {
+    detailBerhasil = batch.detail_ukuran.filter((du) => du.jumlah_pcs > 0);
+  } else {
+    const ratio = riwayat.pcs_berhasil / batch.total_pcs;
+    let sisa = riwayat.pcs_berhasil;
+    detailBerhasil = batch.detail_ukuran
+      .map((du, idx) => {
+        const isLast = idx === batch.detail_ukuran.length - 1;
+        const jumlah = isLast ? sisa : Math.floor(du.jumlah_pcs * ratio);
+        sisa -= jumlah;
+        return { ukuran: du.ukuran, jumlah_pcs: Math.max(0, jumlah) };
+      })
+      .filter((du) => du.jumlah_pcs > 0);
+  }
 
   const stokBarangJadiRefs = new Map<string, ReturnType<typeof doc>>();
   for (const item of detailBerhasil) {

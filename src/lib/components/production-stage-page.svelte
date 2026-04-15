@@ -45,8 +45,10 @@
   let quickOpen = $state(false);
   let quickBatch = $state<BatchProduksi | null>(null);
   let quickWorkerUid = $state("");
-  let quickPcsBerhasil = $state(0);
-  let quickPcsReject = $state(0);
+  let quickUkuranReject   = $state<number[]>([]);
+  let quickUkuranBerhasil = $derived(
+    quickBatch?.detail_ukuran.map((du, i) => Math.max(0, du.jumlah_pcs - (Number(quickUkuranReject[i]) || 0))) ?? []
+  );
   let quickSaving = $state(false);
   let quickError = $state<string | null>(null);
 
@@ -61,18 +63,20 @@
   let quickWorkers = $derived(
     karyawanList.filter((k) => k.role === config.quickActionWorkerRole),
   );
+  let quickTotalBerhasil = $derived(quickUkuranBerhasil.reduce((s, n) => s + n, 0));
+  let quickTotalReject   = $derived(quickUkuranReject.reduce((s, n) => s + (Number(n) || 0), 0));
+  let quickMaxPcs = $derived(quickBatch ? (quickBatch.pcs_saat_ini ?? quickBatch.total_pcs) : 0);
   let quickFormValid = $derived.by(() => {
     if (!quickNextStatus) return false;
     if (quickNeedsWorker && !quickWorkerUid) return false;
-    if (quickNeedsPcs && quickPcsBerhasil + quickPcsReject <= 0) return false;
+    if (quickNeedsPcs && quickTotalReject > quickMaxPcs) return false;
     return true;
   });
 
   function openQuickAction(batch: BatchProduksi) {
     quickBatch = batch;
     quickWorkerUid = batch.penugasan?.steam?.uid ?? "";
-    quickPcsBerhasil = batch.pcs_saat_ini ?? batch.total_pcs;
-    quickPcsReject = 0;
+    quickUkuranReject = batch.detail_ukuran.map(() => 0);
     quickError = null;
     quickOpen = true;
   }
@@ -87,8 +91,14 @@
       const worker = quickNeedsWorker
         ? quickWorkers.find((k) => k.uid === quickWorkerUid)
         : undefined;
-      const pcsBerhasil = quickNeedsPcs ? quickPcsBerhasil : (quickBatch.pcs_saat_ini ?? quickBatch.total_pcs);
-      const pcsReject = quickNeedsPcs ? quickPcsReject : 0;
+      const pcsBerhasil = quickNeedsPcs ? quickTotalBerhasil : (quickBatch.pcs_saat_ini ?? quickBatch.total_pcs);
+      const pcsReject   = quickNeedsPcs ? quickTotalReject   : 0;
+      const newDetailUkuran = quickNeedsPcs
+        ? quickBatch.detail_ukuran.map((du, i) => ({
+            ukuran: du.ukuran,
+            jumlah_pcs: Number(quickUkuranBerhasil[i]) || 0,
+          })).filter((du) => du.jumlah_pcs > 0)
+        : undefined;
 
       await updateStatusBatch(
         quickBatch.id,
@@ -97,6 +107,7 @@
         nama,
         { status_dari: quickBatch.status as any, pcs_berhasil: pcsBerhasil, pcs_reject: pcsReject },
         worker ? { uid: worker.uid, nama: worker.name } : undefined,
+        newDetailUkuran,
       );
 
       // Setelah STEAM_DONE, langsung selesaikan dan masukkan ke barang jadi
@@ -460,22 +471,10 @@
             · <span class="text-gray-600">{quickBatch.nama_warna}</span>
           {/if}
           · {quickBatch.pcs_saat_ini ?? quickBatch.total_pcs} pcs
-          {#if quickNextStatus === "STEAM_DONE"}
-            <span class="mt-1 block text-xs text-emerald-600">Batch akan langsung diselesaikan dan masuk ke stok barang jadi.</span>
-          {/if}
         </Dialog.Description>
       </Dialog.Header>
 
       <div class="space-y-4 py-2">
-        <!-- Ukuran detail -->
-        <div class="flex flex-wrap gap-1">
-          {#each quickBatch.detail_ukuran as ukuran}
-            <span class="rounded bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
-              {ukuran.ukuran}: {ukuran.jumlah_pcs}
-            </span>
-          {/each}
-        </div>
-
         {#if quickNeedsWorker}
           <!-- Pilih petugas steam -->
           <div class="space-y-1.5">
@@ -506,38 +505,54 @@
         {/if}
 
         {#if quickNeedsPcs}
-          <!-- Input PCS selesai steam -->
-          {@const maxPcs = quickBatch.pcs_saat_ini ?? quickBatch.total_pcs}
-          <div class="rounded-lg border border-gray-100 bg-gray-50 px-4 py-3 text-sm text-gray-600">
-            Stok saat ini: <strong class="text-gray-800">{maxPcs} pcs</strong>
+          <!-- Tabel per-ukuran -->
+          <div class="overflow-hidden rounded-lg border border-gray-200">
+            <table class="w-full text-sm">
+              <thead class="bg-gray-50">
+                <tr>
+                  <th class="px-3 py-2 text-left text-xs font-semibold text-gray-500">Ukuran</th>
+                  <th class="px-3 py-2 text-center text-xs font-semibold text-gray-500">Stok</th>
+                  <th class="px-3 py-2 text-center text-xs font-semibold text-gray-500">Berhasil</th>
+                  <th class="px-3 py-2 text-center text-xs font-semibold text-gray-500">Reject</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each quickBatch.detail_ukuran as du, i}
+                  {@const reject = Number(quickUkuranReject[i]) || 0}
+                  {@const berhasil = quickUkuranBerhasil[i] ?? 0}
+                  {@const overLimit = reject > du.jumlah_pcs}
+                  <tr class="border-t border-gray-100">
+                    <td class="px-3 py-2 font-semibold text-gray-700">{du.ukuran}</td>
+                    <td class="px-3 py-2 text-center text-gray-500">{du.jumlah_pcs}</td>
+                    <td class="px-3 py-2 text-center">
+                      <span class="text-sm font-semibold text-gray-800">{berhasil}</span>
+                    </td>
+                    <td class="px-2 py-1.5">
+                      <Input
+                        type="number"
+                        min="0"
+                        max={du.jumlah_pcs}
+                        class="h-8 text-center text-sm {overLimit ? 'border-red-400' : ''}"
+                        bind:value={quickUkuranReject[i]}
+                      />
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+              <tfoot class="border-t border-gray-200 bg-gray-50">
+                <tr>
+                  <td class="px-3 py-2 text-xs font-semibold text-gray-500">Total</td>
+                  <td class="px-3 py-2 text-center text-xs font-semibold text-gray-700">{quickMaxPcs}</td>
+                  <td class="px-3 py-2 text-center text-xs font-semibold text-gray-700">{quickTotalBerhasil}</td>
+                  <td class="px-3 py-2 text-center text-xs font-semibold text-red-600">{quickTotalReject}</td>
+                </tr>
+              </tfoot>
+            </table>
           </div>
-          <div class="grid grid-cols-2 gap-3">
-            <div class="space-y-1.5">
-              <label for="quick-pcs-berhasil" class="text-sm font-medium text-gray-700">PCS Berhasil</label>
-              <Input
-                id="quick-pcs-berhasil"
-                type="number"
-                min="0"
-                max={maxPcs}
-                bind:value={quickPcsBerhasil}
-                placeholder="0"
-              />
-            </div>
-            <div class="space-y-1.5">
-              <label for="quick-pcs-reject" class="text-sm font-medium text-gray-700">PCS Reject</label>
-              <Input
-                id="quick-pcs-reject"
-                type="number"
-                min="0"
-                max={maxPcs}
-                bind:value={quickPcsReject}
-                placeholder="0"
-              />
-            </div>
-          </div>
-          {#if quickPcsBerhasil + quickPcsReject > maxPcs}
-            <p class="text-xs text-red-500">Total melebihi stok saat ini ({maxPcs} pcs)</p>
+          {#if quickTotalReject > quickMaxPcs}
+            <p class="text-xs text-red-500">Total reject melebihi stok saat ini ({quickMaxPcs} pcs)</p>
           {/if}
+          <p class="text-xs text-emerald-600">Batch akan langsung diselesaikan dan masuk ke stok barang jadi.</p>
         {/if}
 
         {#if quickError}

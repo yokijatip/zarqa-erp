@@ -297,6 +297,9 @@
             </p>
             <div class="flex flex-wrap gap-2">
               {#each UKURAN_ORDER.filter((ukuran) => selectedModel.ukuran_tersedia.includes(ukuran)) as ukuran}
+                {@const stokUkuran = mode === "jahit" ? (stokPotonganModel.find((s) => s.ukuran === ukuran)?.stok_tersedia ?? 0) : null}
+                {@const diminta = fJumlah[ukuran] ?? 0}
+                {@const kurang = mode === "jahit" && stokUkuran !== null && diminta > stokUkuran}
                 <div class="w-16 text-center">
                   <label class="mb-1 block text-xs font-semibold text-gray-600" for={"ukuran-" + mode + "-" + ukuran}>
                     {ukuran}
@@ -307,44 +310,35 @@
                     min="0"
                     placeholder="0"
                     bind:value={fJumlah[ukuran]}
-                    class="border-input bg-background placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-9 w-full rounded-md border px-3 py-1 text-center text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:ring-[3px]"
+                    class="border-input bg-background placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 h-9 w-full rounded-md border px-3 py-1 text-center text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:ring-[3px] {kurang ? 'border-red-400 bg-red-50' : ''}"
                   />
+                  {#if mode === "jahit" && stokUkuran !== null}
+                    <p class="mt-0.5 text-[10px] {kurang ? 'font-semibold text-red-500' : 'text-gray-400'}">
+                      stok: {stokUkuran}
+                    </p>
+                  {/if}
                 </div>
               {/each}
             </div>
-            {#if totalPcs > 0}
-              <p class="mt-2 text-xs text-gray-500">
-                Total: <span class="font-semibold text-gray-800">{totalPcs} pcs</span>
-              </p>
-            {/if}
-          </div>
-
-          {#if mode === "jahit"}
-            <div class="rounded-xl border border-blue-100 bg-blue-50 p-4">
-              <p class="mb-2 text-xs font-semibold uppercase tracking-wider text-blue-700">
-                Stok Cutting Tersedia
-              </p>
-              {#if loadingStock}
-                <p class="text-xs text-blue-500">Memuat stok cutting...</p>
-              {:else if stokPotonganModel.length === 0}
-                <p class="text-xs text-red-600">Tidak ada stok cutting untuk model ini.</p>
+            <div class="mt-2 flex items-center justify-between">
+              {#if totalPcs > 0}
+                <p class="text-xs text-gray-500">
+                  Total: <span class="font-semibold text-gray-800">{totalPcs} pcs</span>
+                </p>
               {:else}
-                <div class="space-y-1.5">
-                  {#each UKURAN_ORDER.filter((ukuran) => selectedModel.ukuran_tersedia.includes(ukuran)) as ukuran}
-                    {@const stok = stokPotonganModel.find((item) => item.ukuran === ukuran)}
-                    {@const jumlahDiminta = fJumlah[ukuran] ?? 0}
-                    {@const cukup = stok && stok.stok_tersedia >= jumlahDiminta}
-                    <div class="flex items-center justify-between text-sm">
-                      <span class="text-gray-700">Ukuran {ukuran}</span>
-                      <span class="font-semibold {stok ? (cukup || jumlahDiminta === 0 ? 'text-blue-800' : 'text-red-600') : 'text-gray-400'}">
-                        {stok ? stok.stok_tersedia : 0} pcs tersedia
-                      </span>
-                    </div>
-                  {/each}
-                </div>
+                <span></span>
+              {/if}
+              {#if mode === "jahit" && totalPcs > 0 && !detailUkuran.every((item) => { const s = stokPotonganModel.find((e) => e.ukuran === item.ukuran); return s && s.stok_tersedia >= item.jumlah_pcs; })}
+                <p class="text-xs font-medium text-red-500">Stok cutting tidak mencukupi</p>
               {/if}
             </div>
-          {:else if kainDibutuhkan.length > 0}
+          </div>
+
+          {#if mode === "jahit" && loadingStock}
+            <p class="text-xs text-blue-500">Memuat stok cutting...</p>
+          {:else if mode === "jahit" && stokPotonganModel.length === 0 && fModelId}
+            <p class="text-xs text-red-600">Tidak ada stok cutting untuk model ini.</p>
+          {:else if mode !== "jahit" && kainDibutuhkan.length > 0}
             <div class="rounded-xl border border-amber-100 bg-amber-50 p-4">
               <p class="mb-2 text-xs font-semibold uppercase tracking-wider text-amber-700">
                 Kain yang Dibutuhkan
