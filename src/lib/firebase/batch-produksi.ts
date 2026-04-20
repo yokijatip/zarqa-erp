@@ -433,7 +433,8 @@ export async function editKuantitasBatch(
 
   const newKainDigunakan = batch.kain_digunakan.map(kd => {
     let jumlahBaru: number;
-    const kebutuhan = model?.kebutuhan_kain.find(k => k.kain_id === kd.kain_id);
+    const allKain = model?.varian_warna?.flatMap(v => v.kebutuhan_kain) ?? [];
+    const kebutuhan = allKain.find(k => k.kain_id === kd.kain_id);
     if (kebutuhan?.jumlah_per_ukuran) {
       jumlahBaru = newDetailUkuran.reduce((s, du) =>
         s + (kebutuhan.jumlah_per_ukuran[du.ukuran] ?? 0) * du.jumlah_pcs, 0);

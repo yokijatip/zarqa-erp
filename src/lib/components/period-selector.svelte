@@ -136,7 +136,7 @@
         <button
           onclick={applyCustom}
           disabled={!canApply}
-          class="mt-0.5 w-full rounded-md bg-blue-600 py-1 text-xs font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
+          class="mt-0.5 w-full rounded-md bg-gray-900 py-1 text-xs font-semibold text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-40"
         >
           Terapkan
         </button>

@@ -15,13 +15,12 @@
     barangJadiCache,
     barangKeluarCache,
   } from "$lib/stores/data-cache.svelte";
+  import { type DateRange, filterByRange, getPeriodRange } from "$lib/period";
+  import PeriodSelector from "$lib/components/period-selector.svelte";
 
   Chart.register(...registerables);
 
   // ── Helpers ──────────────────────────────────────────────────────
-  function formatDate(d: Date): string {
-    return d.toISOString().split("T")[0];
-  }
   function formatRupiah(val: number): string {
     return new Intl.NumberFormat("id-ID", {
       style: "currency",
@@ -39,55 +38,13 @@
   let lastLoaded = $state<Date | null>(null);
   let errorMsg = $state<string | null>(null);
 
-    // ── Date Range State ──────────────────────────────────────────────
-  const TODAY = new Date();
-  let dateFrom = $state(
-    formatDate(
-      new Date(TODAY.getFullYear(), TODAY.getMonth() - 1, TODAY.getDate()),
-    ),
-  );
-  let dateTo = $state(formatDate(TODAY));
-
-  type QuickRange = "hari_ini" | "minggu_ini" | "7h" | "30h" | "tahun";
-  let activeQuick = $state<QuickRange | null>("30h");
-
-  function applyQuick(key: QuickRange) {
-    activeQuick = key;
-    const to = new Date();
-    const from = new Date();
-    if (key === "hari_ini") {
-      /* from = today, range covers just today */
-    }
-    if (key === "minggu_ini") {
-      from.setDate(from.getDate() - from.getDay()); // Sunday start
-    }
-    if (key === "7h") {
-      from.setDate(from.getDate() - 7);
-    }
-    if (key === "30h") {
-      from.setDate(from.getDate() - 30);
-    }
-    if (key === "tahun") {
-      from.setMonth(0);
-      from.setDate(1);
-    }
-    dateFrom = formatDate(from);
-    dateTo = formatDate(to);
-  }
-
-  function onManualChange() {
-    activeQuick = null;
-  }
+  // ── Date Range State ──────────────────────────────────────────────
+  let dateRange = $state<DateRange>(getPeriodRange('bulan_ini'));
 
   // ── Derived: filtered by date range ──────────────────────────────
-  let keluarFiltered = $derived.by(() => {
-    const from = new Date(dateFrom + "T00:00:00");
-    const to = new Date(dateTo + "T23:59:59");
-    return barangKeluar.filter((k) => {
-      const d = k.tanggal_keluar?.toDate?.();
-      return d && d >= from && d <= to;
-    });
-  });
+  let keluarFiltered = $derived(
+    filterByRange(barangKeluar, dateRange, (k) => k.tanggal_keluar)
+  );
 
   // ── Derived KPIs ─────────────────────────────────────────────────
   let batchAktif = $derived(
@@ -122,11 +79,10 @@
 
   // Compare to previous same-length period
   let prevKeluarPcs = $derived.by(() => {
-    const from = new Date(dateFrom + "T00:00:00");
-    const to = new Date(dateTo + "T23:59:59");
-    const diffMs = to.getTime() - from.getTime();
-    const prevFrom = new Date(from.getTime() - diffMs);
-    const prevTo = new Date(from.getTime() - 1);
+    if (!dateRange) return 0;
+    const diffMs = dateRange.end.getTime() - dateRange.start.getTime();
+    const prevFrom = new Date(dateRange.start.getTime() - diffMs);
+    const prevTo = new Date(dateRange.start.getTime() - 1);
     return barangKeluar.filter((k) => {
       const d = k.tanggal_keluar?.toDate?.();
       return d && d >= prevFrom && d <= prevTo;
@@ -477,59 +433,9 @@
   </div>
 {/if}
 
-<!-- ── Date Range Picker ───────────────────────────────────────────── -->
-<div
-  class="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-gray-100 bg-white p-4 shadow-sm"
->
-  <div class="flex items-center gap-1.5 text-sm font-medium text-gray-600">
-    <svg
-      class="h-4 w-4 text-gray-400"
-      xmlns="http://www.w3.org/2000/svg"
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke-width="1.5"
-      stroke="currentColor"
-    >
-      <path
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 0 1 2.25-2.25h13.5A2.25 2.25 0 0 1 21 7.5v11.25m-18 0A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75m-18 0v-7.5A2.25 2.25 0 0 1 5.25 9h13.5A2.25 2.25 0 0 1 21 11.25v7.5"
-      />
-    </svg>
-    Periode:
-  </div>
-
-  <!-- Quick buttons -->
-  <div class="flex items-center gap-1.5 flex-wrap">
-    {#each [["hari_ini", "Hari Ini"], ["minggu_ini", "Minggu Ini"], ["7h", "7 Hari"], ["30h", "30 Hari"], ["tahun", "Tahun Ini"]] as const as [key, label]}
-      <button
-        onclick={() => applyQuick(key)}
-        class="rounded-lg px-3 py-1.5 text-xs font-medium transition
-          {activeQuick === key
-          ? 'bg-gray-900 text-white shadow-sm'
-          : 'border border-gray-200 bg-white text-gray-600 hover:bg-gray-50'}"
-      >
-        {label}
-      </button>
-    {/each}
-  </div>
-
-  <!-- Date range picker -->
-  <div class="ml-auto flex items-center gap-0 rounded-lg border border-gray-200 bg-white shadow-xs overflow-hidden">
-    <input
-      type="date"
-      bind:value={dateFrom}
-      onchange={onManualChange}
-      class="border-0 bg-transparent px-3 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-0"
-    />
-    <span class="px-1 text-xs text-gray-300 select-none">—</span>
-    <input
-      type="date"
-      bind:value={dateTo}
-      onchange={onManualChange}
-      class="border-0 bg-transparent px-3 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-0"
-    />
-  </div>
+<!-- ── Period Selector ────────────────────────────────────────────── -->
+<div class="mb-5">
+  <PeriodSelector bind:dateRange defaultPeriod="bulan_ini" />
 </div>
 
 <!-- ── KPI Cards ──────────────────────────────────────────────────── -->

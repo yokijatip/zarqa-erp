@@ -28,7 +28,8 @@
         .filter((item) => item.items && item.items.length > 0)
         .map((item) => [
           item.title,
-          $page.url.pathname === item.url ||
+          Boolean(item.isActive) ||
+            $page.url.pathname === item.url ||
             item.items!.some((sub) => $page.url.pathname.startsWith(sub.url)),
         ])
     )

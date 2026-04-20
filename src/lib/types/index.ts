@@ -65,15 +65,19 @@ export interface KebutuhanKain {
   jumlah_per_ukuran: Partial<Record<UkuranBaju, number>>;
 }
 
+export interface VarianWarna {
+  warna_id: string;
+  nama_warna: string;
+  kode_hex_warna: string;
+  kebutuhan_kain: KebutuhanKain[];
+}
+
 export interface ModelBaju {
   id: string;
   nama_model: string;
   deskripsi?: string;
-  warna_id?: string;
-  nama_warna?: string;
-  kode_hex_warna?: string;
   ukuran_tersedia: UkuranBaju[];
-  kebutuhan_kain: KebutuhanKain[];
+  varian_warna: VarianWarna[];
   aktif: boolean;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
