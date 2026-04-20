@@ -10,7 +10,7 @@
   } from "$lib/firebase/model-baju";
   import { modelBajuCache, stokKainCache, warnaCache } from "$lib/stores/data-cache.svelte";
   import { isAdmin } from "$lib/stores/auth.store";
-  import { UKURAN_ORDER, type ModelBaju, type StokKain, type UkuranBaju, type Warna } from "$lib/types";
+  import { UKURAN_ORDER, type ModelBaju, type StokKain, type UkuranBaju, type Warna, type VarianWarna } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
   import StatCard from "$lib/components/StatCard.svelte";
   import ShirtIcon from "@lucide/svelte/icons/shirt";
@@ -35,14 +35,24 @@
   let openHapus = $state(false);
   let selectedModelHapus = $state<ModelBaju | null>(null);
 
+  type FormKain = {
+    kain_id: string;
+    nama_kain: string;
+    satuan: 'yard' | 'kg';
+    jumlah_per_ukuran: Partial<Record<UkuranBaju, number | "">>;
+  };
+  type FormVarian = {
+    warna_id: string;
+    nama_warna: string;
+    kode_hex_warna: string;
+    kainList: FormKain[];
+  };
+
   // Form fields
   let fNama = $state("");
   let fDeskripsi = $state("");
-  let fWarnaId = $state("");
   let fUkuran = $state<UkuranBaju[]>([]);
-  let fKainList = $state<
-    { kain_id: string; nama_kain: string; satuan: 'yard' | 'kg'; jumlah_per_ukuran: Partial<Record<UkuranBaju, number | "">> }[]
-  >([]);
+  let fVarianList = $state<FormVarian[]>([]);
 
   // ── Derived ────────────────────────────────────────────────────────
   let filteredList = $derived.by(() => {
@@ -61,12 +71,15 @@
 
   let canSubmit = $derived(
     fNama.trim() !== "" &&
-      fUkuran.length > 0 &&
-      fKainList.every(
+    fUkuran.length > 0 &&
+    fVarianList.every((v) =>
+      v.warna_id !== "" &&
+      v.kainList.every(
         (k) =>
           k.kain_id !== "" &&
           fUkuran.every((u) => Number(k.jumlah_per_ukuran[u] ?? 0) > 0),
       ),
+    ),
   );
 
   // ── Helpers ────────────────────────────────────────────────────────
@@ -78,13 +91,6 @@
     }
   }
 
-  function availableKain(i: number): StokKain[] {
-    const otherIds = fKainList
-      .filter((_, idx) => idx !== i && _.kain_id !== "")
-      .map((k) => k.kain_id);
-    return stokKainList.filter((k) => !otherIds.includes(k.id));
-  }
-
   function getKainById(kainId: string): StokKain | null {
     return stokKainList.find((k) => k.id === kainId) ?? null;
   }
@@ -93,30 +99,54 @@
     return kain.nama_warna ? `${kain.nama_kain} · ${kain.nama_warna}` : kain.nama_kain;
   }
 
-  function tambahKain() {
-    fKainList = [
-      ...fKainList,
+  function availableKainForVarian(varianIdx: number, kainIdx: number): StokKain[] {
+    const otherIds = fVarianList[varianIdx].kainList
+      .filter((_, idx) => idx !== kainIdx && _.kain_id !== "")
+      .map((k) => k.kain_id);
+    return stokKainList.filter((k) => !otherIds.includes(k.id));
+  }
+
+  function tambahVarian() {
+    fVarianList = [
+      ...fVarianList,
+      { warna_id: "", nama_warna: "", kode_hex_warna: "", kainList: [] },
+    ];
+  }
+
+  function hapusVarian(vi: number) {
+    fVarianList = fVarianList.filter((_, idx) => idx !== vi);
+  }
+
+  function onWarnaSelectVarian(vi: number, warnaId: string) {
+    const w = warnaList.find((w) => w.id === warnaId);
+    fVarianList[vi].warna_id = warnaId;
+    fVarianList[vi].nama_warna = w?.nama_warna ?? "";
+    fVarianList[vi].kode_hex_warna = w?.kode_hex ?? "";
+  }
+
+  function tambahKainVarian(vi: number) {
+    fVarianList[vi].kainList = [
+      ...fVarianList[vi].kainList,
       { kain_id: "", nama_kain: "", satuan: "yard", jumlah_per_ukuran: {} },
     ];
   }
 
-  function hapusKain(i: number) {
-    fKainList = fKainList.filter((_, idx) => idx !== i);
+  function hapusKainVarian(vi: number, ki: number) {
+    fVarianList[vi].kainList = fVarianList[vi].kainList.filter((_, idx) => idx !== ki);
   }
 
-  function onKainSelect(i: number, kainId: string) {
+  function onKainSelectVarian(vi: number, ki: number, kainId: string) {
     const kain = stokKainList.find((k) => k.id === kainId);
-    fKainList[i].kain_id = kainId;
-    fKainList[i].nama_kain = kain ? kain.nama_kain : "";
-    fKainList[i].satuan = kain?.satuan ?? "yard";
+    fVarianList[vi].kainList[ki].kain_id = kainId;
+    fVarianList[vi].kainList[ki].nama_kain = kain?.nama_kain ?? "";
+    fVarianList[vi].kainList[ki].satuan = kain?.satuan ?? "yard";
   }
 
   function resetForm() {
     fNama = "";
     fDeskripsi = "";
-    fWarnaId = "";
     fUkuran = [];
-    fKainList = [];
+    fVarianList = [];
     editingId = null;
   }
 
@@ -129,13 +159,17 @@
     editingId = model.id;
     fNama = model.nama_model;
     fDeskripsi = model.deskripsi ?? "";
-    fWarnaId = model.warna_id ?? "";
     fUkuran = [...model.ukuran_tersedia];
-    fKainList = model.kebutuhan_kain.map((k) => ({
-      kain_id: k.kain_id,
-      nama_kain: getKainById(k.kain_id)?.nama_kain ?? k.nama_kain,
-      satuan: k.satuan ?? 'yard',
-      jumlah_per_ukuran: { ...(k.jumlah_per_ukuran ?? {}) } as Partial<Record<UkuranBaju, number | "">>,
+    fVarianList = (model.varian_warna ?? []).map((v) => ({
+      warna_id: v.warna_id,
+      nama_warna: v.nama_warna,
+      kode_hex_warna: v.kode_hex_warna,
+      kainList: v.kebutuhan_kain.map((k) => ({
+        kain_id: k.kain_id,
+        nama_kain: getKainById(k.kain_id)?.nama_kain ?? k.nama_kain,
+        satuan: k.satuan ?? "yard",
+        jumlah_per_ukuran: { ...k.jumlah_per_ukuran } as Partial<Record<UkuranBaju, number | "">>,
+      })),
     }));
     openForm = true;
   }
@@ -189,21 +223,22 @@
     if (!canSubmit) return;
     saving = true;
     try {
-      const selectedWarna = warnaList.find((w) => w.id === fWarnaId) ?? null;
       const input = {
         nama_model: fNama.trim(),
         ...(fDeskripsi.trim() ? { deskripsi: fDeskripsi.trim() } : {}),
-        warna_id: selectedWarna?.id ?? "",
-        nama_warna: selectedWarna?.nama_warna ?? "",
-        kode_hex_warna: selectedWarna?.kode_hex ?? "",
         ukuran_tersedia: fUkuran,
-        kebutuhan_kain: fKainList.map((k) => ({
-          kain_id: k.kain_id,
-          nama_kain: k.nama_kain,
-          satuan: k.satuan,
-          jumlah_per_ukuran: Object.fromEntries(
-            fUkuran.map((u) => [u, Number(k.jumlah_per_ukuran[u] ?? 0)])
-          ) as Partial<Record<UkuranBaju, number>>,
+        varian_warna: fVarianList.map((v) => ({
+          warna_id: v.warna_id,
+          nama_warna: v.nama_warna,
+          kode_hex_warna: v.kode_hex_warna,
+          kebutuhan_kain: v.kainList.map((k) => ({
+            kain_id: k.kain_id,
+            nama_kain: k.nama_kain,
+            satuan: k.satuan,
+            jumlah_per_ukuran: Object.fromEntries(
+              fUkuran.map((u) => [u, Number(k.jumlah_per_ukuran[u] ?? 0)])
+            ) as Partial<Record<UkuranBaju, number>>,
+          })),
         })),
       };
 
@@ -527,11 +562,18 @@
             <p class="truncate text-sm font-semibold text-gray-900">
               {model.nama_model}
             </p>
-            {#if model.nama_warna}
-              <span class="mt-0.5 inline-flex items-center gap-1 text-[11px] font-medium text-gray-600">
-                <span class="inline-block h-2.5 w-2.5 rounded-full border border-gray-300 shrink-0" style="background-color: {model.kode_hex_warna}"></span>
-                {model.nama_warna}
-              </span>
+            {#if model.varian_warna?.length > 0}
+              <div class="mt-0.5 flex flex-wrap items-center gap-1">
+                {#each model.varian_warna as v, vi}
+                  <span class="inline-flex items-center gap-1 text-[11px] font-medium text-gray-600">
+                    <span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-gray-300" style="background-color: {v.kode_hex_warna}"></span>
+                    {v.nama_warna}
+                  </span>
+                  {#if vi < model.varian_warna.length - 1}
+                    <span class="text-gray-300 text-[10px]">·</span>
+                  {/if}
+                {/each}
+              </div>
             {/if}
             {#if model.deskripsi}
               <p class="mt-0.5 line-clamp-1 text-xs text-gray-400">
@@ -572,57 +614,56 @@
             </div>
           </div>
 
-          <!-- Kebutuhan Kain -->
-          {#if model.kebutuhan_kain.length > 0}
-            <div>
-              <p
-                class="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-gray-400"
-              >
-                Kebutuhan Kain
-              </p>
-              <div class="space-y-1.5">
-                {#each model.kebutuhan_kain as kain}
-                  {@const ukuranAda = UKURAN_ORDER.filter((u) => (kain.jumlah_per_ukuran ?? {})[u])}
-                  {@const kainStok = getKainById(kain.kain_id)}
-                  <div class="rounded-md bg-gray-50 px-2.5 py-2 text-xs">
-                    <!-- Nama kain + badge satuan -->
-                    <div class="mb-1.5 flex items-center justify-between">
-                      <div class="flex items-center gap-1.5">
-                        <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400"></span>
-                        <span class="font-semibold text-gray-700">{kainStok ? formatKainLabel(kainStok) : kain.nama_kain}</span>
-                      </div>
-                      <span class="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">{kain.satuan}</span>
+          <!-- Kebutuhan Kain per Varian -->
+          <div>
+            <p class="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+              Kebutuhan Kain
+            </p>
+            {#if model.varian_warna?.length > 0}
+              <div class="space-y-2">
+                {#each model.varian_warna as v}
+                  <div class="rounded-md border border-gray-100 bg-gray-50 px-2.5 py-2 text-xs">
+                    <!-- Label varian -->
+                    <div class="mb-1.5 flex items-center gap-1.5">
+                      <span class="inline-block h-2 w-2 shrink-0 rounded-full border border-gray-300" style="background-color: {v.kode_hex_warna}"></span>
+                      <span class="font-semibold text-gray-600">{v.nama_warna}</span>
                     </div>
-                    <!-- Mini table: header ukuran + nilai -->
-                    {#if ukuranAda.length > 0}
-                      <div
-                        class="grid text-center"
-                        style="grid-template-columns: repeat({ukuranAda.length}, 1fr)"
-                      >
-                        {#each ukuranAda as u}
-                          <span class="text-[10px] font-semibold text-gray-400">{u}</span>
-                        {/each}
-                        {#each ukuranAda as u}
-                          <span class="font-bold text-gray-700">{(kain.jumlah_per_ukuran ?? {})[u]}</span>
+                    {#if v.kebutuhan_kain.length > 0}
+                      <div class="space-y-1">
+                        {#each v.kebutuhan_kain as kain}
+                          {@const ukuranAda = UKURAN_ORDER.filter((u) => (kain.jumlah_per_ukuran ?? {})[u])}
+                          {@const kainStok = getKainById(kain.kain_id)}
+                          <div>
+                            <div class="flex items-center justify-between">
+                              <div class="flex items-center gap-1">
+                                <span class="h-1 w-1 shrink-0 rounded-full bg-amber-400"></span>
+                                <span class="font-medium text-gray-700">{kainStok ? formatKainLabel(kainStok) : kain.nama_kain}</span>
+                              </div>
+                              <span class="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">{kain.satuan}</span>
+                            </div>
+                            {#if ukuranAda.length > 0}
+                              <div class="mt-0.5 grid text-center" style="grid-template-columns: repeat({ukuranAda.length}, 1fr)">
+                                {#each ukuranAda as u}
+                                  <span class="text-[10px] font-semibold text-gray-400">{u}</span>
+                                {/each}
+                                {#each ukuranAda as u}
+                                  <span class="font-bold text-gray-700">{(kain.jumlah_per_ukuran ?? {})[u]}</span>
+                                {/each}
+                              </div>
+                            {/if}
+                          </div>
                         {/each}
                       </div>
+                    {:else}
+                      <p class="text-[11px] italic text-gray-300">Belum ada kain</p>
                     {/if}
                   </div>
                 {/each}
               </div>
-            </div>
-          {:else}
-            <div>
-              <p
-                class="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-gray-400"
-              >
-                Kebutuhan Kain
-              </p>
-              <p class="text-xs text-gray-300 italic">
-                Belum ada kain ditambahkan
-              </p>
-            </div>
-          {/if}
+            {:else}
+              <p class="text-xs italic text-gray-300">Belum ada varian warna</p>
+            {/if}
+          </div>
         </div>
 
         <!-- Card Footer -->
@@ -824,46 +865,6 @@
           ></textarea>
         </div>
 
-        <!-- Warna -->
-        <div>
-          <label class="mb-1.5 block text-sm font-medium text-gray-700" for="warna-model">
-            Warna <span class="text-xs font-normal text-gray-400">(opsional)</span>
-          </label>
-          <Select.Root
-            type="single"
-            value={fWarnaId || undefined}
-            onValueChange={(val) => (fWarnaId = val === "__none__" ? "" : (val ?? ""))}
-          >
-            <Select.Trigger class="w-full" id="warna-model">
-              {#if fWarnaId && warnaList.find((w) => w.id === fWarnaId)}
-                {@const w = warnaList.find((w) => w.id === fWarnaId)!}
-                <span class="flex items-center gap-2">
-                  <span class="inline-block h-3.5 w-3.5 rounded-full border border-gray-200 shrink-0" style="background-color: {w.kode_hex}"></span>
-                  {w.nama_warna}
-                </span>
-              {:else}
-                <span class="text-muted-foreground">— Tanpa warna —</span>
-              {/if}
-            </Select.Trigger>
-            <Select.Content preventScroll={false}>
-              <Select.Item value="__none__">— Tanpa warna —</Select.Item>
-              {#each warnaList as w}
-                <Select.Item value={w.id}>
-                  <span class="flex items-center gap-2">
-                    <span class="inline-block h-3 w-3 rounded-full border border-gray-200 shrink-0" style="background-color: {w.kode_hex}"></span>
-                    {w.nama_warna}
-                  </span>
-                </Select.Item>
-              {/each}
-            </Select.Content>
-          </Select.Root>
-          {#if warnaList.length === 0}
-            <p class="mt-1 text-xs text-gray-400">
-              Belum ada warna terdaftar. <a href="/warna" class="text-blue-500 hover:underline">Tambah warna →</a>
-            </p>
-          {/if}
-        </div>
-
         <!-- Ukuran Tersedia -->
         <div>
           <p class="mb-2 text-sm font-medium text-gray-700">
@@ -887,189 +888,195 @@
             <p class="mt-1.5 text-xs text-red-500">Pilih minimal satu ukuran</p>
           {:else}
             <p class="mt-1.5 text-xs text-gray-400">
-              Dipilih: <span class="font-medium text-gray-700"
-                >{fUkuran.join(", ")}</span
-              >
+              Dipilih: <span class="font-medium text-gray-700">{fUkuran.join(", ")}</span>
             </p>
           {/if}
         </div>
 
-        <!-- Kebutuhan Kain -->
+        <!-- Varian Warna -->
         <div>
           <div class="mb-2 flex items-center justify-between">
-            <p class="text-sm font-medium text-gray-700">Kebutuhan Kain</p>
+            <p class="text-sm font-medium text-gray-700">
+              Varian Warna
+              <span class="text-xs font-normal text-gray-400">(opsional)</span>
+            </p>
             <Button
               variant="outline"
               size="sm"
-              onclick={tambahKain}
-              disabled={stokKainList.length === 0 ||
-                fKainList.length >= stokKainList.length ||
-                fUkuran.length === 0}
+              onclick={tambahVarian}
+              disabled={warnaList.length === 0 || fUkuran.length === 0}
               class="border-blue-200 bg-blue-50 text-blue-600 hover:bg-blue-100 hover:text-blue-700"
             >
-              <svg
-                class="h-3 w-3"
-                xmlns="http://www.w3.org/2000/svg"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke-width="2.5"
-                stroke="currentColor"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  d="M12 4.5v15m7.5-7.5h-15"
-                />
+              <svg class="h-3 w-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
               </svg>
-              Tambah Kain
+              Tambah Varian
             </Button>
           </div>
 
-          {#if stokKainList.length === 0}
-            <div
-              class="rounded-lg border border-amber-100 bg-amber-50 px-4 py-3"
-            >
-              <p class="text-xs text-amber-700">
-                Belum ada stok kain terdaftar.
-              </p>
-              <a
-                href="/stok-kain"
-                class="text-xs font-medium text-amber-600 hover:underline"
-                >Tambah kain di sini →</a
-              >
+          {#if warnaList.length === 0}
+            <div class="rounded-lg border border-amber-100 bg-amber-50 px-4 py-3">
+              <p class="text-xs text-amber-700">Belum ada warna terdaftar.</p>
+              <a href="/warna" class="text-xs font-medium text-amber-600 hover:underline">Tambah warna di sini →</a>
             </div>
-          {:else if fKainList.length === 0}
-            <div
-              class="rounded-lg border border-dashed border-gray-200 bg-gray-50 py-5 text-center"
-            >
-              <p class="text-xs text-gray-400">Belum ada kain ditambahkan</p>
-              <button
-                type="button"
-                onclick={tambahKain}
-                class="mt-1 text-xs font-medium text-blue-500 hover:underline"
-              >
-                + Tambah kain pertama
+          {:else if fVarianList.length === 0}
+            <div class="rounded-lg border border-dashed border-gray-200 bg-gray-50 py-5 text-center">
+              <p class="text-xs text-gray-400">Belum ada varian warna</p>
+              <button type="button" onclick={tambahVarian} disabled={fUkuran.length === 0} class="mt-1 text-xs font-medium text-blue-500 hover:underline disabled:text-gray-300">
+                + Tambah varian pertama
               </button>
             </div>
           {:else}
-            <div class="space-y-2.5">
-              {#each fKainList as entry, i}
+            <div class="space-y-3">
+              {#each fVarianList as varian, vi}
                 <div class="rounded-lg border border-gray-200 bg-gray-50 p-3">
-                  <div class="mb-2 flex items-center justify-between">
-                    <p class="text-xs font-semibold text-gray-500">
-                      Kain #{i + 1}
-                    </p>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onclick={() => hapusKain(i)}
-                      class="text-gray-400 hover:text-red-500"
-                      aria-label="Hapus kain"
-                    >
-                      <svg
-                        class="h-4 w-4"
-                        xmlns="http://www.w3.org/2000/svg"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke-width="2"
-                        stroke="currentColor"
-                      >
-                        <path
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          d="M6 18 18 6M6 6l12 12"
-                        />
+                  <!-- Header varian -->
+                  <div class="mb-2.5 flex items-center justify-between">
+                    <div class="flex items-center gap-2">
+                      {#if varian.kode_hex_warna}
+                        <span class="inline-block h-3 w-3 shrink-0 rounded-full border border-gray-300" style="background-color: {varian.kode_hex_warna}"></span>
+                      {/if}
+                      <p class="text-xs font-semibold text-gray-600">
+                        Varian {vi + 1}{varian.nama_warna ? ` — ${varian.nama_warna}` : ""}
+                      </p>
+                    </div>
+                    <Button variant="ghost" size="icon-sm" onclick={() => hapusVarian(vi)} class="text-gray-400 hover:text-red-500" aria-label="Hapus varian">
+                      <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
                       </svg>
                     </Button>
                   </div>
-                  <!-- Pilih Kain -->
-                  <Select.Root
-                    type="single"
-                    value={entry.kain_id || undefined}
-                    onValueChange={(val) => onKainSelect(i, val)}
-                  >
-                    <Select.Trigger class="w-full">
-                      <span
-                        class={entry.kain_id
-                          ? "text-foreground"
-                          : "text-muted-foreground"}
-                      >
-                        {entry.kain_id ? formatKainLabel({ nama_kain: entry.nama_kain, nama_warna: getKainById(entry.kain_id)?.nama_warna }) : "— Pilih kain —"}
-                      </span>
-                    </Select.Trigger>
-                    <Select.Content preventScroll={false}>
-                      {#each availableKain(i) as kain}
-                        <Select.Item value={kain.id}>{formatKainLabel(kain)}</Select.Item>
-                      {/each}
-                      {#if entry.kain_id && !availableKain(i).find((k) => k.id === entry.kain_id)}
-                        <Select.Item value={entry.kain_id}>{entry.nama_kain}</Select.Item>
-                      {/if}
-                    </Select.Content>
-                  </Select.Root>
-                  <!-- Yard per ukuran -->
-                  {#if fUkuran.length > 0}
-                    <div
-                      class="mt-2 grid gap-1.5"
-                      style="grid-template-columns: repeat({fUkuran.length}, 1fr)"
+
+                  <!-- Pilih Warna -->
+                  <div class="mb-3">
+                    <p class="mb-1 text-[11px] font-semibold text-gray-500">Warna <span class="text-red-400">*</span></p>
+                    <Select.Root
+                      type="single"
+                      value={varian.warna_id || undefined}
+                      onValueChange={(val) => onWarnaSelectVarian(vi, val ?? "")}
                     >
-                      {#each fUkuran as u}
-                        <div class="text-center">
-                          <p class="mb-1 text-[10px] font-semibold text-gray-500">{u}</p>
-                          <Input
-                            type="number"
-                            min="0.1"
-                            step="0.1"
-                            placeholder={entry.satuan}
-                            bind:value={fKainList[i].jumlah_per_ukuran[u]}
-                            class="h-8 px-1 text-center text-xs"
-                          />
+                      <Select.Trigger class="w-full">
+                        {#if varian.warna_id}
+                          <span class="flex items-center gap-2">
+                            <span class="inline-block h-3 w-3 shrink-0 rounded-full border border-gray-200" style="background-color: {varian.kode_hex_warna}"></span>
+                            {varian.nama_warna}
+                          </span>
+                        {:else}
+                          <span class="text-muted-foreground">— Pilih warna —</span>
+                        {/if}
+                      </Select.Trigger>
+                      <Select.Content preventScroll={false}>
+                        {#each warnaList as w}
+                          <Select.Item value={w.id}>
+                            <span class="flex items-center gap-2">
+                              <span class="inline-block h-3 w-3 shrink-0 rounded-full border border-gray-200" style="background-color: {w.kode_hex}"></span>
+                              {w.nama_warna}
+                            </span>
+                          </Select.Item>
+                        {/each}
+                      </Select.Content>
+                    </Select.Root>
+                  </div>
+
+                  <!-- Kebutuhan Kain untuk varian ini -->
+                  <div>
+                    <div class="mb-1.5 flex items-center justify-between">
+                      <p class="text-[11px] font-semibold text-gray-500">Kebutuhan Kain</p>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onclick={() => tambahKainVarian(vi)}
+                        disabled={stokKainList.length === 0 || varian.kainList.length >= stokKainList.length}
+                        class="h-6 px-2 text-[11px] text-blue-600 hover:bg-blue-50 hover:text-blue-700"
+                      >
+                        + Tambah Kain
+                      </Button>
+                    </div>
+
+                    {#if varian.kainList.length === 0}
+                      <p class="text-[11px] italic text-gray-300">Belum ada kain — opsional</p>
+                    {:else}
+                      <div class="space-y-2">
+                        {#each varian.kainList as entry, ki}
+                          <div class="rounded border border-gray-200 bg-white p-2">
+                            <div class="mb-1.5 flex items-center justify-between">
+                              <p class="text-[10px] font-semibold text-gray-400">Kain #{ki + 1}</p>
+                              <button onclick={() => hapusKainVarian(vi, ki)} class="text-gray-300 hover:text-red-400">
+                                <svg class="h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
+                                </svg>
+                              </button>
+                            </div>
+                            <Select.Root
+                              type="single"
+                              value={entry.kain_id || undefined}
+                              onValueChange={(val) => onKainSelectVarian(vi, ki, val ?? "")}
+                            >
+                              <Select.Trigger class="w-full">
+                                <span class={entry.kain_id ? "text-foreground" : "text-muted-foreground"}>
+                                  {entry.kain_id ? formatKainLabel({ nama_kain: entry.nama_kain, nama_warna: getKainById(entry.kain_id)?.nama_warna }) : "— Pilih kain —"}
+                                </span>
+                              </Select.Trigger>
+                              <Select.Content preventScroll={false}>
+                                {#each availableKainForVarian(vi, ki) as kain}
+                                  <Select.Item value={kain.id}>{formatKainLabel(kain)}</Select.Item>
+                                {/each}
+                                {#if entry.kain_id && !availableKainForVarian(vi, ki).find((k) => k.id === entry.kain_id)}
+                                  <Select.Item value={entry.kain_id}>{entry.nama_kain}</Select.Item>
+                                {/if}
+                              </Select.Content>
+                            </Select.Root>
+                            {#if fUkuran.length > 0 && entry.kain_id}
+                              <div class="mt-1.5 grid gap-1" style="grid-template-columns: repeat({fUkuran.length}, 1fr)">
+                                {#each fUkuran as u}
+                                  <div class="text-center">
+                                    <p class="mb-0.5 text-[9px] font-semibold text-gray-400">{u}</p>
+                                    <Input
+                                      type="number"
+                                      min="0.1"
+                                      step="0.1"
+                                      placeholder="0"
+                                      bind:value={fVarianList[vi].kainList[ki].jumlah_per_ukuran[u]}
+                                      class="h-7 px-1 text-center text-xs"
+                                    />
+                                  </div>
+                                {/each}
+                              </div>
+                              <p class="mt-0.5 text-[10px] text-gray-400">{entry.satuan}/pcs per ukuran</p>
+                            {/if}
+                          </div>
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
+
+                  <!-- Preview ringkas kebutuhan kain varian ini -->
+                  {#if varian.kainList.some((k) => k.kain_id && fUkuran.some((u) => Number(k.jumlah_per_ukuran[u] ?? 0) > 0))}
+                    <div class="mt-2.5 rounded-lg border border-blue-100 bg-blue-50 p-2.5">
+                      <p class="mb-1 text-[10px] font-semibold uppercase tracking-wider text-blue-500">Ringkasan</p>
+                      <div class="mb-0.5 grid text-[10px] font-semibold text-blue-400" style="grid-template-columns: 1fr {fUkuran.map(() => '2rem').join(' ')} 1.5rem">
+                        <span>Kain</span>
+                        {#each fUkuran as u}<span class="text-right">{u}</span>{/each}
+                        <span class="text-right">Sat</span>
+                      </div>
+                      {#each varian.kainList.filter((k) => k.kain_id) as k}
+                        <div class="grid text-[11px]" style="grid-template-columns: 1fr {fUkuran.map(() => '2rem').join(' ')} 1.5rem">
+                          <span class="truncate text-blue-700">{k.nama_kain}</span>
+                          {#each fUkuran as u}
+                            <span class="text-right font-semibold text-blue-800">
+                              {Number(k.jumlah_per_ukuran[u] ?? 0) > 0 ? k.jumlah_per_ukuran[u] : "—"}
+                            </span>
+                          {/each}
+                          <span class="text-right text-blue-400">{k.satuan}</span>
                         </div>
                       {/each}
                     </div>
-                    <p class="mt-1 text-[10px] text-gray-400">{entry.satuan}/pcs per ukuran</p>
                   {/if}
                 </div>
               {/each}
             </div>
           {/if}
         </div>
-
-        <!-- Info: kebutuhan kain per ukuran -->
-        {#if fKainList.some((k) => k.kain_id && fUkuran.some((u) => Number(k.jumlah_per_ukuran[u] ?? 0) > 0))}
-
-          <div class="rounded-xl border border-blue-100 bg-blue-50 p-4">
-            <p
-              class="mb-2 text-xs font-semibold uppercase tracking-wider text-blue-600"
-            >
-              Kebutuhan Kain per Ukuran
-            </p>
-            <!-- Header -->
-            <div
-              class="mb-1 grid text-[10px] font-semibold text-blue-400"
-              style="grid-template-columns: 1fr {fUkuran.map(() => '2.5rem').join(' ')} 2rem"
-            >
-              <span>Kain</span>
-              {#each fUkuran as u}<span class="text-right">{u}</span>{/each}
-              <span class="text-right">Sat.</span>
-            </div>
-            {#each fKainList.filter((k) => k.kain_id) as k}
-              <div
-                class="grid text-xs"
-                style="grid-template-columns: 1fr {fUkuran.map(() => '2.5rem').join(' ')} 2rem"
-              >
-                <span class="truncate text-blue-700">{formatKainLabel({ nama_kain: k.nama_kain, nama_warna: getKainById(k.kain_id)?.nama_warna })}</span>
-                {#each fUkuran as u}
-                  <span class="text-right font-semibold text-blue-800">
-                    {Number(k.jumlah_per_ukuran[u] ?? 0) > 0
-                      ? `${k.jumlah_per_ukuran[u]}`
-                      : "—"}
-                  </span>
-                {/each}
-                <span class="text-right text-blue-400">{k.satuan}</span>
-              </div>
-            {/each}
-          </div>
-        {/if}
       </div>
     </div>
 

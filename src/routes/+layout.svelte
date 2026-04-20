@@ -4,7 +4,7 @@
   import favicon from "$lib/assets/favicon.svg";
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
-  import { page } from "$app/stores";
+  import { page, navigating } from "$app/stores";
   import {
     initAuthListener,
     isLoggedIn,
@@ -21,14 +21,12 @@
 
   // Guard: redirect ke login jika belum login
   $effect(() => {
-    if (!$authLoading) {
-      const isAuthPage = $page.url.pathname.startsWith("/login");
-      if (!$isLoggedIn && !isAuthPage) {
-        goto("/login");
-      }
-      if ($isLoggedIn && isAuthPage) {
-        goto("/dashboard");
-      }
+    if ($navigating || $authLoading) return;
+    const isAuthPage = $page.url.pathname.startsWith("/login");
+    if (!$isLoggedIn && !isAuthPage) {
+      goto("/login");
+    } else if ($isLoggedIn && isAuthPage) {
+      goto("/dashboard");
     }
   });
 </script>

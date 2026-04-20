@@ -232,9 +232,10 @@
     if (items.length === 0) { showError("Isi setidaknya satu ukuran."); return; }
     savingTambah = true;
     try {
+      const varianPertama = selectedModel.varian_warna?.[0];
       await tambahStokBarangJadi(selectedModel.id, selectedModel.nama_model, items, {
-        nama_warna: selectedModel.nama_warna,
-        kode_hex_warna: selectedModel.kode_hex_warna,
+        nama_warna: varianPertama?.nama_warna,
+        kode_hex_warna: varianPertama?.kode_hex_warna,
       });
       openTambah = false;
       await load(true);
@@ -659,7 +660,7 @@
           >
             <option value="">— Pilih model —</option>
             {#each modelList as m}
-              <option value={m.id}>{m.nama_model}{m.nama_warna ? ` · ${m.nama_warna}` : ""}</option>
+              <option value={m.id}>{m.nama_model}{m.varian_warna?.length ? ` · ${m.varian_warna.map(v => v.nama_warna).join(', ')}` : ""}</option>
             {/each}
           </select>
         {/if}

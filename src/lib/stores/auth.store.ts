@@ -57,12 +57,15 @@ export const isOwnerOrDev = derived(
 // Inisialisasi listener auth — panggil sekali di root +layout.svelte
 export function initAuthListener() {
   onAuthChange(async (firebaseUser) => {
-    if (firebaseUser) {
-      const profile = await getUserProfile(firebaseUser.uid);
-      currentUser.set(profile);
-    } else {
-      currentUser.set(null);
+    try {
+      if (firebaseUser) {
+        const profile = await getUserProfile(firebaseUser.uid);
+        currentUser.set(profile);
+      } else {
+        currentUser.set(null);
+      }
+    } finally {
+      authLoading.set(false);
     }
-    authLoading.set(false);
   });
 }

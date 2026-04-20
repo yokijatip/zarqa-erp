@@ -35,6 +35,7 @@
   let errorMsg = $state<string | null>(null);
 
   let fModelId = $state("");
+  let fVarianIdx = $state<number>(0);
   let fCatatan = $state("");
   let fPenugasanUid = $state("");
   let fJumlah = $state<Partial<Record<UkuranBaju, number>>>({});
@@ -49,6 +50,11 @@
   );
   let filteredWorkers = $derived(workerList.filter((worker) => worker.role === rolePenugasan));
   let selectedModel = $derived(modelList.find((model) => model.id === fModelId) ?? null);
+  let selectedVarian = $derived(
+    selectedModel?.varian_warna?.length
+      ? (selectedModel.varian_warna[fVarianIdx] ?? selectedModel.varian_warna[0])
+      : null,
+  );
   let detailUkuran = $derived(
     selectedModel
       ? UKURAN_ORDER.filter(
@@ -59,8 +65,8 @@
   );
   let totalPcs = $derived(detailUkuran.reduce((sum, item) => sum + item.jumlah_pcs, 0));
   let kainDibutuhkan = $derived(
-    selectedModel && totalPcs > 0
-      ? selectedModel.kebutuhan_kain.map((kain) => ({
+    selectedVarian && totalPcs > 0
+      ? selectedVarian.kebutuhan_kain.map((kain) => ({
           kain_id: kain.kain_id,
           nama_kain: kain.nama_kain,
           satuan: kain.satuan,
@@ -127,6 +133,7 @@
     open = nextOpen;
     if (!nextOpen) return;
     fModelId = "";
+    fVarianIdx = 0;
     fCatatan = "";
     fPenugasanUid = "";
     fJumlah = {};
@@ -137,6 +144,7 @@
 
   async function onModelChange(value: string) {
     fModelId = value;
+    fVarianIdx = 0;
     fJumlah = {};
     errorMsg = null;
     await loadPotongan(value);
@@ -151,10 +159,10 @@
       const inputData = {
         model_id: fModelId,
         nama_model: selectedModel.nama_model,
-        ...(selectedModel.nama_warna
+        ...(selectedVarian
           ? {
-              nama_warna: selectedModel.nama_warna,
-              kode_hex_warna: selectedModel.kode_hex_warna,
+              nama_warna: selectedVarian.nama_warna,
+              kode_hex_warna: selectedVarian.kode_hex_warna,
             }
           : {}),
         detail_ukuran: detailUkuran,
@@ -230,10 +238,11 @@
                 {#if selectedModel}
                   <span class="flex items-center gap-2">
                     {selectedModel.nama_model}
-                    {#if selectedModel.nama_warna}
-                      <span class="inline-flex items-center gap-1 rounded-full bg-gray-100 px-1.5 py-0.5 text-[11px] font-medium text-gray-600">
-                        <span class="inline-block h-2.5 w-2.5 rounded-full" style="background-color: {selectedModel.kode_hex_warna}"></span>
-                        {selectedModel.nama_warna}
+                    {#if selectedModel.varian_warna?.length}
+                      <span class="flex items-center gap-0.5">
+                        {#each selectedModel.varian_warna.slice(0, 4) as v}
+                          <span class="inline-block h-2.5 w-2.5 rounded-full border border-white" style="background-color: {v.kode_hex_warna}"></span>
+                        {/each}
                       </span>
                     {/if}
                   </span>
@@ -246,10 +255,11 @@
                   <Select.Item value={model.id}>
                     <span class="flex items-center justify-between gap-2 w-full">
                       {model.nama_model}
-                      {#if model.nama_warna}
-                        <span class="inline-flex items-center gap-1 rounded-full bg-gray-100 px-1.5 py-0.5 text-[11px] font-medium text-gray-600">
-                          <span class="inline-block h-2 w-2 rounded-full" style="background-color: {model.kode_hex_warna}"></span>
-                          {model.nama_warna}
+                      {#if model.varian_warna?.length}
+                        <span class="flex items-center gap-0.5">
+                          {#each model.varian_warna.slice(0, 4) as v}
+                            <span class="inline-block h-2.5 w-2.5 rounded-full border border-gray-200" style="background-color: {v.kode_hex_warna}"></span>
+                          {/each}
                         </span>
                       {/if}
                     </span>
@@ -259,6 +269,41 @@
             </Select.Root>
           {/if}
         </div>
+
+        <!-- Pilih Varian Warna (tampil jika model punya lebih dari 1 varian) -->
+        {#if selectedModel && (selectedModel.varian_warna?.length ?? 0) > 1}
+          <div>
+            <label class="mb-1.5 block text-sm font-medium text-gray-700">
+              Varian Warna <span class="text-red-500">*</span>
+            </label>
+            <Select.Root
+              type="single"
+              value={String(fVarianIdx)}
+              onValueChange={(val) => { fVarianIdx = Number(val ?? 0); fJumlah = {}; }}
+            >
+              <Select.Trigger class="w-full">
+                {#if selectedVarian}
+                  <span class="flex items-center gap-2">
+                    <span class="inline-block h-3 w-3 shrink-0 rounded-full border border-gray-200" style="background-color: {selectedVarian.kode_hex_warna}"></span>
+                    {selectedVarian.nama_warna}
+                  </span>
+                {:else}
+                  <span class="text-muted-foreground">— Pilih varian —</span>
+                {/if}
+              </Select.Trigger>
+              <Select.Content preventScroll={false}>
+                {#each selectedModel.varian_warna as v, idx}
+                  <Select.Item value={String(idx)}>
+                    <span class="flex items-center gap-2">
+                      <span class="inline-block h-3 w-3 shrink-0 rounded-full border border-gray-200" style="background-color: {v.kode_hex_warna}"></span>
+                      {v.nama_warna}
+                    </span>
+                  </Select.Item>
+                {/each}
+              </Select.Content>
+            </Select.Root>
+          </div>
+        {/if}
 
         <div>
           <label class="mb-1.5 block text-sm font-medium text-gray-700">
