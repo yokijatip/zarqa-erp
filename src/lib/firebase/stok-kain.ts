@@ -2,11 +2,11 @@
 import {
   collection, doc, getDocs, getDoc,
   addDoc, updateDoc, deleteDoc, serverTimestamp, runTransaction,
-  query, orderBy, onSnapshot, deleteField,
+  query, orderBy, limit, onSnapshot, deleteField,
   type Unsubscribe,
 } from 'firebase/firestore';
 import { db } from './config';
-import type { StokKain, StokKainInput, Warna } from '$lib/types';
+import type { StokKain, StokKainInput, Warna, RiwayatStokKain } from '$lib/types';
 
 const COL = 'stok_kain';
 
@@ -51,19 +51,30 @@ function buildWarnaFields(warna?: Pick<Warna, 'id' | 'nama_warna' | 'kode_hex'> 
   };
 }
 
-// Restock: tambah jumlah ke stok yang ada
+// Restock: tambah jumlah ke stok yang ada + catat riwayat
 export async function restockKain(id: string, tambahJumlah: number, catatan?: string): Promise<void> {
   const ref = doc(db, COL, id);
+  const riwayatRef = doc(collection(db, COL, id, 'riwayat'));
   await runTransaction(db, async (transaction) => {
     const snap = await transaction.get(ref);
     if (!snap.exists()) throw new Error('Kain tidak ditemukan');
 
     const kain = { id: snap.id, ...snap.data() } as StokKain;
     const finalCatatan = catatan ?? kain.catatan;
+    const stokBaru = kain.stok_tersedia + tambahJumlah;
+
     transaction.update(ref, {
-      stok_tersedia: kain.stok_tersedia + tambahJumlah,
+      stok_tersedia: stokBaru,
       ...(finalCatatan !== undefined ? { catatan: finalCatatan } : {}),
       updatedAt: serverTimestamp(),
+    });
+    transaction.set(riwayatRef, {
+      tipe: 'restock',
+      jumlah: tambahJumlah,
+      stok_sebelum: kain.stok_tersedia,
+      stok_sesudah: stokBaru,
+      ...(catatan?.trim() ? { catatan: catatan.trim() } : {}),
+      timestamp: serverTimestamp(),
     });
   });
 }
@@ -121,10 +132,10 @@ export async function kembalikanStokKain(id: string, jumlah: number): Promise<vo
   });
 }
 
-// Kurangi stok secara manual (koreksi admin)
-// Hanya mengurangi stok_tersedia, tidak menambah stok_terpakai
-export async function kurangiStokManual(id: string, jumlah: number): Promise<void> {
+// Kurangi stok secara manual (koreksi admin) + catat riwayat
+export async function kurangiStokManual(id: string, jumlah: number, catatan?: string): Promise<void> {
   const ref = doc(db, COL, id);
+  const riwayatRef = doc(collection(db, COL, id, 'riwayat'));
   await runTransaction(db, async (transaction) => {
     const snap = await transaction.get(ref);
     if (!snap.exists()) throw new Error('Kain tidak ditemukan');
@@ -134,11 +145,31 @@ export async function kurangiStokManual(id: string, jumlah: number): Promise<voi
       throw new Error(`Stok kain "${kain.nama_kain}" tidak mencukupi (tersedia: ${kain.stok_tersedia})`);
     }
 
+    const stokBaru = kain.stok_tersedia - jumlah;
     transaction.update(ref, {
-      stok_tersedia: kain.stok_tersedia - jumlah,
+      stok_tersedia: stokBaru,
       updatedAt: serverTimestamp(),
     });
+    transaction.set(riwayatRef, {
+      tipe: 'kurangi_manual',
+      jumlah,
+      stok_sebelum: kain.stok_tersedia,
+      stok_sesudah: stokBaru,
+      ...(catatan?.trim() ? { catatan: catatan.trim() } : {}),
+      timestamp: serverTimestamp(),
+    });
   });
+}
+
+// Ambil riwayat stok kain (50 terakhir, terbaru di atas)
+export async function getRiwayatStokKain(kainId: string): Promise<RiwayatStokKain[]> {
+  const q = query(
+    collection(db, COL, kainId, 'riwayat'),
+    orderBy('timestamp', 'desc'),
+    limit(50),
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as RiwayatStokKain);
 }
 
 // Hapus jenis kain dari inventaris

@@ -8,10 +8,11 @@
     aktifkanModel,
     deleteModelBaju,
   } from "$lib/firebase/model-baju";
-  import { modelBajuCache, stokKainCache } from "$lib/stores/data-cache.svelte";
+  import { modelBajuCache, stokKainCache, warnaCache } from "$lib/stores/data-cache.svelte";
   import { isAdmin } from "$lib/stores/auth.store";
-  import { UKURAN_ORDER, type ModelBaju, type StokKain, type UkuranBaju } from "$lib/types";
+  import { UKURAN_ORDER, type ModelBaju, type StokKain, type UkuranBaju, type Warna, type WarnaTersedia } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
+  import * as Popover from "$lib/components/ui/popover";
   import StatCard from "$lib/components/StatCard.svelte";
   import ShirtIcon from "@lucide/svelte/icons/shirt";
   import ArchiveIcon from "@lucide/svelte/icons/archive";
@@ -22,6 +23,7 @@
   // ── State ──────────────────────────────────────────────────────────
   let modelList = $state<ModelBaju[]>([]);
   let stokKainList = $state<StokKain[]>([]);
+  let warnaList = $state<Warna[]>([]);
   let loading = $state(true);
   let saving = $state(false);
   let errorMsg = $state<string | null>(null);
@@ -45,6 +47,7 @@
   let fNama = $state("");
   let fDeskripsi = $state("");
   let fUkuran = $state<UkuranBaju[]>([]);
+  let fWarna = $state<WarnaTersedia[]>([]);
   let fKainList = $state<FormKain[]>([]);
 
   // ── Derived ────────────────────────────────────────────────────────
@@ -96,6 +99,19 @@
     return stokKainList.filter((k) => !otherIds.includes(k.id));
   }
 
+  function toggleWarna(w: Warna) {
+    const idx = fWarna.findIndex((x) => x.warna_id === w.id);
+    if (idx >= 0) {
+      fWarna = fWarna.filter((_, i) => i !== idx);
+    } else {
+      fWarna = [...fWarna, { warna_id: w.id, nama_warna: w.nama_warna, kode_hex: w.kode_hex }];
+    }
+  }
+
+  function isWarnaSelected(warnaId: string): boolean {
+    return fWarna.some((w) => w.warna_id === warnaId);
+  }
+
   function tambahKain() {
     fKainList = [...fKainList, { kain_id: "", nama_kain: "", satuan: "yard", jumlah_per_ukuran: {} }];
   }
@@ -115,6 +131,7 @@
     fNama = "";
     fDeskripsi = "";
     fUkuran = [];
+    fWarna = [];
     fKainList = [];
     editingId = null;
   }
@@ -129,7 +146,11 @@
     fNama = model.nama_model;
     fDeskripsi = model.deskripsi ?? "";
     fUkuran = [...model.ukuran_tersedia];
-    fKainList = (model.kebutuhan_kain ?? []).map((k) => ({
+    fWarna = [...(model.warna_tersedia ?? [])];
+    const kebutuhanKainEdit = (model.kebutuhan_kain?.length ?? 0) > 0
+      ? model.kebutuhan_kain!
+      : ((model as any).varian_warna?.[0]?.kebutuhan_kain ?? []);
+    fKainList = kebutuhanKainEdit.map((k: typeof model.kebutuhan_kain[0]) => ({
       kain_id: k.kain_id,
       nama_kain: getKainById(k.kain_id)?.nama_kain ?? k.nama_kain,
       satuan: k.satuan ?? "yard",
@@ -167,12 +188,14 @@
   async function load(force = false) {
     loading = true;
     try {
-      const [models, stokKain] = await Promise.all([
+      const [models, stokKain, warna] = await Promise.all([
         modelBajuCache.get(force),
         stokKainCache.get(force),
+        warnaCache.get(force),
       ]);
       modelList = models;
       stokKainList = stokKain;
+      warnaList = warna;
     } catch {
       showError("Gagal memuat data. Periksa koneksi Firebase.");
     } finally {
@@ -189,6 +212,7 @@
         nama_model: fNama.trim(),
         ...(fDeskripsi.trim() ? { deskripsi: fDeskripsi.trim() } : {}),
         ukuran_tersedia: fUkuran,
+        warna_tersedia: fWarna.length > 0 ? fWarna : [],
         kebutuhan_kain: fKainList.map((k) => ({
           kain_id: k.kain_id,
           nama_kain: k.nama_kain,
@@ -558,6 +582,29 @@
             </div>
           </div>
 
+          <!-- Warna Tersedia -->
+          {#if (model.warna_tersedia ?? []).length > 0}
+            <div>
+              <p class="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+                Warna Tersedia
+              </p>
+              <div class="flex flex-wrap gap-1.5">
+                {#each model.warna_tersedia ?? [] as w}
+                  <span
+                    class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium"
+                    style="background-color: {w.kode_hex}1a; color: {w.kode_hex}; border: 1px solid {w.kode_hex}4d"
+                  >
+                    <span
+                      class="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+                      style="background-color: {w.kode_hex}"
+                    ></span>
+                    {w.nama_warna}
+                  </span>
+                {/each}
+              </div>
+            </div>
+          {/if}
+
           <!-- Kebutuhan Kain -->
           <div>
             <p class="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
@@ -819,6 +866,84 @@
             <p class="mt-1.5 text-xs text-gray-400">
               Dipilih: <span class="font-medium text-gray-700">{fUkuran.join(", ")}</span>
             </p>
+          {/if}
+        </div>
+
+        <!-- Warna Tersedia -->
+        <div>
+          <label class="mb-1.5 block text-sm font-medium text-gray-700">
+            Warna Tersedia
+            <span class="text-xs font-normal text-gray-400">(opsional)</span>
+          </label>
+          {#if warnaList.length === 0}
+            <p class="text-xs text-gray-400">
+              Belum ada warna terdaftar.
+              <a href="/warna" class="text-blue-500 hover:underline">Tambah warna →</a>
+            </p>
+          {:else}
+            <Popover.Root>
+              <Popover.Trigger
+                class="flex min-h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+              >
+                {#if fWarna.length === 0}
+                  <span class="text-muted-foreground">— Pilih warna —</span>
+                {:else}
+                  <div class="flex flex-wrap gap-1.5">
+                    {#each fWarna as w}
+                      <span
+                        class="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-xs font-medium text-gray-700"
+                      >
+                        <span
+                          class="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-black/10"
+                          style="background-color: {w.kode_hex}"
+                        ></span>
+                        {w.nama_warna}
+                      </span>
+                    {/each}
+                  </div>
+                {/if}
+                <svg
+                  class="ml-2 h-4 w-4 shrink-0 opacity-50"
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke-width="2"
+                  stroke="currentColor"
+                >
+                  <path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+                </svg>
+              </Popover.Trigger>
+              <Popover.Content class="w-[--bits-popover-anchor-width] p-1" align="start">
+                {#each warnaList as w}
+                  {@const selected = isWarnaSelected(w.id)}
+                  <button
+                    type="button"
+                    onclick={() => toggleWarna(w)}
+                    class="flex w-full items-center gap-2.5 rounded-sm px-2 py-1.5 text-sm hover:bg-accent"
+                  >
+                    <span
+                      class="inline-block h-4 w-4 shrink-0 rounded-full border border-black/10 shadow-sm"
+                      style="background-color: {w.kode_hex}"
+                    ></span>
+                    <span class="flex-1 text-left">{w.nama_warna}</span>
+                    {#if selected}
+                      <svg
+                        class="h-4 w-4 shrink-0 text-primary"
+                        xmlns="http://www.w3.org/2000/svg"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke-width="2.5"
+                        stroke="currentColor"
+                      >
+                        <path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+                      </svg>
+                    {:else}
+                      <span class="h-4 w-4 shrink-0"></span>
+                    {/if}
+                  </button>
+                {/each}
+              </Popover.Content>
+            </Popover.Root>
           {/if}
         </div>
 

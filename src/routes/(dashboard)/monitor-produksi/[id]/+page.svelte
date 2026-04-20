@@ -3,7 +3,7 @@
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { getBatchById, getRiwayatBatch, updateStatusBatch, completeBatchProduksi, sinkronStokPotonganBatch } from '$lib/firebase/batch-produksi';
-  import { karyawanCache, batchCache } from '$lib/stores/data-cache.svelte';
+  import { karyawanCache, batchCache, stokKainCache } from '$lib/stores/data-cache.svelte';
   import { userRole, currentUser } from '$lib/stores/auth.store';
   import type { BatchProduksi, RiwayatProses, StatusBatch, UserProfile, UserRole } from '$lib/types';
   import { STATUS_LABEL } from '$lib/types';
@@ -77,7 +77,11 @@
       case 'JAHIT_DONE':
         return { label: 'Mulai Steam', nextStatus: 'STEAM_IN_PROGRESS', needsWorker: true, workerRole: 'kepala_steam', needsPcs: false, isFinal: false };
       case 'STEAM_IN_PROGRESS':
-        return { label: 'Selesaikan Steam & Kirim ke Barang Jadi', nextStatus: 'STEAM_DONE', needsWorker: false, needsPcs: true, isFinal: true };
+        // Langsung ke COMPLETED, skip STEAM_DONE
+        return { label: 'Selesaikan Steam & Kirim ke Barang Jadi', nextStatus: 'COMPLETED', needsWorker: false, needsPcs: true, isFinal: true };
+      case 'STEAM_DONE':
+        // Recovery: batch stuck di STEAM_DONE
+        return { label: 'Selesaikan & Kirim ke Barang Jadi', nextStatus: 'COMPLETED', needsWorker: false, needsPcs: false, isFinal: true };
       default:
         return null;
     }
@@ -190,23 +194,23 @@
           })).filter((du) => du.jumlah_pcs > 0)
         : undefined;
 
-      await updateStatusBatch(
-        batch.id,
-        currentAction.nextStatus,
-        uid,
-        nama,
-        { status_dari: batch.status, pcs_berhasil: pcsBerhasil, pcs_reject: pcsReject },
-        worker ? { uid: worker.uid, nama: worker.name } : undefined,
-        newDetailUkuran,
-      );
-
-      // Setelah STEAM_DONE, selesaikan batch & masuk ke barang jadi
       if (currentAction.isFinal) {
+        // Steam selesai: langsung complete dalam satu operasi (skip STEAM_DONE)
         await completeBatchProduksi(batch.id, uid, nama, {
-          status_dari: currentAction.nextStatus,
+          status_dari: batch.status,
           pcs_berhasil: pcsBerhasil,
           pcs_reject: pcsReject,
-        });
+        }, newDetailUkuran ?? undefined);
+      } else {
+        await updateStatusBatch(
+          batch.id,
+          currentAction.nextStatus,
+          uid,
+          nama,
+          { status_dari: batch.status, pcs_berhasil: pcsBerhasil, pcs_reject: pcsReject },
+          worker ? { uid: worker.uid, nama: worker.name } : undefined,
+          newDetailUkuran,
+        );
       }
 
       // Setelah CUTTING_DONE, sinkronkan stok potongan (untuk batch original, bukan dari_potongan)
@@ -215,6 +219,9 @@
       }
 
       batchCache.invalidate();
+      if (currentAction.nextStatus === 'CUTTING_DONE' && !batch.dari_potongan) {
+        stokKainCache.invalidate();
+      }
       actionOpen = false;
 
       // Reload data
@@ -238,6 +245,24 @@
     riwayat = r;
     karyawanList = karyawan;
     loading = false;
+
+    // Auto-selesaikan batch yang stuck di STEAM_DONE dari alur lama
+    if (b.status === 'STEAM_DONE' && $currentUser) {
+      try {
+        const uid = $currentUser.uid;
+        const nama = $currentUser.name || $currentUser.email || uid;
+        await completeBatchProduksi(b.id, uid, nama, {
+          status_dari: 'STEAM_DONE',
+          pcs_berhasil: b.pcs_saat_ini ?? b.total_pcs,
+          pcs_reject: 0,
+        });
+        batchCache.invalidate();
+        const [b2, r2] = await Promise.all([getBatchById(id), getRiwayatBatch(id)]);
+        if (b2) { batch = b2; riwayat = r2; }
+      } catch (e) {
+        console.error('[auto-complete-steam] Gagal complete batch', b.id, e);
+      }
+    }
   }
 
   onMount(load);

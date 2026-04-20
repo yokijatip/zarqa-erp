@@ -80,7 +80,7 @@ export const PRODUCTION_STAGE_CONFIG: Record<ProductionStageKey, ProductionStage
     readyLabel: "Siap Steam",
     workingLabel: "Sedang Steam",
     readyStatuses: ["JAHIT_DONE"],
-    activeStatuses: ["JAHIT_DONE", "STEAM_IN_PROGRESS"],
+    activeStatuses: ["JAHIT_DONE", "STEAM_IN_PROGRESS", "STEAM_DONE"],
     detailHint: "Klik baris batch untuk mulai atau selesaikan proses steam langsung dari halaman ini.",
     accentClass: "bg-emerald-500",
     accentSoftClass: "bg-emerald-50",

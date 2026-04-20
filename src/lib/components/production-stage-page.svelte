@@ -100,23 +100,23 @@
           })).filter((du) => du.jumlah_pcs > 0)
         : undefined;
 
-      await updateStatusBatch(
-        quickBatch.id,
-        quickNextStatus as any,
-        uid,
-        nama,
-        { status_dari: quickBatch.status as any, pcs_berhasil: pcsBerhasil, pcs_reject: pcsReject },
-        worker ? { uid: worker.uid, nama: worker.name } : undefined,
-        newDetailUkuran,
-      );
-
-      // Setelah STEAM_DONE, langsung selesaikan dan masukkan ke barang jadi
       if (quickNextStatus === "STEAM_DONE") {
+        // Langsung complete, skip STEAM_DONE sebagai status perantara
         await completeBatchProduksi(quickBatch.id, uid, nama, {
-          status_dari: "STEAM_DONE",
+          status_dari: quickBatch.status as any,
           pcs_berhasil: pcsBerhasil,
           pcs_reject: pcsReject,
-        });
+        }, newDetailUkuran ?? undefined);
+      } else {
+        await updateStatusBatch(
+          quickBatch.id,
+          quickNextStatus as any,
+          uid,
+          nama,
+          { status_dari: quickBatch.status as any, pcs_berhasil: pcsBerhasil, pcs_reject: pcsReject },
+          worker ? { uid: worker.uid, nama: worker.name } : undefined,
+          newDetailUkuran,
+        );
       }
 
       batchCache.invalidate();
@@ -210,6 +210,33 @@
     await Promise.all([load(true), loadStock(true)]);
   }
 
+  // Otomatis selesaikan batch STEAM_DONE yang tersisa dari alur lama
+  async function autoCompleteSteamDone() {
+    if (config.key !== 'steam') return;
+    const stuck = batchList.filter((b) => b.status === 'STEAM_DONE');
+    if (stuck.length === 0) return;
+    const uid = $currentUser?.uid ?? 'system';
+    const nama = $currentUser?.name || $currentUser?.email || 'system';
+    let completed = false;
+    for (const b of stuck) {
+      try {
+        const pcsBerhasil = b.pcs_saat_ini ?? b.total_pcs;
+        await completeBatchProduksi(b.id, uid, nama, {
+          status_dari: 'STEAM_DONE',
+          pcs_berhasil: pcsBerhasil,
+          pcs_reject: 0,
+        });
+        completed = true;
+      } catch (e) {
+        console.error('[auto-complete-steam] Gagal complete batch', b.id, e);
+      }
+    }
+    if (completed) {
+      batchCache.invalidate();
+      await load(true);
+    }
+  }
+
   // Otomatis sync semua batch CUTTING_DONE yang belum masuk stok_potongan
   async function autoSyncPending() {
     if (config.key !== 'cutting') return;
@@ -238,6 +265,7 @@
     if (config.quickAction) tasks.push(karyawanCache.get().then((list) => { karyawanList = list; }));
     await Promise.all(tasks);
     await autoSyncPending();
+    await autoCompleteSteamDone();
   });
 </script>
 

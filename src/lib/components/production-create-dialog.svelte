@@ -60,7 +60,11 @@
   let totalPcs = $derived(detailUkuran.reduce((sum, item) => sum + item.jumlah_pcs, 0));
   let kainDibutuhkan = $derived(
     selectedModel && totalPcs > 0
-      ? (selectedModel.kebutuhan_kain ?? []).map((kain) => ({
+      ? (
+          (selectedModel.kebutuhan_kain?.length ?? 0) > 0
+            ? selectedModel.kebutuhan_kain!
+            : ((selectedModel as any).varian_warna?.[0]?.kebutuhan_kain ?? [])
+        ).map((kain: typeof selectedModel.kebutuhan_kain[0]) => ({
           kain_id: kain.kain_id,
           nama_kain: kain.nama_kain,
           satuan: kain.satuan,
@@ -88,6 +92,11 @@
       ) &&
       fPenugasanUid !== "",
   );
+
+  // Ambil label warna gabungan untuk sebuah model, misal "Abu · Navy"
+  function warnaLabel(model: ModelBaju): string {
+    return (model.warna_tersedia ?? []).map((w) => w.nama_warna).join(" · ");
+  }
 
   async function loadModels() {
     loadingModels = true;
@@ -148,9 +157,17 @@
     saving = true;
     errorMsg = null;
     try {
+      const warnas = selectedModel.warna_tersedia ?? [];
       const inputData = {
         model_id: fModelId,
         nama_model: selectedModel.nama_model,
+        // Simpan info warna kombinasi ke batch jika model punya warna
+        ...(warnas.length > 0
+          ? {
+              nama_warna: warnas.map((w) => w.nama_warna).join(", "),
+              kode_hex_warna: warnas[0].kode_hex,
+            }
+          : {}),
         detail_ukuran: detailUkuran,
         kain_digunakan: kainDibutuhkan,
         penugasan: {
@@ -222,14 +239,48 @@
             >
               <Select.Trigger class="w-full">
                 {#if selectedModel}
-                  <span>{selectedModel.nama_model}</span>
+                  <!-- Trigger: nama model + dot warna + label warna -->
+                  <span class="flex items-center gap-1.5 truncate">
+                    <span>{selectedModel.nama_model}</span>
+                    {#each selectedModel.warna_tersedia ?? [] as w, i}
+                      {#if i === 0}
+                        <span class="text-gray-300">·</span>
+                      {/if}
+                      <span
+                        class="inline-block h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-black/10"
+                        style="background:{w.kode_hex}"
+                      ></span>
+                      <span class="text-gray-500">{w.nama_warna}</span>
+                      {#if i < (selectedModel.warna_tersedia?.length ?? 0) - 1}
+                        <span class="text-gray-300">·</span>
+                      {/if}
+                    {/each}
+                  </span>
                 {:else}
                   <span class="text-muted-foreground">— Pilih model —</span>
                 {/if}
               </Select.Trigger>
               <Select.Content preventScroll={false}>
                 {#each modelList as model}
-                  <Select.Item value={model.id}>{model.nama_model}</Select.Item>
+                  <Select.Item value={model.id}>
+                    <!-- Item: nama model + dot warna + label warna -->
+                    <span class="flex items-center gap-1.5">
+                      <span>{model.nama_model}</span>
+                      {#each model.warna_tersedia ?? [] as w, i}
+                        {#if i === 0}
+                          <span class="text-gray-300">·</span>
+                        {/if}
+                        <span
+                          class="inline-block h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-black/10"
+                          style="background:{w.kode_hex}"
+                        ></span>
+                        <span class="text-gray-400 text-xs">{w.nama_warna}</span>
+                        {#if i < (model.warna_tersedia?.length ?? 0) - 1}
+                          <span class="text-gray-300">·</span>
+                        {/if}
+                      {/each}
+                    </span>
+                  </Select.Item>
                 {/each}
               </Select.Content>
             </Select.Root>

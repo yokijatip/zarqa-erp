@@ -34,6 +34,20 @@ export interface Warna {
 
 export type WarnaInput = Omit<Warna, 'id' | 'createdAt' | 'updatedAt'>;
 
+// ─── RIWAYAT STOK KAIN ──────────────────────────────────────────
+
+export type TipeRiwayatKain = 'restock' | 'kurangi_manual' | 'pemakaian_produksi';
+
+export interface RiwayatStokKain {
+  id?: string;
+  tipe: TipeRiwayatKain;
+  jumlah: number;
+  stok_sebelum: number;
+  stok_sesudah: number;
+  catatan?: string;
+  timestamp?: Timestamp;
+}
+
 // ─── STOK KAIN ───────────────────────────────────────────────────
 
 export interface StokKain {
@@ -65,11 +79,18 @@ export interface KebutuhanKain {
   jumlah_per_ukuran: Partial<Record<UkuranBaju, number>>;
 }
 
+export interface WarnaTersedia {
+  warna_id: string;
+  nama_warna: string;
+  kode_hex: string;
+}
+
 export interface ModelBaju {
   id: string;
   nama_model: string;
   deskripsi?: string;
   ukuran_tersedia: UkuranBaju[];
+  warna_tersedia?: WarnaTersedia[];
   kebutuhan_kain: KebutuhanKain[];
   aktif: boolean;
   createdAt?: Timestamp;

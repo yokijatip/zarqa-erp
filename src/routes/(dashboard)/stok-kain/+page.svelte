@@ -1,14 +1,16 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { afterNavigate } from "$app/navigation";
   import {
     addStokKain,
     restockKain,
     updateStokKain,
     kurangiStokManual,
     deleteStokKain,
+    getRiwayatStokKain,
   } from "$lib/firebase/stok-kain";
+  import { getBatchListByDateRange } from "$lib/firebase/batch-produksi";
   import { stokKainCache, warnaCache } from "$lib/stores/data-cache.svelte";
-  import type { StokKain, Warna } from "$lib/types";
+  import type { StokKain, Warna, BatchProduksi, RiwayatStokKain } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
   import * as Table from "$lib/components/ui/table";
   import { Button } from "$lib/components/ui/button";
@@ -17,6 +19,8 @@
   import LayersIcon from "@lucide/svelte/icons/layers";
   import BoxIcon from "@lucide/svelte/icons/box";
   import AlertTriangleIcon from "@lucide/svelte/icons/alert-triangle";
+  import { Chart, registerables } from "chart.js";
+  Chart.register(...registerables);
 
   // ── State ──────────────────────────────────────────────────────────
   let stokList = $state<StokKain[]>([]);
@@ -39,6 +43,38 @@
   let kurangiKain = $state<StokKain | null>(null);
   let editingKain = $state<StokKain | null>(null);
 
+  // History state
+  let openRiwayat = $state(false);
+  let riwayatKain = $state<StokKain | null>(null);
+  let riwayatList = $state<RiwayatStokKain[]>([]);
+  let riwayatLoading = $state(false);
+
+  async function bukaRiwayat(kain: StokKain) {
+    riwayatKain = kain;
+    riwayatList = [];
+    openRiwayat = true;
+    riwayatLoading = true;
+    try {
+      riwayatList = await getRiwayatStokKain(kain.id);
+    } catch {
+      riwayatList = [];
+    } finally {
+      riwayatLoading = false;
+    }
+  }
+
+  function formatTanggal(ts: import("firebase/firestore").Timestamp | undefined): string {
+    if (!ts) return "—";
+    const d = ts.toDate();
+    return d.toLocaleDateString("id-ID", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
+
   // Form: tambah kain
   let fNama = $state("");
   let fWarnaId = $state("");
@@ -60,6 +96,148 @@
   let eCatatan = $state("");
   let eKonfirmasiHapus = $state(false);
   let deleting = $state(false);
+
+  // ── Analytics State ────────────────────────────────────────────────
+  function toDateStr(d: Date): string {
+    return d.toISOString().slice(0, 10);
+  }
+
+  const _now = new Date();
+  let analyticsFromStr = $state(
+    toDateStr(new Date(_now.getFullYear(), _now.getMonth(), 1)),
+  );
+  let analyticsToStr = $state(
+    toDateStr(new Date(_now.getFullYear(), _now.getMonth() + 1, 0)),
+  );
+  let analyticsLoading = $state(false);
+  let analyticsBatches = $state<BatchProduksi[]>([]);
+  let chartCanvas = $state<HTMLCanvasElement | null>(null);
+
+  const CHART_COLORS = [
+    "rgba(59,130,246,0.75)",
+    "rgba(16,185,129,0.75)",
+    "rgba(245,158,11,0.75)",
+    "rgba(239,68,68,0.75)",
+    "rgba(168,85,247,0.75)",
+    "rgba(236,72,153,0.75)",
+    "rgba(14,165,233,0.75)",
+    "rgba(249,115,22,0.75)",
+    "rgba(20,184,166,0.75)",
+    "rgba(99,102,241,0.75)",
+  ];
+
+  type KainUsageEntry = {
+    nama: string;
+    satuan: string;
+    total: number;
+    models: Array<{ model_id: string; nama: string; total: number }>;
+  };
+
+  // Status yang menandakan kain sudah benar-benar dipotong
+  const STATUSES_KAIN_DIPOTONG = new Set([
+    "CUTTING_DONE", "JAHIT_IN_PROGRESS", "JAHIT_DONE",
+    "STEAM_IN_PROGRESS", "STEAM_DONE", "COMPLETED",
+  ]);
+
+  let kainUsageData = $derived.by((): Array<[string, KainUsageEntry]> => {
+    const map = new Map<string, KainUsageEntry>();
+    for (const batch of analyticsBatches) {
+      if (batch.dari_potongan) continue;
+      if (!STATUSES_KAIN_DIPOTONG.has(batch.status)) continue; // kain belum dipotong
+      for (const k of batch.kain_digunakan) {
+        if (!map.has(k.kain_id)) {
+          map.set(k.kain_id, {
+            nama: k.nama_kain,
+            satuan: k.satuan,
+            total: 0,
+            models: [],
+          });
+        }
+        const entry = map.get(k.kain_id)!;
+        entry.total = parseFloat((entry.total + k.jumlah_dipakai).toFixed(2));
+        const m = entry.models.find((x) => x.model_id === batch.model_id);
+        if (m) {
+          m.total = parseFloat((m.total + k.jumlah_dipakai).toFixed(2));
+        } else {
+          entry.models.push({
+            model_id: batch.model_id,
+            nama: batch.nama_model,
+            total: k.jumlah_dipakai,
+          });
+        }
+      }
+    }
+    for (const [, entry] of map) {
+      entry.models.sort((a, b) => b.total - a.total);
+    }
+    return [...map.entries()].sort((a, b) => b[1].total - a[1].total);
+  });
+
+  $effect(() => {
+    const canvas = chartCanvas;
+    const data = kainUsageData;
+    if (!canvas || data.length === 0) return;
+
+    const chart = new Chart(canvas, {
+      type: "bar",
+      data: {
+        labels: data.map(([, v]) => `${v.nama}`),
+        datasets: [
+          {
+            data: data.map(([, v]) => v.total),
+            backgroundColor: data.map(
+              (_, i) => CHART_COLORS[i % CHART_COLORS.length],
+            ),
+            borderColor: data.map(
+              (_, i) =>
+                CHART_COLORS[i % CHART_COLORS.length].replace("0.75", "1"),
+            ),
+            borderWidth: 1,
+            borderRadius: 4,
+          },
+        ],
+      },
+      options: {
+        indexAxis: "y",
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: (ctx) =>
+                ` ${Number(ctx.raw).toLocaleString("id-ID")} ${data[ctx.dataIndex]?.[1]?.satuan ?? ""}`,
+            },
+          },
+        },
+        scales: {
+          x: {
+            beginAtZero: true,
+            ticks: { font: { size: 11 } },
+          },
+          y: {
+            ticks: { font: { size: 12 } },
+          },
+        },
+      },
+    });
+
+    return () => chart.destroy();
+  });
+
+  async function loadAnalytics() {
+    if (!analyticsFromStr || !analyticsToStr) return;
+    analyticsLoading = true;
+    try {
+      const from = new Date(analyticsFromStr + "T00:00:00");
+      const to = new Date(analyticsToStr + "T23:59:59");
+      analyticsBatches = await getBatchListByDateRange(from, to);
+    } catch {
+      analyticsBatches = [];
+    } finally {
+      analyticsLoading = false;
+    }
+  }
 
   // ── Derived ────────────────────────────────────────────────────────
   let totalYard = $derived(
@@ -231,7 +409,7 @@
     if (!kurangiKain || kJumlah === "" || Number(kJumlah) <= 0) return;
     saving = true;
     try {
-      await kurangiStokManual(kurangiKain.id, Number(kJumlah));
+      await kurangiStokManual(kurangiKain.id, Number(kJumlah), kCatatan.trim() || undefined);
       const nama = kurangiKain.nama_kain;
       const satuan = kurangiKain.satuan;
       const jumlah = Number(kJumlah);
@@ -302,7 +480,10 @@
     }
   }
 
-  onMount(load);
+  afterNavigate(() => {
+    load();
+    loadAnalytics();
+  });
 </script>
 
 <!-- ── Toast Notification ──────────────────────────────────────── -->
@@ -403,6 +584,174 @@
     class={kritisCount > 0 ? "border-red-200 bg-red-50" : ""}
     valueClass={kritisCount > 0 ? "text-red-700" : ""}
   />
+</div>
+
+<!-- ── Analytics Section ─────────────────────────────────────── -->
+<div
+  class="mb-5 overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm"
+>
+  <!-- Header + date range -->
+  <div
+    class="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 px-5 py-4"
+  >
+    <div>
+      <h2 class="text-sm font-semibold text-gray-800">Analitik Pemakaian Kain</h2>
+      <p class="text-xs text-gray-400">
+        Kain yang terpakai saat order produksi dibuat (bukan dari potongan)
+      </p>
+    </div>
+    <div class="flex flex-wrap items-center gap-2">
+      <input
+        type="date"
+        bind:value={analyticsFromStr}
+        class="rounded-lg border border-gray-200 px-3 py-1.5 text-sm text-gray-700 focus:outline-none"
+      />
+      <span class="text-xs text-gray-400">s/d</span>
+      <input
+        type="date"
+        bind:value={analyticsToStr}
+        class="rounded-lg border border-gray-200 px-3 py-1.5 text-sm text-gray-700 focus:outline-none"
+      />
+      <Button size="sm" onclick={loadAnalytics} disabled={analyticsLoading}>
+        {#if analyticsLoading}
+          <svg
+            class="h-3.5 w-3.5 animate-spin"
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke-width="2"
+            stroke="currentColor"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"
+            />
+          </svg>
+          Memuat...
+        {:else}
+          Tampilkan
+        {/if}
+      </Button>
+    </div>
+  </div>
+
+  <!-- Content -->
+  {#if analyticsLoading}
+    <div class="flex items-center justify-center py-12">
+      <svg
+        class="h-6 w-6 animate-spin text-gray-300"
+        xmlns="http://www.w3.org/2000/svg"
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke-width="2"
+        stroke="currentColor"
+      >
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"
+        />
+      </svg>
+    </div>
+  {:else if kainUsageData.length === 0}
+    <div class="flex flex-col items-center justify-center gap-2 py-12">
+      <p class="text-sm text-gray-400">Tidak ada data pemakaian kain pada periode ini</p>
+    </div>
+  {:else}
+    <div class="p-5">
+      <!-- Summary total -->
+      <div class="mb-4 flex flex-wrap gap-3">
+        {#each kainUsageData as [, usage], i}
+          <div
+            class="flex items-center gap-2 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2"
+          >
+            <span
+              class="inline-block h-3 w-3 shrink-0 rounded-full"
+              style="background-color: {CHART_COLORS[i % CHART_COLORS.length]}"
+            ></span>
+            <span class="text-xs text-gray-600">{usage.nama}</span>
+            <span class="text-xs font-semibold text-gray-800">
+              {usage.total.toLocaleString("id-ID")}
+              <span class="font-normal text-gray-400">{usage.satuan}</span>
+            </span>
+          </div>
+        {/each}
+      </div>
+
+      <!-- Chart -->
+      <div
+        class="w-full"
+        style="height: {Math.max(160, kainUsageData.length * 48)}px"
+      >
+        <canvas bind:this={chartCanvas}></canvas>
+      </div>
+
+      <!-- Model breakdown per kain -->
+      {#if kainUsageData.some(([, v]) => v.models.length > 0)}
+        <div class="mt-5">
+          <p class="mb-3 text-xs font-medium uppercase tracking-wider text-gray-400">
+            Model pengguna per jenis kain
+          </p>
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {#each kainUsageData as [kainId, usage], i}
+              <div
+                class="rounded-xl border border-gray-100 p-4"
+                style="border-left: 3px solid {CHART_COLORS[
+                  i % CHART_COLORS.length
+                ]}"
+              >
+                <p class="mb-2 text-sm font-semibold text-gray-800">
+                  {usage.nama}
+                  <span class="ml-1 text-xs font-normal text-gray-400"
+                    >({usage.satuan})</span
+                  >
+                </p>
+                {#if usage.models.length === 0}
+                  <p class="text-xs text-gray-400">Tidak ada data model</p>
+                {:else}
+                  <div class="space-y-1.5">
+                    {#each usage.models.slice(0, 5) as model}
+                      {@const pct = Math.round((model.total / usage.total) * 100)}
+                      <div>
+                        <div class="mb-0.5 flex items-center justify-between">
+                          <span
+                            class="max-w-[70%] truncate text-xs text-gray-600"
+                            title={model.nama}>{model.nama}</span
+                          >
+                          <span class="text-xs font-medium text-gray-700">
+                            {model.total.toLocaleString("id-ID")}
+                            <span class="font-normal text-gray-400"
+                              >{usage.satuan}</span
+                            >
+                          </span>
+                        </div>
+                        <div
+                          class="h-1.5 w-full overflow-hidden rounded-full bg-gray-100"
+                        >
+                          <div
+                            class="h-full rounded-full"
+                            style="width: {pct}%; background-color: {CHART_COLORS[
+                              i % CHART_COLORS.length
+                            ]}"
+                          ></div>
+                        </div>
+                      </div>
+                    {/each}
+                    {#if usage.models.length > 5}
+                      <p class="text-xs text-gray-400">
+                        +{usage.models.length - 5} model lainnya
+                      </p>
+                    {/if}
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+    </div>
+  {/if}
 </div>
 
 <!-- ── Filter & Sort Bar ──────────────────────────────────────── -->
@@ -645,6 +994,28 @@
                     />
                   </svg>
                   Restock
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onclick={() => bukaRiwayat(kain)}
+                  class="border-gray-200 text-gray-500 hover:text-gray-700"
+                  title="Lihat riwayat"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke-width="2"
+                    stroke="currentColor"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"
+                    />
+                  </svg>
+                  Riwayat
                 </Button>
               </div>
             </Table.Cell>
@@ -1228,6 +1599,181 @@
           {saving ? "Menyimpan..." : "Simpan Perubahan"}
         </Button>
       {/if}
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
+
+<!-- ── Dialog: Riwayat Stok Kain ─────────────────────────────── -->
+<Dialog.Root bind:open={openRiwayat}>
+  <Dialog.Content class="max-w-lg">
+    <Dialog.Header>
+      <Dialog.Title>Riwayat Stok</Dialog.Title>
+      {#if riwayatKain}
+        <Dialog.Description>
+          {riwayatKain.nama_kain}{riwayatKain.nama_warna
+            ? ` · ${riwayatKain.nama_warna}`
+            : ""} — 50 entri terakhir
+        </Dialog.Description>
+      {/if}
+    </Dialog.Header>
+
+    {#if riwayatLoading}
+      <div class="flex items-center justify-center py-10">
+        <svg
+          class="h-5 w-5 animate-spin text-gray-300"
+          xmlns="http://www.w3.org/2000/svg"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke-width="2"
+          stroke="currentColor"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"
+          />
+        </svg>
+      </div>
+    {:else if riwayatList.length === 0}
+      <div class="flex flex-col items-center justify-center gap-2 py-10">
+        <svg
+          class="h-10 w-10 text-gray-200"
+          xmlns="http://www.w3.org/2000/svg"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke-width="1.5"
+          stroke="currentColor"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"
+          />
+        </svg>
+        <p class="text-sm text-gray-400">Belum ada riwayat untuk kain ini</p>
+      </div>
+    {:else}
+      <div class="max-h-[60vh] overflow-y-auto">
+        <div class="space-y-2 py-1 pr-1">
+          {#each riwayatList as item}
+            {@const isRestock = item.tipe === "restock"}
+            {@const isProduksi = item.tipe === "pemakaian_produksi"}
+            <div
+              class="flex items-start gap-3 rounded-xl border border-gray-100 p-3"
+            >
+              <!-- Icon -->
+              <div
+                class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full {isRestock
+                  ? 'bg-green-100'
+                  : isProduksi
+                    ? 'bg-blue-100'
+                    : 'bg-orange-100'}"
+              >
+                {#if isRestock}
+                  <svg
+                    class="h-4 w-4 text-green-600"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke-width="2.5"
+                    stroke="currentColor"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M12 4.5v15m7.5-7.5h-15"
+                    />
+                  </svg>
+                {:else if isProduksi}
+                  <svg
+                    class="h-4 w-4 text-blue-600"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke-width="2"
+                    stroke="currentColor"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M7.848 8.25l1.536.887M7.848 8.25a3 3 0 1 1-5.196-3 3 3 0 0 1 5.196 3Zm1.536.887a2.165 2.165 0 0 1 1.083 1.839c.005.351.054.695.14 1.024M9.384 9.137l2.077 1.199M7.848 15.75l1.536-.887m-1.536.887a3 3 0 1 1-5.196 3 3 3 0 0 1 5.196-3Zm1.536-.887a2.165 2.165 0 0 1 1.083-1.838c.5-.243.98-.54 1.433-.885M9.384 14.863l7.229-4.173M14.352 8.25l1.536.887M14.352 8.25a3 3 0 1 1 5.196-3 3 3 0 0 1-5.196 3Zm1.536.887a2.165 2.165 0 0 0-1.083 1.839c-.005.351-.054.695-.14 1.024m1.223-2.863 2.077 1.199m0 3.328-2.077 1.2m0 0-1.536.887M19.464 15.75l-1.536-.887m0 0a2.165 2.165 0 0 0-1.083-1.838 8.92 8.92 0 0 1-1.433-.885M16.615 14.863l-7.229-4.173"
+                    />
+                  </svg>
+                {:else}
+                  <svg
+                    class="h-4 w-4 text-orange-600"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke-width="2.5"
+                    stroke="currentColor"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M5 12h14"
+                    />
+                  </svg>
+                {/if}
+              </div>
+
+              <!-- Content -->
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center justify-between gap-2">
+                  <span
+                    class="text-xs font-semibold {isRestock
+                      ? 'text-green-700'
+                      : isProduksi
+                        ? 'text-blue-700'
+                        : 'text-orange-700'}"
+                  >
+                    {isRestock
+                      ? "Restock"
+                      : isProduksi
+                        ? "Pemakaian Produksi"
+                        : "Pengurangan Manual"}
+                  </span>
+                  <span
+                    class="shrink-0 text-sm font-bold tabular-nums {isRestock
+                      ? 'text-green-600'
+                      : 'text-red-600'}"
+                  >
+                    {isRestock ? "+" : "−"}{item.jumlah.toLocaleString("id-ID")}
+                    <span class="text-xs font-normal text-gray-400"
+                      >{riwayatKain?.satuan}</span
+                    >
+                  </span>
+                </div>
+
+                {#if item.catatan}
+                  <p class="mt-0.5 text-xs text-gray-600">{item.catatan}</p>
+                {/if}
+
+                <div class="mt-1 flex items-center gap-2 text-[11px] text-gray-400">
+                  <span
+                    >{item.stok_sebelum.toLocaleString("id-ID")} →
+                    <span
+                      class="font-medium {item.stok_sesudah > item.stok_sebelum
+                        ? 'text-green-600'
+                        : 'text-red-500'}"
+                      >{item.stok_sesudah.toLocaleString("id-ID")}</span
+                    >
+                    {riwayatKain?.satuan}</span
+                  >
+                  <span class="text-gray-300">·</span>
+                  <span>{formatTanggal(item.timestamp)}</span>
+                </div>
+              </div>
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
+
+    <Dialog.Footer>
+      <Button variant="outline" onclick={() => (openRiwayat = false)}>
+        Tutup
+      </Button>
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>

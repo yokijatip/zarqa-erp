@@ -7,6 +7,7 @@
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import * as Dialog from "$lib/components/ui/dialog";
+  import * as Select from "$lib/components/ui/select/index.js";
   import StatCard from "$lib/components/StatCard.svelte";
   import ShirtIcon from "@lucide/svelte/icons/shirt";
   import PackageIcon from "@lucide/svelte/icons/package";
@@ -648,17 +649,42 @@
         {#if loadingModels}
           <div class="h-10 animate-pulse rounded-lg bg-gray-100"></div>
         {:else}
-          <select
-            id="tambah-model"
-            bind:value={fModelId}
-            onchange={() => (fJumlahPerUkuran = {})}
-            class="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-300"
+          <Select.Root
+            type="single"
+            value={fModelId || undefined}
+            onValueChange={(val) => { fModelId = val ?? ""; fJumlahPerUkuran = {}; }}
           >
-            <option value="">— Pilih model —</option>
-            {#each modelList as m}
-              <option value={m.id}>{m.nama_model}</option>
-            {/each}
-          </select>
+            <Select.Trigger class="w-full">
+              {#if selectedModel}
+                <span class="flex items-center gap-1.5 truncate">
+                  <span>{selectedModel.nama_model}</span>
+                  {#each selectedModel.warna_tersedia ?? [] as w, i}
+                    {#if i === 0}<span class="text-gray-300">·</span>{/if}
+                    <span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-black/10" style="background:{w.kode_hex}"></span>
+                    <span class="text-gray-500">{w.nama_warna}</span>
+                    {#if i < (selectedModel.warna_tersedia?.length ?? 0) - 1}<span class="text-gray-300">·</span>{/if}
+                  {/each}
+                </span>
+              {:else}
+                <span class="text-muted-foreground">— Pilih model —</span>
+              {/if}
+            </Select.Trigger>
+            <Select.Content preventScroll={false}>
+              {#each modelList as m}
+                <Select.Item value={m.id}>
+                  <span class="flex items-center gap-1.5">
+                    <span>{m.nama_model}</span>
+                    {#each m.warna_tersedia ?? [] as w, i}
+                      {#if i === 0}<span class="text-gray-300">·</span>{/if}
+                      <span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-black/10" style="background:{w.kode_hex}"></span>
+                      <span class="text-gray-400 text-xs">{w.nama_warna}</span>
+                      {#if i < (m.warna_tersedia?.length ?? 0) - 1}<span class="text-gray-300">·</span>{/if}
+                    {/each}
+                  </span>
+                </Select.Item>
+              {/each}
+            </Select.Content>
+          </Select.Root>
         {/if}
       </div>
 
