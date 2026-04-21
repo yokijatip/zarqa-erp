@@ -2,12 +2,13 @@
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
-  import { getBatchById, getRiwayatBatch, updateStatusBatch, completeBatchProduksi, sinkronStokPotonganBatch } from '$lib/firebase/batch-produksi';
+  import { getBatchById, getRiwayatBatch, updateStatusBatch, completeBatchProduksi, sinkronStokPotonganBatch, deleteBatchProduksi, editKuantitasBatch, updatePenugasanBatch } from '$lib/firebase/batch-produksi';
   import { karyawanCache, batchCache, stokKainCache } from '$lib/stores/data-cache.svelte';
   import { userRole, currentUser } from '$lib/stores/auth.store';
   import type { BatchProduksi, RiwayatProses, StatusBatch, UserProfile, UserRole } from '$lib/types';
   import { STATUS_LABEL } from '$lib/types';
   import * as Dialog from '$lib/components/ui/dialog';
+  import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
   import * as Select from '$lib/components/ui/select';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
@@ -20,6 +21,9 @@
   import CheckCircleIcon from '@lucide/svelte/icons/check-circle';
   import CircleIcon from '@lucide/svelte/icons/circle';
   import LoaderIcon from '@lucide/svelte/icons/loader';
+  import Trash2Icon from '@lucide/svelte/icons/trash-2';
+  import PencilIcon from '@lucide/svelte/icons/pencil';
+  import MoreHorizontalIcon from '@lucide/svelte/icons/more-horizontal';
 
   const STATUS_STYLE: Record<StatusBatch, string> = {
     PENDING_CUTTING:     'bg-slate-100 text-slate-600',
@@ -113,6 +117,121 @@
   );
 
   let currentAction = $derived(batch ? getAction(batch) : null);
+
+  const MANAGE_ROLES: UserRole[] = ['admin_gudang', 'owner', 'developer'];
+  let canManage = $derived(!!$userRole && MANAGE_ROLES.includes($userRole as UserRole) && !!batch && batch.status !== 'COMPLETED');
+  let canDelete = $derived(!!$userRole && (['owner', 'developer'] as UserRole[]).includes($userRole as UserRole) && !!batch && batch.status !== 'COMPLETED');
+
+  // ── Delete dialog ─────────────────────────────────────────────────
+  let deleteOpen = $state(false);
+  let deleteSaving = $state(false);
+  let deleteError = $state<string | null>(null);
+
+  function openDeleteDialog() { deleteError = null; deleteOpen = true; }
+
+  async function submitDelete() {
+    if (!batch) return;
+    deleteSaving = true;
+    deleteError = null;
+    try {
+      await deleteBatchProduksi(batch.id);
+      batchCache.invalidate();
+      stokKainCache.invalidate();
+      goto('/monitor-produksi');
+    } catch (e: any) {
+      deleteError = e?.message ?? 'Gagal menghapus batch.';
+    } finally {
+      deleteSaving = false;
+    }
+  }
+
+  // ── Edit kuantitas dialog ─────────────────────────────────────────
+  let editOpen = $state(false);
+  let editUkuranJumlah = $state<number[]>([]);
+  let editAlasan = $state('');
+  let editSaving = $state(false);
+  let editError = $state<string | null>(null);
+
+  let editTotal = $derived(editUkuranJumlah.reduce((s, n) => s + (Number(n) || 0), 0));
+  let editFormValid = $derived(editTotal > 0);
+
+  function openEditDialog() {
+    if (!batch) return;
+    editUkuranJumlah = batch.detail_ukuran.map((du) => du.jumlah_pcs);
+    editAlasan = '';
+    editError = null;
+    editOpen = true;
+  }
+
+  async function submitEdit() {
+    if (!batch || !$currentUser || !editFormValid) return;
+    editSaving = true;
+    editError = null;
+    try {
+      const newDetail = batch.detail_ukuran
+        .map((du, i) => ({ ukuran: du.ukuran, jumlah_pcs: Number(editUkuranJumlah[i]) || 0 }))
+        .filter((du) => du.jumlah_pcs > 0);
+      const uid = $currentUser.uid;
+      const nama = $currentUser.name || $currentUser.email || uid;
+      await editKuantitasBatch(batch.id, newDetail, uid, nama, editAlasan.trim() || undefined);
+      batchCache.invalidate();
+      editOpen = false;
+      const id = $page.params.id ?? '';
+      const [b, r] = await Promise.all([getBatchById(id), getRiwayatBatch(id)]);
+      if (b) { batch = b; riwayat = r; }
+    } catch (e: any) {
+      editError = e?.message ?? 'Gagal mengubah kuantitas.';
+    } finally {
+      editSaving = false;
+    }
+  }
+
+  // ── Ganti penugasan dialog ────────────────────────────────────────
+  let penugasanOpen = $state(false);
+  let penugasanCuttingUid = $state('');
+  let penugasanJahitUid = $state('');
+  let penugasanSteamUid = $state('');
+  let penugasanSaving = $state(false);
+  let penugasanError = $state<string | null>(null);
+
+  let workersCutting = $derived(karyawanList.filter((k) => k.role === 'kepala_cutting'));
+  let workersJahit   = $derived(karyawanList.filter((k) => k.role === 'kepala_jahit'));
+  let workersSteam   = $derived(karyawanList.filter((k) => k.role === 'kepala_steam'));
+
+  function openPenugasanDialog() {
+    if (!batch) return;
+    penugasanCuttingUid = batch.penugasan?.cutting?.uid ?? '';
+    penugasanJahitUid   = batch.penugasan?.jahit?.uid   ?? '';
+    penugasanSteamUid   = batch.penugasan?.steam?.uid   ?? '';
+    penugasanError = null;
+    penugasanOpen = true;
+  }
+
+  async function submitPenugasan() {
+    if (!batch) return;
+    penugasanSaving = true;
+    penugasanError = null;
+    try {
+      const toWorker = (uid: string, list: UserProfile[]) => {
+        const u = list.find((k) => k.uid === uid);
+        return u ? { uid: u.uid, nama: u.name } : undefined;
+      };
+      await updatePenugasanBatch(batch.id, {
+        ...(penugasanCuttingUid ? { cutting: toWorker(penugasanCuttingUid, workersCutting)! } : {}),
+        ...(penugasanJahitUid   ? { jahit:   toWorker(penugasanJahitUid,   workersJahit)!   } : {}),
+        ...(penugasanSteamUid   ? { steam:   toWorker(penugasanSteamUid,   workersSteam)!   } : {}),
+      });
+      batchCache.invalidate();
+      penugasanOpen = false;
+      const id = $page.params.id ?? '';
+      const b = await getBatchById(id);
+      if (b) batch = b;
+    } catch (e: any) {
+      penugasanError = e?.message ?? 'Gagal memperbarui penugasan.';
+    } finally {
+      penugasanSaving = false;
+    }
+  }
 
   let actionWorkers = $derived(
     currentAction?.workerRole
@@ -351,6 +470,39 @@
           {currentAction.label}
         </Button>
       {/if}
+      {#if canManage || canDelete}
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger>
+            {#snippet child({ props })}
+              <Button variant="outline" size="icon" {...props}>
+                <MoreHorizontalIcon class="h-4 w-4" />
+              </Button>
+            {/snippet}
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Content align="end">
+            {#if canManage}
+              <DropdownMenu.Item onclick={openEditDialog}>
+                <PencilIcon class="mr-2 h-4 w-4" />
+                Edit Kuantitas
+              </DropdownMenu.Item>
+              <DropdownMenu.Item onclick={openPenugasanDialog}>
+                <UsersIcon class="mr-2 h-4 w-4" />
+                Ganti Penugasan
+              </DropdownMenu.Item>
+            {/if}
+            {#if canDelete}
+              <DropdownMenu.Separator />
+              <DropdownMenu.Item
+                class="text-red-600 focus:bg-red-50 focus:text-red-700"
+                onclick={openDeleteDialog}
+              >
+                <Trash2Icon class="mr-2 h-4 w-4" />
+                Batalkan Batch
+              </DropdownMenu.Item>
+            {/if}
+          </DropdownMenu.Content>
+        </DropdownMenu.Root>
+      {/if}
     </div>
   </div>
 
@@ -512,6 +664,157 @@
       {/if}
     </div>
   </div>
+{/if}
+
+<!-- ── Delete Dialog ───────────────────────────────────────────────── -->
+{#if batch && canDelete}
+  <Dialog.Root bind:open={deleteOpen}>
+    <Dialog.Content class="max-w-sm">
+      <Dialog.Header>
+        <Dialog.Title class="text-red-700">Batalkan Batch?</Dialog.Title>
+        <Dialog.Description>
+          Batch <span class="font-semibold text-gray-800">{batch.nama_model}</span> akan dihapus permanen.
+          {#if ['CUTTING_DONE','JAHIT_IN_PROGRESS','JAHIT_DONE','STEAM_IN_PROGRESS','STEAM_DONE'].includes(batch.status)}
+            <br /><span class="text-amber-700 text-xs font-medium">Stok kain yang sudah dipotong akan dikembalikan otomatis.</span>
+          {/if}
+        </Dialog.Description>
+      </Dialog.Header>
+      {#if deleteError}
+        <p class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{deleteError}</p>
+      {/if}
+      <Dialog.Footer class="gap-2">
+        <Button variant="outline" onclick={() => (deleteOpen = false)} disabled={deleteSaving}>Batal</Button>
+        <Button variant="destructive" onclick={submitDelete} disabled={deleteSaving}>
+          {#if deleteSaving}<LoaderIcon class="mr-2 h-4 w-4 animate-spin" />{/if}
+          Hapus Batch
+        </Button>
+      </Dialog.Footer>
+    </Dialog.Content>
+  </Dialog.Root>
+{/if}
+
+<!-- ── Edit Kuantitas Dialog ────────────────────────────────────────── -->
+{#if batch && canManage}
+  <Dialog.Root bind:open={editOpen}>
+    <Dialog.Content class="max-w-sm">
+      <Dialog.Header>
+        <Dialog.Title>Edit Kuantitas</Dialog.Title>
+        <Dialog.Description>
+          Ubah jumlah pcs per ukuran untuk batch <span class="font-medium text-gray-800">{batch.nama_model}</span>.
+        </Dialog.Description>
+      </Dialog.Header>
+      <div class="space-y-4 py-1">
+        <div class="overflow-hidden rounded-lg border border-gray-200">
+          <table class="w-full text-sm">
+            <thead class="bg-gray-50">
+              <tr>
+                <th class="px-3 py-2 text-left text-xs font-semibold text-gray-500">Ukuran</th>
+                <th class="px-3 py-2 text-center text-xs font-semibold text-gray-500">Jumlah (pcs)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each batch.detail_ukuran as du, i}
+                <tr class="border-t border-gray-100">
+                  <td class="px-3 py-2 font-semibold text-gray-700">{du.ukuran}</td>
+                  <td class="px-2 py-1.5">
+                    <Input
+                      type="number"
+                      min="0"
+                      class="h-8 text-center text-sm"
+                      bind:value={editUkuranJumlah[i]}
+                    />
+                  </td>
+                </tr>
+              {/each}
+            </tbody>
+            <tfoot class="border-t border-gray-200 bg-gray-50">
+              <tr>
+                <td class="px-3 py-2 text-xs font-semibold text-gray-500">Total</td>
+                <td class="px-3 py-2 text-center text-xs font-semibold text-gray-700">{editTotal} pcs</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+        <div>
+          <label class="mb-1 block text-sm font-medium text-gray-700">Alasan <span class="text-xs font-normal text-gray-400">(opsional)</span></label>
+          <Input type="text" placeholder="Contoh: Koreksi pesanan..." bind:value={editAlasan} />
+        </div>
+        {#if editError}
+          <p class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{editError}</p>
+        {/if}
+      </div>
+      <Dialog.Footer class="gap-2">
+        <Button variant="outline" onclick={() => (editOpen = false)} disabled={editSaving}>Batal</Button>
+        <Button onclick={submitEdit} disabled={editSaving || !editFormValid}>
+          {#if editSaving}<LoaderIcon class="mr-2 h-4 w-4 animate-spin" />{/if}
+          Simpan
+        </Button>
+      </Dialog.Footer>
+    </Dialog.Content>
+  </Dialog.Root>
+
+  <!-- ── Ganti Penugasan Dialog ────────────────────────────────────── -->
+  <Dialog.Root bind:open={penugasanOpen}>
+    <Dialog.Content class="max-w-sm">
+      <Dialog.Header>
+        <Dialog.Title>Ganti Penugasan</Dialog.Title>
+        <Dialog.Description>Ubah kepala yang ditugaskan untuk batch ini.</Dialog.Description>
+      </Dialog.Header>
+      <div class="space-y-4 py-1">
+        {#each [
+          { label: 'Kepala Cutting', icon: ScissorsIcon, workers: workersCutting, bind: penugasanCuttingUid },
+          { label: 'Kepala Jahit',   icon: PackageIcon,  workers: workersJahit,   bind: penugasanJahitUid   },
+          { label: 'Kepala Steam',   icon: ZapIcon,      workers: workersSteam,   bind: penugasanSteamUid   },
+        ] as row}
+          {@const PIcon = row.icon}
+          <div class="space-y-1.5">
+            <div class="flex items-center gap-1.5">
+              <PIcon class="h-3.5 w-3.5 text-gray-400" />
+              <p class="text-sm font-medium text-gray-700">{row.label}</p>
+            </div>
+            <Select.Root
+              type="single"
+              value={row.label === 'Kepala Cutting' ? penugasanCuttingUid || undefined
+                    : row.label === 'Kepala Jahit'  ? penugasanJahitUid   || undefined
+                                                    : penugasanSteamUid   || undefined}
+              onValueChange={(val) => {
+                if (row.label === 'Kepala Cutting') penugasanCuttingUid = val ?? '';
+                else if (row.label === 'Kepala Jahit') penugasanJahitUid = val ?? '';
+                else penugasanSteamUid = val ?? '';
+              }}
+            >
+              <Select.Trigger class="w-full">
+                {#if (row.label === 'Kepala Cutting' ? penugasanCuttingUid : row.label === 'Kepala Jahit' ? penugasanJahitUid : penugasanSteamUid)}
+                  <span>{row.workers.find((k) => k.uid === (row.label === 'Kepala Cutting' ? penugasanCuttingUid : row.label === 'Kepala Jahit' ? penugasanJahitUid : penugasanSteamUid))?.name ?? '—'}</span>
+                {:else}
+                  <span class="text-muted-foreground">— Belum ditugaskan —</span>
+                {/if}
+              </Select.Trigger>
+              <Select.Content preventScroll={false}>
+                {#if row.workers.length === 0}
+                  <div class="px-3 py-2 text-xs text-gray-400">Belum ada akun petugas</div>
+                {:else}
+                  {#each row.workers as k}
+                    <Select.Item value={k.uid}>{k.name}</Select.Item>
+                  {/each}
+                {/if}
+              </Select.Content>
+            </Select.Root>
+          </div>
+        {/each}
+        {#if penugasanError}
+          <p class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{penugasanError}</p>
+        {/if}
+      </div>
+      <Dialog.Footer class="gap-2">
+        <Button variant="outline" onclick={() => (penugasanOpen = false)} disabled={penugasanSaving}>Batal</Button>
+        <Button onclick={submitPenugasan} disabled={penugasanSaving}>
+          {#if penugasanSaving}<LoaderIcon class="mr-2 h-4 w-4 animate-spin" />{/if}
+          Simpan
+        </Button>
+      </Dialog.Footer>
+    </Dialog.Content>
+  </Dialog.Root>
 {/if}
 
 <!-- Action Dialog -->

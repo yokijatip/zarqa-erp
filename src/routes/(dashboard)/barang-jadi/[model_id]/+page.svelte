@@ -8,8 +8,10 @@
     kurangiStokManual,
     setStokManual,
     getRiwayatKeluarByModel,
+    getRiwayatBarangJadiByModel,
   } from "$lib/firebase/barang-jadi";
-  import { UKURAN_ORDER, type StokBarangJadi, type UkuranBaju, type BarangKeluar } from "$lib/types";
+  import { currentUser } from "$lib/stores/auth.store";
+  import { UKURAN_ORDER, type StokBarangJadi, type UkuranBaju, type BarangKeluar, type RiwayatBarangJadi } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -25,6 +27,7 @@
   // ── State ─────────────────────────────────────────────────────────
   let stokList = $state<StokBarangJadi[]>([]);
   let riwayatKeluar = $state<BarangKeluar[]>([]);
+  let riwayatMasuk = $state<RiwayatBarangJadi[]>([]);
   let loading = $state(true);
   let saving = $state(false);
   let errorMsg = $state<string | null>(null);
@@ -108,9 +111,10 @@
   async function load() {
     loading = true;
     try {
-      [stokList, riwayatKeluar] = await Promise.all([
+      [stokList, riwayatKeluar, riwayatMasuk] = await Promise.all([
         getStokByModel($page.params.model_id!),
         getRiwayatKeluarByModel($page.params.model_id!),
+        getRiwayatBarangJadiByModel($page.params.model_id!),
       ]);
     } catch {
       showError("Gagal memuat data stok.");
@@ -130,21 +134,26 @@
     if (!selectedItem || fJumlah < 0 || saving) return;
     saving = true;
     try {
+      const uid = $currentUser?.uid ?? '';
+      const nama = $currentUser?.name || $currentUser?.email || uid;
+
       if (dialogMode === "restock") {
         if (fJumlah <= 0) throw new Error("Jumlah harus lebih dari 0");
         await tambahStokBarangJadi(
           selectedItem.model_id,
           selectedItem.nama_model,
           [{ ukuran: selectedItem.ukuran, jumlah_pcs: fJumlah }],
+          undefined,
+          { uid, nama, tipe: 'masuk_restock', catatan: 'Restock manual' },
         );
         showSuccess(`+${fJumlah} pcs berhasil ditambahkan ke stok ukuran ${selectedItem.ukuran}.`);
       } else if (dialogMode === "kurangi") {
         if (fJumlah <= 0) throw new Error("Jumlah harus lebih dari 0");
-        await kurangiStokManual(selectedItem.id, fJumlah);
+        await kurangiStokManual(selectedItem.id, fJumlah, { uid, nama, tipe: 'kurangi_manual' });
         showSuccess(`-${fJumlah} pcs berhasil dikurangi dari stok ukuran ${selectedItem.ukuran}.`);
       } else {
         if (fJumlah < 0) throw new Error("Stok tidak boleh negatif");
-        await setStokManual(selectedItem.id, fJumlah);
+        await setStokManual(selectedItem.id, fJumlah, { uid, nama, tipe: 'set_manual' });
         showSuccess(`Stok ukuran ${selectedItem.ukuran} diset ke ${fJumlah} pcs.`);
       }
       openDialog = false;
@@ -361,6 +370,65 @@
       </div>
     {/each}
   </div>
+  <!-- ── Riwayat Masuk ────────────────────────────────────────────── -->
+  <div class="mt-6">
+    <h2 class="mb-3 text-sm font-semibold text-gray-700">Riwayat Masuk</h2>
+
+    {#if riwayatMasuk.length === 0}
+      <div class="flex items-center gap-3 rounded-xl border border-gray-100 bg-white px-5 py-6 text-sm text-gray-400 shadow-sm">
+        Belum ada riwayat masuk untuk model ini
+      </div>
+    {:else}
+      {@const TIPE_LABEL: Record<string, string> = {
+        masuk_produksi: 'Dari Produksi',
+        masuk_restock: 'Restock',
+        masuk_stok_awal: 'Stok Awal',
+        kurangi_manual: 'Kurangi Manual',
+        set_manual: 'Set Manual',
+      }}
+      {@const TIPE_STYLE: Record<string, string> = {
+        masuk_produksi: 'bg-teal-100 text-teal-700',
+        masuk_restock: 'bg-blue-100 text-blue-700',
+        masuk_stok_awal: 'bg-purple-100 text-purple-700',
+        kurangi_manual: 'bg-red-100 text-red-600',
+        set_manual: 'bg-gray-100 text-gray-600',
+      }}
+      <div class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
+        <div class="grid grid-cols-[auto_1fr_auto_auto_auto] gap-4 border-b border-gray-100 bg-gray-50 px-5 py-2.5 text-[11px] font-medium uppercase tracking-wider text-gray-400">
+          <span>Tipe</span>
+          <span>Oleh</span>
+          <span class="text-right">Ukuran</span>
+          <span class="w-20 text-right">Jumlah</span>
+          <span class="w-28 text-right">Tanggal</span>
+        </div>
+        {#each riwayatMasuk as r, i}
+          <div class="grid grid-cols-[auto_1fr_auto_auto_auto] items-center gap-4 px-5 py-3 text-sm {i > 0 ? 'border-t border-gray-100' : ''}">
+            <span class="rounded-full px-2.5 py-0.5 text-[11px] font-semibold {TIPE_STYLE[r.tipe] ?? 'bg-gray-100 text-gray-600'}">
+              {TIPE_LABEL[r.tipe] ?? r.tipe}
+            </span>
+            <div class="min-w-0">
+              <p class="truncate text-sm font-medium text-gray-800">{r.dicatat_oleh_nama ?? '—'}</p>
+              {#if r.catatan}
+                <p class="truncate text-xs text-gray-400">{r.catatan}</p>
+              {/if}
+            </div>
+            <span class="rounded-md border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] font-semibold text-gray-700">
+              {r.ukuran}
+            </span>
+            <div class="w-20 text-right">
+              <span class="text-sm font-semibold {r.tipe.startsWith('masuk') ? 'text-teal-700' : 'text-red-600'}">
+                {r.tipe.startsWith('masuk') ? '+' : '−'}{r.jumlah} pcs
+              </span>
+              <p class="text-[10px] text-gray-400">{r.stok_sebelum} → {r.stok_sesudah}</p>
+            </div>
+            <p class="w-28 text-right text-xs text-gray-400">{formatDateTime(r.timestamp)}</p>
+          </div>
+        {/each}
+      </div>
+      <p class="mt-2 text-right text-[11px] text-gray-300">Menampilkan {riwayatMasuk.length} catatan terbaru</p>
+    {/if}
+  </div>
+
   <!-- ── Riwayat Keluar ───────────────────────────────────────────── -->
   <div class="mt-6">
     <h2 class="mb-3 text-sm font-semibold text-gray-700">Riwayat Keluar</h2>

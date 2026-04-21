@@ -1,17 +1,32 @@
 // src/lib/firebase/barang-jadi.ts
 import {
-  collection, doc, getDocs,
-  serverTimestamp, runTransaction,
+  collection, doc, getDocs, getDoc,
+  serverTimestamp, runTransaction, deleteDoc,
   query, orderBy, where, limit, Timestamp,
 } from 'firebase/firestore';
 import { db } from './config';
-import type { StokBarangJadi, BarangKeluar, BarangKeluarInput } from '$lib/types';
+import type { StokBarangJadi, BarangKeluar, BarangKeluarInput, RiwayatBarangJadi, TipeRiwayatBarangJadi } from '$lib/types';
+
+const COL_RIWAYAT = 'riwayat_barang_jadi';
+
+type RiwayatMeta = {
+  uid: string;
+  nama: string;
+  tipe: TipeRiwayatBarangJadi;
+  catatan?: string;
+  batch_id?: string;
+};
 
 const COL_JADI = 'stok_barang_jadi';
 const COL_KELUAR = 'barang_keluar';
 
-function buildBarangJadiDocId(modelId: string, ukuran: string): string {
-  return `${modelId}__${ukuran}`;
+function warnaDocKey(namaWarna: string): string {
+  return namaWarna.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+}
+
+function buildBarangJadiDocId(modelId: string, ukuran: string, namaWarna?: string): string {
+  if (!namaWarna) return `${modelId}__${ukuran}`;
+  return `${modelId}__${ukuran}__${warnaDocKey(namaWarna)}`;
 }
 
 // ─── STOK BARANG JADI ───────────────────────────────────────────
@@ -28,22 +43,23 @@ export async function tambahStokBarangJadi(
   modelId: string,
   namaModel: string,
   detailUkuran: { ukuran: string; jumlah_pcs: number }[],
-  warna?: { nama_warna?: string; kode_hex_warna?: string }
+  warna?: { nama_warna?: string; kode_hex_warna?: string },
+  riwayatMeta?: RiwayatMeta,
 ): Promise<void> {
   for (const item of detailUkuran) {
-    // Cari dokumen yang sudah ada untuk model + ukuran ini
-    const q = query(
-      collection(db, COL_JADI),
-      where('model_id', '==', modelId),
-      where('ukuran', '==', item.ukuran)
-    );
+    const q = warna?.nama_warna
+      ? query(collection(db, COL_JADI), where('model_id', '==', modelId), where('ukuran', '==', item.ukuran), where('nama_warna', '==', warna.nama_warna))
+      : query(collection(db, COL_JADI), where('model_id', '==', modelId), where('ukuran', '==', item.ukuran));
     const snap = await getDocs(q);
     const ref = snap.empty
-      ? doc(db, COL_JADI, buildBarangJadiDocId(modelId, item.ukuran))
+      ? doc(db, COL_JADI, buildBarangJadiDocId(modelId, item.ukuran, warna?.nama_warna))
       : snap.docs[0].ref;
 
     await runTransaction(db, async (transaction) => {
       const existingSnap = await transaction.get(ref);
+      let stokSebelum = 0;
+      let stokSesudah = item.jumlah_pcs;
+
       if (!existingSnap.exists()) {
         transaction.set(ref, {
           model_id: modelId,
@@ -56,17 +72,36 @@ export async function tambahStokBarangJadi(
           total_keluar: 0,
           updatedAt: serverTimestamp(),
         });
-        return;
+      } else {
+        const data = existingSnap.data() as StokBarangJadi;
+        stokSebelum = data.stok_tersedia;
+        stokSesudah = stokSebelum + item.jumlah_pcs;
+        transaction.update(ref, {
+          stok_tersedia: stokSesudah,
+          total_masuk: data.total_masuk + item.jumlah_pcs,
+          ...(warna?.nama_warna ? { nama_warna: warna.nama_warna } : {}),
+          ...(warna?.kode_hex_warna ? { kode_hex_warna: warna.kode_hex_warna } : {}),
+          updatedAt: serverTimestamp(),
+        });
       }
 
-      const data = existingSnap.data() as StokBarangJadi;
-      transaction.update(ref, {
-        stok_tersedia: data.stok_tersedia + item.jumlah_pcs,
-        total_masuk: data.total_masuk + item.jumlah_pcs,
-        ...(warna?.nama_warna ? { nama_warna: warna.nama_warna } : {}),
-        ...(warna?.kode_hex_warna ? { kode_hex_warna: warna.kode_hex_warna } : {}),
-        updatedAt: serverTimestamp(),
-      });
+      if (riwayatMeta) {
+        const riwayatRef = doc(collection(db, COL_RIWAYAT));
+        transaction.set(riwayatRef, {
+          model_id: modelId,
+          nama_model: namaModel,
+          ukuran: item.ukuran,
+          tipe: riwayatMeta.tipe,
+          jumlah: item.jumlah_pcs,
+          stok_sebelum: stokSebelum,
+          stok_sesudah: stokSesudah,
+          ...(riwayatMeta.catatan ? { catatan: riwayatMeta.catatan } : {}),
+          ...(riwayatMeta.batch_id ? { batch_id: riwayatMeta.batch_id } : {}),
+          dicatat_oleh_uid: riwayatMeta.uid,
+          dicatat_oleh_nama: riwayatMeta.nama,
+          timestamp: serverTimestamp(),
+        });
+      }
     });
   }
 }
@@ -81,11 +116,9 @@ export async function catatBarangKeluar(
   const stokRefs = new Map<string, ReturnType<typeof doc>>();
 
   for (const item of data.detail_keluar) {
-    const q = query(
-      collection(db, COL_JADI),
-      where('model_id', '==', data.model_id),
-      where('ukuran', '==', item.ukuran)
-    );
+    const q = data.nama_warna
+      ? query(collection(db, COL_JADI), where('model_id', '==', data.model_id), where('ukuran', '==', item.ukuran), where('nama_warna', '==', data.nama_warna))
+      : query(collection(db, COL_JADI), where('model_id', '==', data.model_id), where('ukuran', '==', item.ukuran));
     const snap = await getDocs(q);
     if (snap.empty) throw new Error(`Stok ${data.nama_model} ukuran ${item.ukuran} tidak ditemukan`);
     stokRefs.set(item.ukuran, snap.docs[0].ref);
@@ -140,7 +173,11 @@ export async function getStokByModel(modelId: string): Promise<StokBarangJadi[]>
 }
 
 // Kurangi stok manual (koreksi, loss, dll — dicatat ke total_keluar)
-export async function kurangiStokManual(stokId: string, jumlah: number): Promise<void> {
+export async function kurangiStokManual(
+  stokId: string,
+  jumlah: number,
+  riwayatMeta?: RiwayatMeta,
+): Promise<void> {
   const ref = doc(db, COL_JADI, stokId);
   await runTransaction(db, async (transaction) => {
     const snap = await transaction.get(ref);
@@ -150,27 +187,86 @@ export async function kurangiStokManual(stokId: string, jumlah: number): Promise
     if (data.stok_tersedia < jumlah) {
       throw new Error(`Stok hanya ${data.stok_tersedia} pcs, tidak bisa dikurangi ${jumlah} pcs`);
     }
+    const stokSesudah = data.stok_tersedia - jumlah;
 
     transaction.update(ref, {
-      stok_tersedia: data.stok_tersedia - jumlah,
+      stok_tersedia: stokSesudah,
       total_keluar: data.total_keluar + jumlah,
       updatedAt: serverTimestamp(),
     });
+
+    if (riwayatMeta) {
+      const riwayatRef = doc(collection(db, COL_RIWAYAT));
+      transaction.set(riwayatRef, {
+        model_id: data.model_id,
+        nama_model: data.nama_model,
+        ukuran: data.ukuran,
+        tipe: 'kurangi_manual' as TipeRiwayatBarangJadi,
+        jumlah,
+        stok_sebelum: data.stok_tersedia,
+        stok_sesudah: stokSesudah,
+        ...(riwayatMeta.catatan ? { catatan: riwayatMeta.catatan } : {}),
+        dicatat_oleh_uid: riwayatMeta.uid,
+        dicatat_oleh_nama: riwayatMeta.nama,
+        timestamp: serverTimestamp(),
+      });
+    }
   });
 }
 
 // Set stok ke nilai absolut (koreksi stok fisik)
-export async function setStokManual(stokId: string, jumlahBaru: number): Promise<void> {
+export async function setStokManual(
+  stokId: string,
+  jumlahBaru: number,
+  riwayatMeta?: RiwayatMeta,
+): Promise<void> {
   const ref = doc(db, COL_JADI, stokId);
   await runTransaction(db, async (transaction) => {
     const snap = await transaction.get(ref);
     if (!snap.exists()) throw new Error('Stok tidak ditemukan');
 
+    const data = snap.data() as StokBarangJadi;
+    const selisih = jumlahBaru - data.stok_tersedia;
+
     transaction.update(ref, {
       stok_tersedia: jumlahBaru,
+      // total_masuk/keluar ikut selisih
+      ...(selisih > 0 ? { total_masuk: data.total_masuk + selisih } : {}),
+      ...(selisih < 0 ? { total_keluar: data.total_keluar + Math.abs(selisih) } : {}),
       updatedAt: serverTimestamp(),
     });
+
+    if (riwayatMeta) {
+      const riwayatRef = doc(collection(db, COL_RIWAYAT));
+      transaction.set(riwayatRef, {
+        model_id: data.model_id,
+        nama_model: data.nama_model,
+        ukuran: data.ukuran,
+        tipe: 'set_manual' as TipeRiwayatBarangJadi,
+        jumlah: Math.abs(selisih),
+        stok_sebelum: data.stok_tersedia,
+        stok_sesudah: jumlahBaru,
+        catatan: `Set manual dari ${data.stok_tersedia} → ${jumlahBaru} pcs`,
+        ...(riwayatMeta.catatan ? { catatan: riwayatMeta.catatan } : {}),
+        dicatat_oleh_uid: riwayatMeta.uid,
+        dicatat_oleh_nama: riwayatMeta.nama,
+        timestamp: serverTimestamp(),
+      });
+    }
   });
+}
+
+// ─── RIWAYAT BARANG JADI ─────────────────────────────────────────
+
+export async function getRiwayatBarangJadiByModel(modelId: string): Promise<RiwayatBarangJadi[]> {
+  const q = query(
+    collection(db, COL_RIWAYAT),
+    where('model_id', '==', modelId),
+    orderBy('timestamp', 'desc'),
+    limit(100),
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as RiwayatBarangJadi);
 }
 
 // ─── BARANG KELUAR ───────────────────────────────────────────────
@@ -226,4 +322,69 @@ export async function getRiwayatBarangKeluarByPeriod(
       );
   const snap = await getDocs(q);
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as BarangKeluar);
+}
+
+// ─── BATALKAN BARANG KELUAR ──────────────────────────────────────
+
+// Batalkan catatan barang keluar: kembalikan stok ke stok_barang_jadi, hapus dokumen
+export async function batalBarangKeluar(
+  id: string,
+  riwayatMeta?: { uid: string; nama: string; catatan?: string },
+): Promise<void> {
+  const keluarRef = doc(db, COL_KELUAR, id);
+  const keluarSnap = await getDoc(keluarRef);
+  if (!keluarSnap.exists()) throw new Error('Catatan barang keluar tidak ditemukan');
+
+  const keluar = { id: keluarSnap.id, ...keluarSnap.data() } as BarangKeluar;
+
+  // Ambil semua stok refs sebelum transaksi (reads di luar transaction)
+  const stokRefs = new Map<string, ReturnType<typeof doc>>();
+  for (const item of keluar.detail_keluar) {
+    const q = keluar.nama_warna
+      ? query(collection(db, COL_JADI), where('model_id', '==', keluar.model_id), where('ukuran', '==', item.ukuran), where('nama_warna', '==', keluar.nama_warna))
+      : query(collection(db, COL_JADI), where('model_id', '==', keluar.model_id), where('ukuran', '==', item.ukuran));
+    const snap = await getDocs(q);
+    if (!snap.empty) stokRefs.set(item.ukuran, snap.docs[0].ref);
+  }
+
+  await runTransaction(db, async (transaction) => {
+    // Baca semua stok dulu, baru tulis
+    const stokSnapshots = new Map<string, { ref: ReturnType<typeof doc>; data: StokBarangJadi }>();
+    for (const [ukuran, ref] of stokRefs) {
+      const snap = await transaction.get(ref);
+      if (snap.exists()) stokSnapshots.set(ukuran, { ref, data: { id: snap.id, ...snap.data() } as StokBarangJadi });
+    }
+
+    for (const item of keluar.detail_keluar) {
+      const entry = stokSnapshots.get(item.ukuran);
+      if (!entry) continue;
+      const { ref, data } = entry;
+      const stokSesudah = data.stok_tersedia + item.jumlah_pcs;
+
+      transaction.update(ref, {
+        stok_tersedia: stokSesudah,
+        total_keluar: Math.max(0, data.total_keluar - item.jumlah_pcs),
+        updatedAt: serverTimestamp(),
+      });
+
+      if (riwayatMeta) {
+        const riwayatRef = doc(collection(db, COL_RIWAYAT));
+        transaction.set(riwayatRef, {
+          model_id: keluar.model_id,
+          nama_model: keluar.nama_model,
+          ukuran: item.ukuran,
+          tipe: 'batal_keluar' as TipeRiwayatBarangJadi,
+          jumlah: item.jumlah_pcs,
+          stok_sebelum: data.stok_tersedia,
+          stok_sesudah: stokSesudah,
+          catatan: riwayatMeta.catatan ?? `Pembatalan pengiriman ke ${keluar.tujuan}`,
+          dicatat_oleh_uid: riwayatMeta.uid,
+          dicatat_oleh_nama: riwayatMeta.nama,
+          timestamp: serverTimestamp(),
+        });
+      }
+    }
+
+    transaction.delete(keluarRef);
+  });
 }

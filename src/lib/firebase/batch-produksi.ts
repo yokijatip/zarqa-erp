@@ -49,11 +49,9 @@ export async function createBatchDariPotongan(
   const stokPotonganRefs = new Map<string, ReturnType<typeof doc>>();
 
   for (const du of data.detail_ukuran) {
-    const q = query(
-      collection(db, 'stok_potongan'),
-      where('model_id', '==', data.model_id),
-      where('ukuran', '==', du.ukuran)
-    );
+    const q = data.nama_warna
+      ? query(collection(db, 'stok_potongan'), where('model_id', '==', data.model_id), where('ukuran', '==', du.ukuran), where('nama_warna', '==', data.nama_warna))
+      : query(collection(db, 'stok_potongan'), where('model_id', '==', data.model_id), where('ukuran', '==', du.ukuran));
     const snap = await getDocs(q);
     if (snap.empty) throw new Error(`Stok potongan ukuran ${du.ukuran} tidak ditemukan`);
     stokPotonganRefs.set(du.ukuran, snap.docs[0].ref);
@@ -166,19 +164,13 @@ export async function updateStatusBatch(
       // Gunakan kain_digunakan dari batch, atau hitung ulang dari model jika kosong/nol
       let kainList: KainDigunakan[] = (batch.kain_digunakan ?? []).filter(k => (k.jumlah_dipakai ?? 0) > 0);
 
-      console.log('[CUTTING_DONE] batch.kain_digunakan raw:', JSON.stringify(batch.kain_digunakan));
-      console.log('[CUTTING_DONE] kainList setelah filter jumlah>0:', kainList.length, JSON.stringify(kainList));
-
       if (kainList.length === 0 && batch.model_id) {
         // Fallback: baca model sekarang dan hitung kebutuhan kain dari detail_ukuran aktual
         const modelRef = doc(db, 'model_baju', batch.model_id);
         const modelSnap = await transaction.get(modelRef);
         if (modelSnap.exists()) {
           const model = modelSnap.data() as ModelBaju;
-          console.log('[CUTTING_DONE] fallback - model.kebutuhan_kain:', JSON.stringify(model.kebutuhan_kain));
-          console.log('[CUTTING_DONE] fallback - model.varian_warna:', JSON.stringify((model as any).varian_warna));
           const detailUkuran = (newDetailUkuran && newDetailUkuran.length > 0) ? newDetailUkuran : batch.detail_ukuran;
-          console.log('[CUTTING_DONE] fallback - detailUkuran dipakai:', JSON.stringify(detailUkuran));
           // Backward compat: kebutuhan_kain pernah disimpan di varian_warna[0].kebutuhan_kain
           const kebutuhanKain = (model.kebutuhan_kain?.length ?? 0) > 0
             ? model.kebutuhan_kain!
@@ -195,20 +187,12 @@ export async function updateStatusBatch(
               ),
             }))
             .filter((k) => k.jumlah_dipakai > 0);
-          console.log('[CUTTING_DONE] fallback - kainList hasil model:', kainList.length, JSON.stringify(kainList));
-        } else {
-          console.log('[CUTTING_DONE] fallback - model doc tidak ditemukan! model_id:', batch.model_id);
         }
-      }
-
-      if (kainList.length === 0) {
-        console.warn('[CUTTING_DONE] kainList KOSONG — stok kain tidak akan dipotong!');
       }
 
       for (const kain of kainList) {
         const kRef = doc(db, 'stok_kain', kain.kain_id);
         const kSnap = await transaction.get(kRef);
-        console.log('[CUTTING_DONE] cek stok kain:', kain.kain_id, 'exists:', kSnap.exists());
         if (!kSnap.exists()) throw new Error(`Kain "${kain.nama_kain}" tidak ditemukan (id: ${kain.kain_id})`);
         const d = kSnap.data() as { nama_kain: string; stok_tersedia: number; stok_terpakai: number };
         if (d.stok_tersedia < kain.jumlah_dipakai) {
@@ -350,16 +334,20 @@ export async function completeBatchProduksi(
       .filter((du) => du.jumlah_pcs > 0);
   }
 
+  function buildBarangJadiId(modelId: string, ukuran: string, namaWarna?: string): string {
+    if (!namaWarna) return `${modelId}__${ukuran}`;
+    const wKey = namaWarna.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+    return `${modelId}__${ukuran}__${wKey}`;
+  }
+
   const stokBarangJadiRefs = new Map<string, ReturnType<typeof doc>>();
   for (const item of detailBerhasil) {
-    const q = query(
-      collection(db, 'stok_barang_jadi'),
-      where('model_id', '==', batch.model_id),
-      where('ukuran', '==', item.ukuran)
-    );
+    const q = batch.nama_warna
+      ? query(collection(db, 'stok_barang_jadi'), where('model_id', '==', batch.model_id), where('ukuran', '==', item.ukuran), where('nama_warna', '==', batch.nama_warna))
+      : query(collection(db, 'stok_barang_jadi'), where('model_id', '==', batch.model_id), where('ukuran', '==', item.ukuran));
     const snap = await getDocs(q);
     const ref = snap.empty
-      ? doc(db, 'stok_barang_jadi', `${batch.model_id}__${item.ukuran}`)
+      ? doc(db, 'stok_barang_jadi', buildBarangJadiId(batch.model_id, item.ukuran, batch.nama_warna))
       : snap.docs[0].ref;
     stokBarangJadiRefs.set(item.ukuran, ref);
   }
@@ -409,6 +397,11 @@ export async function completeBatchProduksi(
       if (!entry) continue;
       const { item, stokRef, stokSnap } = entry;
 
+      const stokSebelum = stokSnap.exists()
+        ? (stokSnap.data() as { stok_tersedia: number }).stok_tersedia
+        : 0;
+      const stokSesudah = stokSebelum + item.jumlah_pcs;
+
       if (!stokSnap.exists()) {
         transaction.set(stokRef, {
           model_id: currentBatch.model_id,
@@ -416,21 +409,37 @@ export async function completeBatchProduksi(
           ...(currentBatch.nama_warna ? { nama_warna: currentBatch.nama_warna } : {}),
           ...(currentBatch.kode_hex_warna ? { kode_hex_warna: currentBatch.kode_hex_warna } : {}),
           ukuran: item.ukuran,
-          stok_tersedia: item.jumlah_pcs,
+          stok_tersedia: stokSesudah,
           total_masuk: item.jumlah_pcs,
           total_keluar: 0,
           updatedAt: serverTimestamp(),
         });
-        continue;
+      } else {
+        const stok = stokSnap.data() as { stok_tersedia: number; total_masuk: number };
+        transaction.update(stokRef, {
+          stok_tersedia: stokSesudah,
+          total_masuk: stok.total_masuk + item.jumlah_pcs,
+          ...(currentBatch.nama_warna ? { nama_warna: currentBatch.nama_warna } : {}),
+          ...(currentBatch.kode_hex_warna ? { kode_hex_warna: currentBatch.kode_hex_warna } : {}),
+          updatedAt: serverTimestamp(),
+        });
       }
 
-      const stok = stokSnap.data() as { stok_tersedia: number; total_masuk: number };
-      transaction.update(stokRef, {
-        stok_tersedia: stok.stok_tersedia + item.jumlah_pcs,
-        total_masuk: stok.total_masuk + item.jumlah_pcs,
-        ...(currentBatch.nama_warna ? { nama_warna: currentBatch.nama_warna } : {}),
-        ...(currentBatch.kode_hex_warna ? { kode_hex_warna: currentBatch.kode_hex_warna } : {}),
-        updatedAt: serverTimestamp(),
+      // Tulis riwayat masuk dari produksi
+      const riwayatBarangJadiRef = doc(collection(db, 'riwayat_barang_jadi'));
+      transaction.set(riwayatBarangJadiRef, {
+        model_id: currentBatch.model_id,
+        nama_model: currentBatch.nama_model,
+        ukuran: item.ukuran,
+        tipe: 'masuk_produksi',
+        jumlah: item.jumlah_pcs,
+        stok_sebelum: stokSebelum,
+        stok_sesudah: stokSesudah,
+        catatan: `Batch produksi selesai`,
+        batch_id: batchId,
+        dicatat_oleh_uid: updatedByUid,
+        dicatat_oleh_nama: updatedByNama,
+        timestamp: serverTimestamp(),
       });
     }
   });

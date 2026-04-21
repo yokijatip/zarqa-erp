@@ -3,12 +3,16 @@
   import { onMount } from "svelte";
   import { stokPotonganCache, batchCache } from "$lib/stores/data-cache.svelte";
   import { sinkronStokPotonganBatch } from "$lib/firebase/batch-produksi";
+  import { koreksiStokPotongan } from "$lib/firebase/stok-potongan";
   import type { StokPotongan, UkuranBaju } from "$lib/types";
   import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
+  import * as Dialog from "$lib/components/ui/dialog";
   import StatCard from "$lib/components/StatCard.svelte";
   import ScissorsIcon from "@lucide/svelte/icons/scissors";
   import PackageIcon from "@lucide/svelte/icons/package";
   import PackageXIcon from "@lucide/svelte/icons/package-x";
+  import PencilIcon from "@lucide/svelte/icons/pencil";
 
   const URUTAN_UKURAN: UkuranBaju[] = ['XS', 'S', 'M', 'L', 'XL', 'XXL'];
 
@@ -127,7 +131,50 @@
     if (stok < 10)  return 'bg-amber-50 text-amber-700 border-amber-200';
     return 'bg-green-50 text-green-700 border-green-200';
   }
+
+  // ── Koreksi dialog ────────────────────────────────────────────────
+  let koreksiTarget = $state<StokPotongan | null>(null);
+  let koreksiOpen = $state(false);
+  let koreksiJumlah = $state(0);
+  let koreksiSaving = $state(false);
+  let koreksiError = $state<string | null>(null);
+  let successMsg = $state<string | null>(null);
+
+  function bukaKoreksi(item: StokPotongan) {
+    koreksiTarget = item;
+    koreksiJumlah = item.stok_tersedia;
+    koreksiError = null;
+    koreksiOpen = true;
+  }
+
+  async function submitKoreksi() {
+    if (!koreksiTarget) return;
+    koreksiSaving = true;
+    koreksiError = null;
+    try {
+      await koreksiStokPotongan(koreksiTarget.id, koreksiJumlah);
+      stokPotonganCache.invalidate();
+      await load(true);
+      koreksiOpen = false;
+      successMsg = `Stok ${koreksiTarget.nama_model} ${koreksiTarget.ukuran} dikoreksi ke ${koreksiJumlah} pcs.`;
+      setTimeout(() => (successMsg = null), 3500);
+    } catch (e: any) {
+      koreksiError = e?.message ?? 'Gagal menyimpan koreksi.';
+    } finally {
+      koreksiSaving = false;
+    }
+  }
 </script>
+
+<!-- ── Success Toast ───────────────────────────────────────────────── -->
+{#if successMsg}
+  <div class="fixed right-5 top-5 z-[9999] flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 shadow-lg">
+    <svg class="h-4 w-4 shrink-0 text-green-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+      <path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+    </svg>
+    <p class="text-sm text-green-800">{successMsg}</p>
+  </div>
+{/if}
 
 <!-- ── Header ──────────────────────────────────────────────────────── -->
 <div class="mb-5 flex flex-wrap items-start justify-between gap-4">
@@ -228,10 +275,16 @@
             <!-- Ukuran pills -->
             <div class="flex flex-wrap gap-1.5">
               {#each group.items as item}
-                <span class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-medium {stokColor(item.stok_tersedia)}">
+                <button
+                  type="button"
+                  onclick={() => bukaKoreksi(item)}
+                  title="Koreksi stok {item.ukuran}"
+                  class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-medium transition hover:opacity-80 {stokColor(item.stok_tersedia)}"
+                >
                   <span class="font-bold">{item.ukuran}</span>
                   <span class="text-[11px] opacity-80">{item.stok_tersedia}</span>
-                </span>
+                  <PencilIcon class="h-2.5 w-2.5 opacity-50" />
+                </button>
               {/each}
             </div>
           </div>
@@ -261,8 +314,55 @@
 
     <div class="border-t border-gray-100 bg-gray-50 px-5 py-3">
       <p class="text-xs text-gray-400">
-        {filteredGroups.length} model · {stokList.length} jenis ukuran total
+        {filteredGroups.length} model · {stokList.length} jenis ukuran total · <span class="text-blue-500">Klik ukuran untuk koreksi stok</span>
       </p>
     </div>
   </div>
+{/if}
+
+<!-- ── Koreksi Dialog ───────────────────────────────────────────────── -->
+{#if koreksiTarget}
+  <Dialog.Root bind:open={koreksiOpen}>
+    <Dialog.Content class="max-w-sm">
+      <Dialog.Header>
+        <Dialog.Title>Koreksi Stok Potongan</Dialog.Title>
+        <Dialog.Description>
+          <span class="font-semibold text-gray-800">{koreksiTarget.nama_model}</span>
+          ukuran <span class="font-semibold">{koreksiTarget.ukuran}</span>
+          {#if koreksiTarget.nama_warna}· {koreksiTarget.nama_warna}{/if}
+        </Dialog.Description>
+      </Dialog.Header>
+      <div class="space-y-4 py-1">
+        <div class="flex items-center gap-4 rounded-lg border border-gray-100 bg-gray-50 px-4 py-3">
+          <div class="text-center">
+            <p class="text-xs text-gray-400">Stok Saat Ini</p>
+            <p class="text-xl font-bold text-gray-800">{koreksiTarget.stok_tersedia}</p>
+          </div>
+          <div class="text-gray-300">→</div>
+          <div class="flex-1">
+            <label class="mb-1 block text-xs font-medium text-gray-600" for="koreksi-jumlah">Stok Baru</label>
+            <Input
+              id="koreksi-jumlah"
+              type="number"
+              min="0"
+              bind:value={koreksiJumlah}
+              class="text-center"
+            />
+          </div>
+        </div>
+        <p class="text-xs text-gray-400">
+          Koreksi ini untuk menyesuaikan stok fisik — bisa karena potongan rusak, terbuang, atau hitung ulang.
+        </p>
+        {#if koreksiError}
+          <p class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{koreksiError}</p>
+        {/if}
+      </div>
+      <Dialog.Footer class="gap-2">
+        <Button variant="outline" onclick={() => (koreksiOpen = false)} disabled={koreksiSaving}>Batal</Button>
+        <Button onclick={submitKoreksi} disabled={koreksiSaving || koreksiJumlah < 0}>
+          {koreksiSaving ? 'Menyimpan...' : 'Simpan Koreksi'}
+        </Button>
+      </Dialog.Footer>
+    </Dialog.Content>
+  </Dialog.Root>
 {/if}

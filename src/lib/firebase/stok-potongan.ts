@@ -2,15 +2,20 @@
 import {
   collection, doc, getDocs,
   serverTimestamp, runTransaction,
-  query, orderBy, where,
+  query, orderBy, where, updateDoc,
 } from 'firebase/firestore';
 import { db } from './config';
 import type { StokPotongan, UkuranBaju } from '$lib/types';
 
 const COL = 'stok_potongan';
 
-function buildStokPotonganDocId(modelId: string, ukuran: string): string {
-  return `${modelId}__${ukuran}`;
+function warnaDocKey(namaWarna: string): string {
+  return namaWarna.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+}
+
+function buildStokPotonganDocId(modelId: string, ukuran: string, namaWarna?: string): string {
+  if (!namaWarna) return `${modelId}__${ukuran}`;
+  return `${modelId}__${ukuran}__${warnaDocKey(namaWarna)}`;
 }
 
 // Ambil semua stok potongan
@@ -35,14 +40,12 @@ export async function tambahStokPotongan(
   warna?: { nama_warna?: string; kode_hex_warna?: string }
 ): Promise<void> {
   for (const item of detailDisimpan) {
-    const q = query(
-      collection(db, COL),
-      where('model_id', '==', modelId),
-      where('ukuran', '==', item.ukuran)
-    );
+    const q = warna?.nama_warna
+      ? query(collection(db, COL), where('model_id', '==', modelId), where('ukuran', '==', item.ukuran), where('nama_warna', '==', warna.nama_warna))
+      : query(collection(db, COL), where('model_id', '==', modelId), where('ukuran', '==', item.ukuran));
     const snap = await getDocs(q);
     const ref = snap.empty
-      ? doc(db, COL, buildStokPotonganDocId(modelId, item.ukuran))
+      ? doc(db, COL, buildStokPotonganDocId(modelId, item.ukuran, warna?.nama_warna))
       : snap.docs[0].ref;
 
     await runTransaction(db, async (transaction) => {
@@ -103,6 +106,27 @@ export async function kurangiStokPotongan(
     transaction.update(ref, {
       stok_tersedia: data.stok_tersedia - jumlah,
       total_terpakai: data.total_terpakai + jumlah,
+      updatedAt: serverTimestamp(),
+    });
+  });
+}
+
+// Koreksi manual stok potongan — hapus karena rusak/terbuang
+export async function koreksiStokPotongan(
+  stokId: string,
+  jumlahBaru: number,
+): Promise<void> {
+  if (jumlahBaru < 0) throw new Error('Jumlah tidak boleh negatif');
+  const ref = doc(db, COL, stokId);
+  await runTransaction(db, async (transaction) => {
+    const snap = await transaction.get(ref);
+    if (!snap.exists()) throw new Error('Stok potongan tidak ditemukan');
+    const data = snap.data() as StokPotongan;
+    const selisih = jumlahBaru - data.stok_tersedia;
+    transaction.update(ref, {
+      stok_tersedia: jumlahBaru,
+      ...(selisih > 0 ? { total_masuk: data.total_masuk + selisih } : {}),
+      ...(selisih < 0 ? { total_terpakai: data.total_terpakai + Math.abs(selisih) } : {}),
       updatedAt: serverTimestamp(),
     });
   });

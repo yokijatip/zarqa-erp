@@ -134,6 +134,7 @@ export interface BatchProduksi {
   nama_model: string;
   nama_warna?: string;
   kode_hex_warna?: string;
+  kode_hex_list?: string;
   detail_ukuran: DetailUkuran[];
   total_pcs: number;
   kain_digunakan: KainDigunakan[];
@@ -202,6 +203,32 @@ export interface StokPotongan {
   updatedAt?: Timestamp;
 }
 
+// ─── RIWAYAT BARANG JADI ─────────────────────────────────────────
+
+export type TipeRiwayatBarangJadi =
+  | 'masuk_produksi'
+  | 'masuk_restock'
+  | 'masuk_stok_awal'
+  | 'kurangi_manual'
+  | 'set_manual'
+  | 'batal_keluar';
+
+export interface RiwayatBarangJadi {
+  id?: string;
+  model_id: string;
+  nama_model: string;
+  ukuran: string;
+  tipe: TipeRiwayatBarangJadi;
+  jumlah: number;
+  stok_sebelum: number;
+  stok_sesudah: number;
+  catatan?: string;
+  batch_id?: string;
+  dicatat_oleh_uid?: string;
+  dicatat_oleh_nama?: string;
+  timestamp?: Timestamp;
+}
+
 // ─── BARANG KELUAR ───────────────────────────────────────────────
 
 export interface DetailKeluar {
@@ -213,6 +240,8 @@ export interface BarangKeluar {
   id: string;
   model_id: string;
   nama_model: string;
+  nama_warna?: string;
+  kode_hex_warna?: string;
   detail_keluar: DetailKeluar[];
   total_pcs: number;
   tujuan: string;

@@ -3,6 +3,7 @@
   import { onMount } from "svelte";
   import { tambahStokBarangJadi } from "$lib/firebase/barang-jadi";
   import { barangJadiCache, modelBajuCache } from "$lib/stores/data-cache.svelte";
+  import { currentUser } from "$lib/stores/auth.store";
   import { UKURAN_ORDER, type StokBarangJadi, type UkuranBaju, type ModelBaju } from "$lib/types";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -47,14 +48,19 @@
   let successToast = $state<string | null>(null);
 
   // ── Derived ────────────────────────────────────────────────────────
+  // Filter warna
+  let filterWarna = $state<string>("semua");
+
   let grouped = $derived.by(() => {
+    // Group by model_id + nama_warna agar tiap kombinasi warna tampil terpisah
     const map = new Map<
       string,
       { model_id: string; nama_model: string; nama_warna?: string; kode_hex_warna?: string; items: StokBarangJadi[] }
     >();
     for (const item of stokList) {
-      if (!map.has(item.model_id)) {
-        map.set(item.model_id, {
+      const key = `${item.model_id}__${item.nama_warna ?? ''}`;
+      if (!map.has(key)) {
+        map.set(key, {
           model_id: item.model_id,
           nama_model: item.nama_model,
           nama_warna: item.nama_warna,
@@ -62,7 +68,7 @@
           items: [],
         });
       }
-      map.get(item.model_id)!.items.push(item);
+      map.get(key)!.items.push(item);
     }
     for (const g of map.values()) {
       g.items.sort(
@@ -71,6 +77,15 @@
       );
     }
     return [...map.values()];
+  });
+
+  // Daftar warna unik untuk filter chips
+  let warnaUnik = $derived.by(() => {
+    const set = new Set<string>();
+    for (const g of grouped) {
+      if (g.nama_warna) set.add(g.nama_warna);
+    }
+    return [...set].sort((a, b) => a.localeCompare(b, 'id'));
   });
 
   type GroupedModel = (typeof grouped)[number];
@@ -101,6 +116,11 @@
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
       list = list.filter((g) => g.nama_model.toLowerCase().includes(q));
+    }
+
+    // Filter warna
+    if (filterWarna !== "semua") {
+      list = list.filter((g) => g.nama_warna === filterWarna);
     }
 
     // Filter status
@@ -233,7 +253,19 @@
     if (items.length === 0) { showError("Isi setidaknya satu ukuran."); return; }
     savingTambah = true;
     try {
-      await tambahStokBarangJadi(selectedModel.id, selectedModel.nama_model, items, {});
+      const warnas = selectedModel.warna_tersedia ?? [];
+      await tambahStokBarangJadi(
+        selectedModel.id,
+        selectedModel.nama_model,
+        items,
+        warnas.length > 0 ? { nama_warna: warnas.map(w => w.nama_warna).join(', '), kode_hex_warna: warnas[0].kode_hex } : {},
+        $currentUser ? {
+          uid: $currentUser.uid,
+          nama: $currentUser.name || $currentUser.email || $currentUser.uid,
+          tipe: 'masuk_stok_awal',
+          catatan: 'Stok awal manual',
+        } : undefined,
+      );
       openTambah = false;
       await load(true);
       successToast = `Stok awal ${selectedModel.nama_model} berhasil ditambahkan.`;
@@ -410,6 +442,35 @@
       </button>
     {/each}
   </div>
+
+  <!-- Filter Warna -->
+  {#if warnaUnik.length > 1}
+    <div class="flex items-center gap-1.5 flex-wrap">
+      <span class="text-xs text-gray-400">Warna:</span>
+      <button
+        onclick={() => (filterWarna = "semua")}
+        class="rounded-full border px-3 py-1 text-xs font-medium transition {filterWarna === 'semua'
+          ? 'border-gray-800 bg-gray-800 text-white'
+          : 'border-gray-200 bg-white text-gray-500 hover:border-gray-300 hover:text-gray-700'}"
+      >
+        Semua
+      </button>
+      {#each warnaUnik as warna}
+        {@const hexFirst = stokList.find((i) => i.nama_warna === warna)?.kode_hex_warna}
+        <button
+          onclick={() => (filterWarna = warna)}
+          class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition {filterWarna === warna
+            ? 'border-gray-800 bg-gray-800 text-white'
+            : 'border-gray-200 bg-white text-gray-500 hover:border-gray-300 hover:text-gray-700'}"
+        >
+          {#if hexFirst}
+            <span class="h-2 w-2 shrink-0 rounded-full" style="background:{hexFirst}"></span>
+          {/if}
+          {warna}
+        </button>
+      {/each}
+    </div>
+  {/if}
 
   <!-- Sort -->
   <div class="flex items-center gap-1.5 ml-auto">

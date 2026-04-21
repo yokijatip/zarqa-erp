@@ -124,6 +124,13 @@
   let steamPcs   = $derived(steamBatches.reduce((s, b) => s + (b.pcs_saat_ini ?? b.total_pcs), 0));
   let terlambatBatches = $derived(filteredBatches.filter(b => hitungHari(b.createdAt) > 5));
 
+  // ── Umur batch ────────────────────────────────────────────────────
+  let batchUmur = $derived({
+    baru:   filteredBatches.filter(b => hitungHari(b.createdAt) <= 2).length,
+    normal: filteredBatches.filter(b => { const h = hitungHari(b.createdAt); return h >= 3 && h <= 5; }).length,
+    lambat: filteredBatches.filter(b => hitungHari(b.createdAt) > 5).length,
+  });
+
   // ── Grouping helpers ───────────────────────────────────────────────
   type Group = { key: string; label: string; batches: BatchProduksi[] };
 
@@ -158,6 +165,25 @@
         batches,
       }));
   });
+
+  // Top 5 model by total pcs in progress
+  let modelRanking = $derived(
+    [...groupsByModel]
+      .map(g => ({
+        ...g,
+        totalPcs: g.batches.reduce((s, b) => s + (b.pcs_saat_ini ?? b.total_pcs), 0),
+      }))
+      .sort((a, b) => b.totalPcs - a.totalPcs)
+      .slice(0, 5)
+  );
+
+  // helper: parse warna hex list from batch (backward compat old combined format)
+  function getWarnaHexes(batch: BatchProduksi): string[] {
+    const list = (batch as any).kode_hex_list as string | undefined;
+    if (list) return list.split(',').map((s: string) => s.trim()).filter(Boolean);
+    if (batch.kode_hex_warna) return [batch.kode_hex_warna];
+    return [];
+  }
 
   // ── Utility ────────────────────────────────────────────────────────
   function getBatchesForStage(stages: StatusBatch[]): BatchProduksi[] {
@@ -312,6 +338,94 @@
       </div>
     </div>
   {/if}
+{/if}
+
+<!-- ── Grafik Produksi ─────────────────────────────────────────────── -->
+{#if !loading && filteredBatches.length > 0}
+  {@const totalBatch = filteredBatches.length}
+  {@const maxModelPcs = modelRanking[0]?.totalPcs ?? 1}
+  <div class="mb-5 grid grid-cols-1 gap-4 lg:grid-cols-2">
+
+    <!-- Pipeline alur -->
+    <div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
+      <p class="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-400">Alur Produksi</p>
+      <p class="mb-4 text-[11px] text-gray-400">{totalBatch} batch aktif · {(cuttingPcs + jahitPcs + steamPcs).toLocaleString('id-ID')} pcs total</p>
+      <div class="space-y-4">
+        {#each [
+          { label: 'Cutting', batches: cuttingBatches, pcs: cuttingPcs, bar: 'bg-orange-400', text: 'text-orange-700', bg: 'bg-orange-50' },
+          { label: 'Jahit',   batches: jahitBatches,   pcs: jahitPcs,   bar: 'bg-blue-400',   text: 'text-blue-700',   bg: 'bg-blue-50'   },
+          { label: 'Steam',   batches: steamBatches,   pcs: steamPcs,   bar: 'bg-purple-400', text: 'text-purple-700', bg: 'bg-purple-50' },
+        ] as s}
+          {@const pct = totalBatch > 0 ? (s.batches.length / totalBatch) * 100 : 0}
+          <div>
+            <div class="mb-1.5 flex items-center justify-between text-xs">
+              <span class="font-semibold text-gray-700">{s.label}</span>
+              <span class="font-medium {s.text}">{s.batches.length} batch · {s.pcs.toLocaleString('id-ID')} pcs</span>
+            </div>
+            <div class="relative h-2.5 w-full overflow-hidden rounded-full bg-gray-100">
+              <div class="absolute inset-y-0 left-0 rounded-full {s.bar} transition-all duration-500" style="width:{pct}%"></div>
+            </div>
+            <p class="mt-1 text-[10px] text-gray-400">{pct.toFixed(0)}% dari total batch aktif</p>
+          </div>
+        {/each}
+      </div>
+
+      <!-- Umur batch breakdown -->
+      <div class="mt-5 border-t border-gray-100 pt-4">
+        <p class="mb-3 text-[11px] font-semibold uppercase tracking-wide text-gray-400">Usia Batch</p>
+        <div class="grid grid-cols-3 gap-2 text-center">
+          <div class="rounded-lg bg-green-50 px-2 py-2.5">
+            <p class="text-lg font-bold text-green-700">{batchUmur.baru}</p>
+            <p class="text-[10px] text-green-600">≤ 2 hari</p>
+          </div>
+          <div class="rounded-lg bg-amber-50 px-2 py-2.5">
+            <p class="text-lg font-bold text-amber-700">{batchUmur.normal}</p>
+            <p class="text-[10px] text-amber-600">3–5 hari</p>
+          </div>
+          <div class="rounded-lg {batchUmur.lambat > 0 ? 'bg-red-50' : 'bg-gray-50'} px-2 py-2.5">
+            <p class="text-lg font-bold {batchUmur.lambat > 0 ? 'text-red-700' : 'text-gray-400'}">{batchUmur.lambat}</p>
+            <p class="text-[10px] {batchUmur.lambat > 0 ? 'text-red-500' : 'text-gray-400'}">> 5 hari</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Ranking model -->
+    <div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
+      <p class="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-400">Model Terbanyak</p>
+      <p class="mb-4 text-[11px] text-gray-400">Berdasarkan total PCS aktif</p>
+      {#if modelRanking.length === 0}
+        <p class="text-sm text-gray-400">Tidak ada data</p>
+      {:else}
+        <div class="space-y-3">
+          {#each modelRanking as item, i}
+            {@const pct = maxModelPcs > 0 ? (item.totalPcs / maxModelPcs) * 100 : 0}
+            {@const warnaBatch = item.batches.find(b => b.kode_hex_warna)}
+            <div>
+              <div class="mb-1 flex items-center justify-between gap-2 text-xs">
+                <div class="flex min-w-0 items-center gap-1.5">
+                  <span class="shrink-0 flex h-4 w-4 items-center justify-center rounded-full bg-gray-100 text-[9px] font-bold text-gray-500">
+                    {i + 1}
+                  </span>
+                  <span class="truncate font-medium text-gray-700">{item.label}</span>
+                  {#if warnaBatch?.kode_hex_warna}
+                    {#each getWarnaHexes(warnaBatch) as hex}
+                      <span class="h-2 w-2 shrink-0 rounded-full ring-1 ring-black/10" style="background:{hex}"></span>
+                    {/each}
+                  {/if}
+                </div>
+                <span class="shrink-0 font-semibold text-gray-800">{item.totalPcs.toLocaleString('id-ID')} pcs</span>
+              </div>
+              <div class="relative h-2 w-full overflow-hidden rounded-full bg-gray-100">
+                <div class="absolute inset-y-0 left-0 rounded-full bg-gray-400 transition-all duration-500" style="width:{pct}%"></div>
+              </div>
+              <p class="mt-0.5 text-[10px] text-gray-400">{item.batches.length} batch aktif</p>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
+  </div>
 {/if}
 
 <!-- ── Filter & View Mode Bar ─────────────────────────────────────── -->
@@ -574,6 +688,7 @@
 
 <!-- ── Shared BatchCard snippet ──────────────────────────────────── -->
 {#snippet BatchCard(batch: BatchProduksi, hari: number, lambat: boolean)}
+  {@const warnaHexes = getWarnaHexes(batch)}
   <a href="/monitor-produksi/{batch.id}" class="flex flex-col rounded-xl border border-gray-100 bg-gray-50 p-4 transition hover:border-gray-200 hover:bg-white hover:shadow-sm">
     <!-- Header: nama + hari -->
     <div class="mb-2 flex items-start justify-between gap-2">
@@ -588,10 +703,12 @@
     </div>
 
     <!-- Warna chip -->
-    {#if batch.kode_hex_warna}
+    {#if warnaHexes.length > 0}
       <div class="mb-2">
         <span class="inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-600">
-          <span class="h-3 w-3 rounded-full shrink-0" style="background:{batch.kode_hex_warna}"></span>
+          {#each warnaHexes as hex}
+            <span class="h-2.5 w-2.5 rounded-full shrink-0 ring-1 ring-black/10" style="background:{hex}"></span>
+          {/each}
           {batch.nama_warna ?? 'Warna'}
         </span>
       </div>

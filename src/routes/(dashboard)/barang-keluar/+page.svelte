@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { catatBarangKeluar, getRiwayatBarangKeluarByPeriod } from "$lib/firebase/barang-jadi";
+  import { catatBarangKeluar, getRiwayatBarangKeluarByPeriod, batalBarangKeluar } from "$lib/firebase/barang-jadi";
   import { barangJadiCache } from "$lib/stores/data-cache.svelte";
   import { currentUser, userRole } from "$lib/stores/auth.store";
   import { UKURAN_ORDER, type StokBarangJadi, type BarangKeluar, type UkuranBaju } from "$lib/types";
@@ -14,6 +14,7 @@
   import PackageCheckIcon from "@lucide/svelte/icons/package-check";
   import BoxesIcon from "@lucide/svelte/icons/boxes";
   import ShirtIcon from "@lucide/svelte/icons/shirt";
+  import Trash2Icon from "@lucide/svelte/icons/trash-2";
   import { type DateRange, getPeriodRange } from "$lib/period";
   import PeriodSelector from "$lib/components/period-selector.svelte";
 
@@ -28,8 +29,36 @@
   let dateRange = $state<DateRange>(getPeriodRange('bulan_ini'));
   let openCatat = $state(false);
 
+  // Cancel dialog
+  let batalTarget = $state<BarangKeluar | null>(null);
+  let batalOpen = $state(false);
+  let batalSaving = $state(false);
+  let batalError = $state<string | null>(null);
+
+  function bukaBatal(r: BarangKeluar) { batalTarget = r; batalError = null; batalOpen = true; }
+
+  async function submitBatal() {
+    if (!batalTarget || !$currentUser) return;
+    batalSaving = true;
+    batalError = null;
+    try {
+      await batalBarangKeluar(batalTarget.id, {
+        uid: $currentUser.uid,
+        nama: $currentUser.name || $currentUser.email || $currentUser.uid,
+      });
+      barangJadiCache.invalidate();
+      await load(true);
+      batalOpen = false;
+      showSuccess(`Pengiriman ${batalTarget.total_pcs} pcs "${batalTarget.nama_model}" ke ${batalTarget.tujuan} berhasil dibatalkan.`);
+    } catch (e: any) {
+      batalError = e?.message ?? 'Gagal membatalkan pengiriman.';
+    } finally {
+      batalSaving = false;
+    }
+  }
+
   // Form
-  let fModelId = $state("");
+  let fModelKey = $state(""); // composite: "${model_id}__${nama_warna ?? ''}"
   let fTujuan = $state("");
   let fKeterangan = $state("");
   let fJumlah = $state<Partial<Record<UkuranBaju, number>>>({});
@@ -44,18 +73,22 @@
   let modelDenganStok = $derived.by(() => {
     const map = new Map<
       string,
-      { model_id: string; nama_model: string; stok: StokBarangJadi[] }
+      { key: string; model_id: string; nama_model: string; nama_warna?: string; kode_hex_warna?: string; stok: StokBarangJadi[] }
     >();
     for (const item of stokList) {
       if (item.stok_tersedia > 0) {
-        if (!map.has(item.model_id)) {
-          map.set(item.model_id, {
+        const key = `${item.model_id}__${item.nama_warna ?? ''}`;
+        if (!map.has(key)) {
+          map.set(key, {
+            key,
             model_id: item.model_id,
             nama_model: item.nama_model,
+            nama_warna: item.nama_warna,
+            kode_hex_warna: item.kode_hex_warna,
             stok: [],
           });
         }
-        map.get(item.model_id)!.stok.push(item);
+        map.get(key)!.stok.push(item);
       }
     }
     return [...map.values()].sort((a, b) =>
@@ -64,7 +97,7 @@
   });
 
   let selectedModelData = $derived(
-    modelDenganStok.find((m) => m.model_id === fModelId) ?? null,
+    modelDenganStok.find((m) => m.key === fModelKey) ?? null,
   );
 
   let detailKeluar = $derived(
@@ -78,7 +111,7 @@
 
   let totalPcs = $derived(detailKeluar.reduce((s, d) => s + d.jumlah_pcs, 0));
   let canSubmit = $derived(
-    fModelId !== "" && fTujuan.trim() !== "" && totalPcs > 0,
+    fModelKey !== "" && fTujuan.trim() !== "" && totalPcs > 0,
   );
 
   // riwayat sudah difilter dari Firestore sesuai periode — tidak perlu filter ulang
@@ -177,7 +210,7 @@
 
   // ── Actions ──────────────────────────────────────────────────────
   function bukaCatat() {
-    fModelId = "";
+    fModelKey = "";
     fTujuan = "";
     fKeterangan = "";
     fJumlah = {};
@@ -191,8 +224,10 @@
       const keteranganTrimmed = fKeterangan.trim();
       await catatBarangKeluar(
         {
-          model_id: fModelId,
+          model_id: selectedModelData!.model_id,
           nama_model: selectedModelData!.nama_model,
+          ...(selectedModelData!.nama_warna ? { nama_warna: selectedModelData!.nama_warna } : {}),
+          ...(selectedModelData!.kode_hex_warna ? { kode_hex_warna: selectedModelData!.kode_hex_warna } : {}),
           detail_keluar: detailKeluar,
           tujuan: fTujuan.trim(),
           ...(keteranganTrimmed ? { keterangan: keteranganTrimmed } : {}),
@@ -436,6 +471,7 @@
           <Table.Head>Detail Ukuran</Table.Head>
           <Table.Head class="text-center">Total PCS</Table.Head>
           <Table.Head>Tujuan</Table.Head>
+          {#if canCatat}<Table.Head class="w-12"></Table.Head>{/if}
         </Table.Row>
       </Table.Header>
       <Table.Body>
@@ -475,6 +511,17 @@
                 </p>
               {/if}
             </Table.Cell>
+            {#if canCatat}
+              <Table.Cell>
+                <button
+                  onclick={() => bukaBatal(r)}
+                  title="Batalkan pengiriman"
+                  class="rounded p-1 text-gray-300 hover:bg-red-50 hover:text-red-500"
+                >
+                  <Trash2Icon class="h-4 w-4" />
+                </button>
+              </Table.Cell>
+            {/if}
           </Table.Row>
         {/each}
       </Table.Body>
@@ -530,25 +577,42 @@
         {:else}
           <Select.Root
             type="single"
-            value={fModelId || undefined}
+            value={fModelKey || undefined}
             onValueChange={(val) => {
-              fModelId = val ?? "";
+              fModelKey = val ?? "";
               fJumlah = {};
             }}
           >
             <Select.Trigger class="w-full">
-              <span
-                class={fModelId ? "text-foreground" : "text-muted-foreground"}
-              >
-                {fModelId
-                  ? (modelDenganStok.find((m) => m.model_id === fModelId)
-                      ?.nama_model ?? "— Pilih model —")
-                  : "— Pilih model —"}
-              </span>
+              {#if selectedModelData}
+                <span class="flex items-center gap-1.5 truncate">
+                  {selectedModelData.nama_model}
+                  {#if selectedModelData.nama_warna}
+                    <span class="text-gray-300">·</span>
+                    {#if selectedModelData.kode_hex_warna}
+                      <span class="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-black/10" style="background:{selectedModelData.kode_hex_warna}"></span>
+                    {/if}
+                    <span class="text-gray-500">{selectedModelData.nama_warna}</span>
+                  {/if}
+                </span>
+              {:else}
+                <span class="text-muted-foreground">— Pilih model —</span>
+              {/if}
             </Select.Trigger>
             <Select.Content preventScroll={false}>
               {#each modelDenganStok as m}
-                <Select.Item value={m.model_id}>{m.nama_model}</Select.Item>
+                <Select.Item value={m.key}>
+                  <span class="flex items-center gap-1.5">
+                    {m.nama_model}
+                    {#if m.nama_warna}
+                      <span class="text-gray-300">·</span>
+                      {#if m.kode_hex_warna}
+                        <span class="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-black/10" style="background:{m.kode_hex_warna}"></span>
+                      {/if}
+                      <span class="text-gray-400 text-xs">{m.nama_warna}</span>
+                    {/if}
+                  </span>
+                </Select.Item>
               {/each}
             </Select.Content>
           </Select.Root>
@@ -656,3 +720,35 @@
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>
+
+<!-- ── Dialog: Batalkan Barang Keluar ────────────────────────────── -->
+{#if batalTarget}
+  <Dialog.Root bind:open={batalOpen}>
+    <Dialog.Content class="max-w-sm">
+      <Dialog.Header>
+        <Dialog.Title class="text-red-700">Batalkan Pengiriman?</Dialog.Title>
+        <Dialog.Description>
+          Pengiriman <span class="font-semibold text-gray-800">{batalTarget.total_pcs} pcs "{batalTarget.nama_model}"</span>
+          ke <span class="font-medium">{batalTarget.tujuan}</span> akan dihapus dan
+          stok barang jadi akan dikembalikan.
+        </Dialog.Description>
+      </Dialog.Header>
+      {#if batalError}
+        <p class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{batalError}</p>
+      {/if}
+      <Dialog.Footer class="gap-2">
+        <Button variant="outline" onclick={() => (batalOpen = false)} disabled={batalSaving}>
+          Batal
+        </Button>
+        <Button variant="destructive" onclick={submitBatal} disabled={batalSaving}>
+          {#if batalSaving}
+            <svg class="mr-2 h-4 w-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+            </svg>
+          {/if}
+          Ya, Batalkan
+        </Button>
+      </Dialog.Footer>
+    </Dialog.Content>
+  </Dialog.Root>
+{/if}

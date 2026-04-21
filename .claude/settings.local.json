@@ -44,7 +44,8 @@
       "Bash(firebase storage:cors set cors.json)",
       "Bash(firebase --help)",
       "Bash(yes)",
-      "Bash(npx svelte-check:*)"
+      "Bash(npx svelte-check:*)",
+      "Bash(\"/c/Users/ervid/AppData/Local/Android/Sdk/platform-tools/adb\" logcat *)"
     ]
   }
 }

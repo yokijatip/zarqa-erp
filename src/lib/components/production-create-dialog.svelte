@@ -49,6 +49,7 @@
   );
   let filteredWorkers = $derived(workerList.filter((worker) => worker.role === rolePenugasan));
   let selectedModel = $derived(modelList.find((model) => model.id === fModelId) ?? null);
+
   let detailUkuran = $derived(
     selectedModel
       ? UKURAN_ORDER.filter(
@@ -148,6 +149,7 @@
     fModelId = value;
     fJumlah = {};
     errorMsg = null;
+    stokPotonganModel = [];
     await loadPotongan(value);
   }
 
@@ -161,11 +163,11 @@
       const inputData = {
         model_id: fModelId,
         nama_model: selectedModel.nama_model,
-        // Simpan info warna kombinasi ke batch jika model punya warna
         ...(warnas.length > 0
           ? {
-              nama_warna: warnas.map((w) => w.nama_warna).join(", "),
+              nama_warna: warnas.map(w => w.nama_warna).join(', '),
               kode_hex_warna: warnas[0].kode_hex,
+              ...(warnas.length > 1 ? { kode_hex_list: warnas.map(w => w.kode_hex).join(',') } : {}),
             }
           : {}),
         detail_ukuran: detailUkuran,
