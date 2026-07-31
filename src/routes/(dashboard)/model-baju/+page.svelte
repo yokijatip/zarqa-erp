@@ -913,35 +913,37 @@
                   <path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
                 </svg>
               </Popover.Trigger>
-              <Popover.Content class="w-[--bits-popover-anchor-width] p-1" align="start">
-                {#each warnaList as w}
-                  {@const selected = isWarnaSelected(w.id)}
-                  <button
-                    type="button"
-                    onclick={() => toggleWarna(w)}
-                    class="flex w-full items-center gap-2.5 rounded-sm px-2 py-1.5 text-sm hover:bg-accent"
-                  >
-                    <span
-                      class="inline-block h-4 w-4 shrink-0 rounded-full border border-black/10 shadow-sm"
-                      style="background-color: {w.kode_hex}"
-                    ></span>
-                    <span class="flex-1 text-left">{w.nama_warna}</span>
-                    {#if selected}
-                      <svg
-                        class="h-4 w-4 shrink-0 text-primary"
-                        xmlns="http://www.w3.org/2000/svg"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke-width="2.5"
-                        stroke="currentColor"
-                      >
-                        <path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5" />
-                      </svg>
-                    {:else}
-                      <span class="h-4 w-4 shrink-0"></span>
-                    {/if}
-                  </button>
-                {/each}
+              <Popover.Content class="w-[--bits-popover-anchor-width] overflow-hidden p-1" align="start">
+                <div class="max-h-[min(16rem,var(--bits-popover-content-available-height))] overflow-y-auto">
+                  {#each warnaList as w}
+                    {@const selected = isWarnaSelected(w.id)}
+                    <button
+                      type="button"
+                      onclick={() => toggleWarna(w)}
+                      class="flex w-full items-center gap-2.5 rounded-sm px-2 py-1.5 text-sm hover:bg-accent"
+                    >
+                      <span
+                        class="inline-block h-4 w-4 shrink-0 rounded-full border border-black/10 shadow-sm"
+                        style="background-color: {w.kode_hex}"
+                      ></span>
+                      <span class="flex-1 text-left">{w.nama_warna}</span>
+                      {#if selected}
+                        <svg
+                          class="h-4 w-4 shrink-0 text-primary"
+                          xmlns="http://www.w3.org/2000/svg"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke-width="2.5"
+                          stroke="currentColor"
+                        >
+                          <path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+                        </svg>
+                      {:else}
+                        <span class="h-4 w-4 shrink-0"></span>
+                      {/if}
+                    </button>
+                  {/each}
+                </div>
               </Popover.Content>
             </Popover.Root>
           {/if}

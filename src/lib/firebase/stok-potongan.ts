@@ -2,7 +2,7 @@
 import {
   collection, doc, getDocs,
   serverTimestamp, runTransaction,
-  query, orderBy, where, updateDoc,
+  query, orderBy, where,
 } from 'firebase/firestore';
 import { db } from './config';
 import type { StokPotongan, UkuranBaju } from '$lib/types';
@@ -129,5 +129,15 @@ export async function koreksiStokPotongan(
       ...(selisih < 0 ? { total_terpakai: data.total_terpakai + Math.abs(selisih) } : {}),
       updatedAt: serverTimestamp(),
     });
+  });
+}
+
+// Hapus stok potongan per ukuran
+export async function hapusStokPotongan(stokId: string): Promise<void> {
+  const ref = doc(db, COL, stokId);
+  await runTransaction(db, async (transaction) => {
+    const snap = await transaction.get(ref);
+    if (!snap.exists()) throw new Error('Stok potongan tidak ditemukan');
+    transaction.delete(ref);
   });
 }

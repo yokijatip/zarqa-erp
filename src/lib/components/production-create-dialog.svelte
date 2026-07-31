@@ -1,7 +1,6 @@
 <script lang="ts">
   import { createBatchProduksi, createBatchDariPotongan } from "$lib/firebase/batch-produksi";
   import { getKaryawanList } from "$lib/firebase/karyawan";
-  import { getStokPotonganByModel } from "$lib/firebase/stok-potongan";
   import { modelBajuCache, stokPotonganCache } from "$lib/stores/data-cache.svelte";
   import { currentUser } from "$lib/stores/auth.store";
   import {
@@ -26,6 +25,16 @@
     onCreated?: () => void | Promise<void>;
   } = $props();
 
+  type StokPotonganGroup = {
+    key: string;
+    model_id: string;
+    nama_model: string;
+    nama_warna?: string;
+    kode_hex_warna?: string;
+    items: StokPotongan[];
+    ukuran_tersedia: UkuranBaju[];
+  };
+
   let open = $state(false);
   let modelList = $state<ModelBaju[]>([]);
   let loadingModels = $state(false);
@@ -35,6 +44,8 @@
   let errorMsg = $state<string | null>(null);
 
   let fModelId = $state("");
+  let fPotonganKey = $state("");
+  let fWarnaId = $state("");
   let fCatatan = $state("");
   let fPenugasanUid = $state("");
   let fJumlah = $state<Partial<Record<UkuranBaju, number>>>({});
@@ -49,18 +60,83 @@
   );
   let filteredWorkers = $derived(workerList.filter((worker) => worker.role === rolePenugasan));
   let selectedModel = $derived(modelList.find((model) => model.id === fModelId) ?? null);
+  let stokPotonganGroups = $derived.by(() => {
+    const map = new Map<string, StokPotonganGroup>();
+
+    for (const item of stokPotonganModel) {
+      if (item.stok_tersedia <= 0) continue;
+      const key = `${item.model_id}__${item.nama_warna ?? ""}`;
+      const group = map.get(key);
+
+      if (group) {
+        group.items.push(item);
+        group.ukuran_tersedia = UKURAN_ORDER.filter((ukuran) =>
+          group.items.some((stok) => stok.ukuran === ukuran && stok.stok_tersedia > 0),
+        );
+      } else {
+        map.set(key, {
+          key,
+          model_id: item.model_id,
+          nama_model: item.nama_model,
+          nama_warna: item.nama_warna,
+          kode_hex_warna: item.kode_hex_warna,
+          items: [item],
+          ukuran_tersedia: [item.ukuran],
+        });
+      }
+    }
+
+    return Array.from(map.values()).sort((a, b) => {
+      const byModel = a.nama_model.localeCompare(b.nama_model);
+      if (byModel !== 0) return byModel;
+      return (a.nama_warna ?? "").localeCompare(b.nama_warna ?? "");
+    });
+  });
+  let selectedPotonganGroup = $derived(
+    stokPotonganGroups.find((group) => group.key === fPotonganKey) ?? null,
+  );
+  let selectedWarna = $derived(
+    mode === "jahit"
+      ? selectedPotonganGroup?.nama_warna
+        ? {
+            warna_id: fPotonganKey,
+            nama_warna: selectedPotonganGroup.nama_warna,
+            kode_hex: selectedPotonganGroup.kode_hex_warna ?? "",
+          }
+        : null
+      : selectedModel?.warna_tersedia?.find((warna) => warna.warna_id === fWarnaId) ?? null,
+  );
+  let selectedNamaModel = $derived(
+    mode === "jahit" ? selectedPotonganGroup?.nama_model : selectedModel?.nama_model,
+  );
+  let warnaKey = $derived(
+    selectedWarna?.nama_warna ?? "",
+  );
+  // Stok potongan yang relevan untuk model+warna yang dipilih
+  let stokPotonganFiltered = $derived(
+    mode === "jahit"
+      ? selectedPotonganGroup?.items ?? []
+      : warnaKey
+        ? stokPotonganModel.filter((s) => s.nama_warna === warnaKey)
+        : stokPotonganModel.filter((s) => !s.nama_warna)
+  );
+  let ukuranTersedia = $derived(
+    mode === "jahit"
+      ? selectedPotonganGroup?.ukuran_tersedia ?? []
+      : selectedModel?.ukuran_tersedia ?? []
+  );
 
   let detailUkuran = $derived(
-    selectedModel
+    selectedNamaModel
       ? UKURAN_ORDER.filter(
           (ukuran) =>
-            selectedModel.ukuran_tersedia.includes(ukuran) && (fJumlah[ukuran] ?? 0) > 0,
+            ukuranTersedia.includes(ukuran) && (fJumlah[ukuran] ?? 0) > 0,
         ).map((ukuran) => ({ ukuran, jumlah_pcs: fJumlah[ukuran]! }))
       : [],
   );
   let totalPcs = $derived(detailUkuran.reduce((sum, item) => sum + item.jumlah_pcs, 0));
   let kainDibutuhkan = $derived(
-    selectedModel && totalPcs > 0
+    mode === "cutting" && selectedModel && totalPcs > 0
       ? (
           (selectedModel.kebutuhan_kain?.length ?? 0) > 0
             ? selectedModel.kebutuhan_kain!
@@ -82,12 +158,13 @@
       : [],
   );
   let canSubmit = $derived(
-    fModelId !== "" &&
+    (mode === "jahit" ? !!selectedPotonganGroup : fModelId !== "") &&
+      (mode === "jahit" || ((selectedModel?.warna_tersedia?.length ?? 0) === 0 || fWarnaId !== "")) &&
       totalPcs > 0 &&
       (
         mode !== "jahit" ||
         detailUkuran.every((item) => {
-          const stok = stokPotonganModel.find((entry) => entry.ukuran === item.ukuran);
+          const stok = stokPotonganFiltered.find((entry) => entry.ukuran === item.ukuran);
           return stok && stok.stok_tersedia >= item.jumlah_pcs;
         })
       ) &&
@@ -118,14 +195,10 @@
     }
   }
 
-  async function loadPotongan(modelId: string) {
-    if (mode !== "jahit" || !modelId) {
-      stokPotonganModel = [];
-      return;
-    }
+  async function loadReadyPotongan() {
     loadingStock = true;
     try {
-      stokPotonganModel = await getStokPotonganByModel(modelId);
+      stokPotonganModel = await stokPotonganCache.get();
     } catch {
       stokPotonganModel = [];
     } finally {
@@ -137,37 +210,48 @@
     open = nextOpen;
     if (!nextOpen) return;
     fModelId = "";
+    fPotonganKey = "";
+    fWarnaId = "";
     fCatatan = "";
     fPenugasanUid = "";
     fJumlah = {};
     stokPotonganModel = [];
     errorMsg = null;
-    await Promise.all([loadModels(), loadWorkers()]);
+    await Promise.all([mode === "jahit" ? loadReadyPotongan() : loadModels(), loadWorkers()]);
   }
 
   async function onModelChange(value: string) {
     fModelId = value;
+    const model = modelList.find((item) => item.id === value) ?? null;
+    const warnas = model?.warna_tersedia ?? [];
+    fWarnaId = warnas.length === 1 ? warnas[0].warna_id : "";
     fJumlah = {};
     errorMsg = null;
     stokPotonganModel = [];
-    await loadPotongan(value);
+  }
+
+  function onPotonganChange(value: string) {
+    fPotonganKey = value;
+    const group = stokPotonganGroups.find((item) => item.key === value) ?? null;
+    fModelId = group?.model_id ?? "";
+    fWarnaId = group?.key ?? "";
+    fJumlah = {};
+    errorMsg = null;
   }
 
   async function submit() {
-    if (!$currentUser || !selectedModel || !canSubmit) return;
+    if (!$currentUser || !selectedNamaModel || !canSubmit) return;
 
     saving = true;
     errorMsg = null;
     try {
-      const warnas = selectedModel.warna_tersedia ?? [];
       const inputData = {
-        model_id: fModelId,
-        nama_model: selectedModel.nama_model,
-        ...(warnas.length > 0
+        model_id: mode === "jahit" ? selectedPotonganGroup!.model_id : fModelId,
+        nama_model: selectedNamaModel,
+        ...(selectedWarna
           ? {
-              nama_warna: warnas.map(w => w.nama_warna).join(', '),
-              kode_hex_warna: warnas[0].kode_hex,
-              ...(warnas.length > 1 ? { kode_hex_list: warnas.map(w => w.kode_hex).join(',') } : {}),
+              nama_warna: selectedWarna.nama_warna,
+              kode_hex_warna: selectedWarna.kode_hex,
             }
           : {}),
         detail_ukuran: detailUkuran,
@@ -227,47 +311,86 @@
 
         <div>
           <label class="mb-1.5 block text-sm font-medium text-gray-700" for="model-select-stage">
-            Model Baju <span class="text-red-500">*</span>
+            {mode === "jahit" ? "Stok Cutting" : "Model Baju"} <span class="text-red-500">*</span>
           </label>
-          {#if loadingModels}
-            <p class="text-xs text-gray-400">Memuat model...</p>
-          {:else if modelList.length === 0}
-            <p class="text-xs text-gray-400">Belum ada model aktif.</p>
+          {#if mode === "jahit" ? loadingStock : loadingModels}
+            <p class="text-xs text-gray-400">
+              {mode === "jahit" ? "Memuat stok cutting..." : "Memuat model..."}
+            </p>
+          {:else if mode === "jahit" ? stokPotonganGroups.length === 0 : modelList.length === 0}
+            <p class="text-xs text-gray-400">
+              {mode === "jahit" ? "Belum ada stok cutting yang siap dijahit." : "Belum ada model aktif."}
+            </p>
           {:else}
             <Select.Root
               type="single"
-              value={fModelId || undefined}
-              onValueChange={(value) => onModelChange(value ?? "")}
+              value={(mode === "jahit" ? fPotonganKey : fModelId) || undefined}
+              onValueChange={(value) => {
+                if (mode === "jahit") {
+                  onPotonganChange(value ?? "");
+                } else {
+                  onModelChange(value ?? "");
+                }
+              }}
             >
-              <Select.Trigger class="w-full">
-                {#if selectedModel}
+              <Select.Trigger class="h-auto min-h-9 w-full min-w-0">
+                {#if selectedNamaModel}
                   <!-- Trigger: nama model + dot warna + label warna -->
-                  <span class="flex items-center gap-1.5 truncate">
-                    <span>{selectedModel.nama_model}</span>
+                  <span class="flex min-w-0 flex-1 items-center gap-2 overflow-hidden [&>*:not(:first-child)]:hidden">
+                    <span class="truncate">
+                      {mode === "jahit" && selectedPotonganGroup?.nama_warna
+                        ? `${selectedNamaModel} - ${selectedPotonganGroup.nama_warna}`
+                        : selectedNamaModel}
+                    </span>
+                    {#if mode === "cutting" && selectedModel}
                     {#each selectedModel.warna_tersedia ?? [] as w, i}
                       {#if i === 0}
-                        <span class="text-gray-300">·</span>
+                        <span class="hidden text-gray-300">·</span>
                       {/if}
                       <span
                         class="inline-block h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-black/10"
                         style="background:{w.kode_hex}"
                       ></span>
-                      <span class="text-gray-500">{w.nama_warna}</span>
+                      <span class="hidden text-gray-500">{w.nama_warna}</span>
                       {#if i < (selectedModel.warna_tersedia?.length ?? 0) - 1}
-                        <span class="text-gray-300">·</span>
+                        <span class="hidden text-gray-300">·</span>
                       {/if}
                     {/each}
+                    {/if}
                   </span>
                 {:else}
-                  <span class="text-muted-foreground">— Pilih model —</span>
+                  <span class="text-muted-foreground">
+                    {mode === "jahit" ? "- Pilih stok cutting -" : "— Pilih model —"}
+                  </span>
                 {/if}
               </Select.Trigger>
-              <Select.Content preventScroll={false}>
+              <Select.Content class="w-[--bits-select-anchor-width] max-w-[--bits-select-anchor-width]" preventScroll={false}>
+                {#if mode === "jahit"}
+                  {#each stokPotonganGroups as group}
+                    <Select.Item value={group.key} class="overflow-hidden">
+                      <span class="flex min-w-0 items-center gap-2">
+                        {#if group.nama_warna}
+                          <span
+                            class="inline-block h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-black/10"
+                            style="background:{group.kode_hex_warna}"
+                          ></span>
+                        {/if}
+                        <span class="truncate">
+                          {group.nama_model}
+                          {group.nama_warna ? ` - ${group.nama_warna}` : ""}
+                        </span>
+                        <span class="ml-auto shrink-0 text-xs text-gray-400">
+                          {group.items.reduce((sum, item) => sum + item.stok_tersedia, 0)} pcs
+                        </span>
+                      </span>
+                    </Select.Item>
+                  {/each}
+                {:else}
                 {#each modelList as model}
-                  <Select.Item value={model.id}>
+                  <Select.Item value={model.id} class="overflow-hidden">
                     <!-- Item: nama model + dot warna + label warna -->
-                    <span class="flex items-center gap-1.5">
-                      <span>{model.nama_model}</span>
+                    <span class="flex min-w-0 items-center overflow-hidden [&>*:not(:first-child)]:hidden">
+                      <span class="truncate">{model.nama_model}</span>
                       {#each model.warna_tersedia ?? [] as w, i}
                         {#if i === 0}
                           <span class="text-gray-300">·</span>
@@ -284,10 +407,55 @@
                     </span>
                   </Select.Item>
                 {/each}
+                {/if}
               </Select.Content>
             </Select.Root>
           {/if}
         </div>
+
+        {#if mode === "cutting" && selectedModel && (selectedModel.warna_tersedia?.length ?? 0) > 0}
+          <div>
+            <p class="mb-1.5 block text-sm font-medium text-gray-700">
+              Warna Produksi <span class="text-red-500">*</span>
+            </p>
+            <Select.Root
+              type="single"
+              value={fWarnaId || undefined}
+              onValueChange={(value) => {
+                fWarnaId = value ?? "";
+                fJumlah = {};
+                errorMsg = null;
+              }}
+            >
+              <Select.Trigger class="w-full">
+                {#if selectedWarna}
+                  <span class="flex items-center gap-1.5 truncate">
+                    <span
+                      class="inline-block h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-black/10"
+                      style="background:{selectedWarna.kode_hex}"
+                    ></span>
+                    <span>{selectedWarna.nama_warna}</span>
+                  </span>
+                {:else}
+                  <span class="text-muted-foreground">- Pilih warna -</span>
+                {/if}
+              </Select.Trigger>
+              <Select.Content preventScroll={false}>
+                {#each selectedModel?.warna_tersedia ?? [] as warna}
+                  <Select.Item value={warna.warna_id}>
+                    <span class="flex items-center gap-1.5">
+                      <span
+                        class="inline-block h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-black/10"
+                        style="background:{warna.kode_hex}"
+                      ></span>
+                      <span>{warna.nama_warna}</span>
+                    </span>
+                  </Select.Item>
+                {/each}
+              </Select.Content>
+            </Select.Root>
+          </div>
+        {/if}
 
         <div>
           <label class="mb-1.5 block text-sm font-medium text-gray-700">
@@ -319,14 +487,14 @@
           {/if}
         </div>
 
-        {#if selectedModel}
+        {#if selectedNamaModel}
           <div>
             <p class="mb-2 text-sm font-medium text-gray-700">
               Jumlah Per Ukuran <span class="text-red-500">*</span>
             </p>
             <div class="flex flex-wrap gap-2">
-              {#each UKURAN_ORDER.filter((ukuran) => selectedModel.ukuran_tersedia.includes(ukuran)) as ukuran}
-                {@const stokUkuran = mode === "jahit" ? (stokPotonganModel.find((s) => s.ukuran === ukuran)?.stok_tersedia ?? 0) : null}
+              {#each UKURAN_ORDER.filter((ukuran) => ukuranTersedia.includes(ukuran)) as ukuran}
+                {@const stokUkuran = mode === "jahit" ? (stokPotonganFiltered.find((s) => s.ukuran === ukuran)?.stok_tersedia ?? 0) : null}
                 {@const diminta = fJumlah[ukuran] ?? 0}
                 {@const kurang = mode === "jahit" && stokUkuran !== null && diminta > stokUkuran}
                 <div class="w-16 text-center">
@@ -357,7 +525,7 @@
               {:else}
                 <span></span>
               {/if}
-              {#if mode === "jahit" && totalPcs > 0 && !detailUkuran.every((item) => { const s = stokPotonganModel.find((e) => e.ukuran === item.ukuran); return s && s.stok_tersedia >= item.jumlah_pcs; })}
+              {#if mode === "jahit" && totalPcs > 0 && !detailUkuran.every((item) => { const s = stokPotonganFiltered.find((e) => e.ukuran === item.ukuran); return s && s.stok_tersedia >= item.jumlah_pcs; })}
                 <p class="text-xs font-medium text-red-500">Stok cutting tidak mencukupi</p>
               {/if}
             </div>
@@ -365,7 +533,7 @@
 
           {#if mode === "jahit" && loadingStock}
             <p class="text-xs text-blue-500">Memuat stok cutting...</p>
-          {:else if mode === "jahit" && stokPotonganModel.length === 0 && fModelId}
+          {:else if mode === "jahit" && stokPotonganFiltered.length === 0 && fModelId}
             <p class="text-xs text-red-600">Tidak ada stok cutting untuk model ini.</p>
           {:else if mode !== "jahit" && kainDibutuhkan.length > 0}
             <div class="rounded-xl border border-amber-100 bg-amber-50 p-4">

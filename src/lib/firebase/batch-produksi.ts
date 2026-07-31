@@ -8,10 +8,18 @@ import {
 } from 'firebase/firestore';
 import { db } from './config';
 import { getModelBajuById } from './model-baju';
-import { tambahStokPotongan } from './stok-potongan';
 import type { BatchProduksi, BatchProduksiInput, StatusBatch, RiwayatProses, PenugasanWorker, DetailUkuran, KainDigunakan, ModelBaju } from '$lib/types';
 
 const COL = 'batch_produksi';
+
+function warnaDocKey(namaWarna: string): string {
+  return namaWarna.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+}
+
+function buildStokPotonganDocId(modelId: string, ukuran: string, namaWarna?: string): string {
+  if (!namaWarna) return `${modelId}__${ukuran}`;
+  return `${modelId}__${ukuran}__${warnaDocKey(namaWarna)}`;
+}
 
 // Status yang menandakan kain sudah dipotong (stok kain sudah berkurang)
 const STATUSES_KAIN_SUDAH_DIPOTONG = new Set<StatusBatch>([
@@ -271,28 +279,91 @@ export async function sinkronStokPotonganBatch(batchId: string): Promise<void> {
   if (batch.dari_potongan) throw new Error('Batch ini bukan batch cutting original');
   if (batch.stok_potongan_synced) return; // sudah pernah disinkronkan, skip
 
-  const pcsBerhasil = batch.pcs_saat_ini ?? batch.total_pcs;
-  if (pcsBerhasil <= 0 || batch.total_pcs <= 0) throw new Error('PCS batch tidak valid');
+  function hitungDetailBerhasil(source: BatchProduksi): DetailUkuran[] {
+    const pcsBerhasil = source.pcs_saat_ini ?? source.total_pcs;
+    if (pcsBerhasil <= 0 || source.total_pcs <= 0) throw new Error('PCS batch tidak valid');
 
-  const ratio = pcsBerhasil / batch.total_pcs;
-  let sisa = pcsBerhasil;
-  const detailBerhasil = batch.detail_ukuran
-    .map((du, idx) => {
-      const isLast = idx === batch.detail_ukuran.length - 1;
-      const jumlah = isLast ? sisa : Math.floor(du.jumlah_pcs * ratio);
-      sisa -= jumlah;
-      return { ukuran: du.ukuran, jumlah_pcs: Math.max(0, jumlah) };
-    })
-    .filter((du) => du.jumlah_pcs > 0);
+    const totalDetail = source.detail_ukuran.reduce((sum, du) => sum + du.jumlah_pcs, 0);
+    if (totalDetail === pcsBerhasil) {
+      return source.detail_ukuran.filter((du) => du.jumlah_pcs > 0);
+    }
 
-  await tambahStokPotongan(
-    batch.model_id,
-    batch.nama_model,
-    detailBerhasil,
-    { nama_warna: batch.nama_warna, kode_hex_warna: batch.kode_hex_warna },
-  );
+    const ratio = pcsBerhasil / source.total_pcs;
+    let sisa = pcsBerhasil;
+    return source.detail_ukuran
+      .map((du, idx) => {
+        const isLast = idx === source.detail_ukuran.length - 1;
+        const jumlah = isLast ? sisa : Math.floor(du.jumlah_pcs * ratio);
+        sisa -= jumlah;
+        return { ukuran: du.ukuran, jumlah_pcs: Math.max(0, jumlah) };
+      })
+      .filter((du) => du.jumlah_pcs > 0);
+  }
 
-  await updateDoc(doc(db, COL, batchId), { stok_potongan_synced: true, updatedAt: serverTimestamp() });
+  const detailBerhasil = hitungDetailBerhasil(batch);
+  const stokRefs = new Map<string, ReturnType<typeof doc>>();
+  for (const item of detailBerhasil) {
+    const q = batch.nama_warna
+      ? query(collection(db, 'stok_potongan'), where('model_id', '==', batch.model_id), where('ukuran', '==', item.ukuran), where('nama_warna', '==', batch.nama_warna))
+      : query(collection(db, 'stok_potongan'), where('model_id', '==', batch.model_id), where('ukuran', '==', item.ukuran));
+    const snap = await getDocs(q);
+    const ref = snap.empty
+      ? doc(db, 'stok_potongan', buildStokPotonganDocId(batch.model_id, item.ukuran, batch.nama_warna))
+      : snap.docs[0].ref;
+    stokRefs.set(item.ukuran, ref);
+  }
+
+  const batchRef = doc(db, COL, batchId);
+  await runTransaction(db, async (transaction) => {
+    const batchSnap = await transaction.get(batchRef);
+    if (!batchSnap.exists()) throw new Error('Batch tidak ditemukan');
+
+    const currentBatch = { id: batchSnap.id, ...batchSnap.data() } as BatchProduksi;
+    if (currentBatch.status !== 'CUTTING_DONE') throw new Error('Hanya batch Cutting Selesai yang bisa disinkronkan');
+    if (currentBatch.dari_potongan) throw new Error('Batch ini bukan batch cutting original');
+    if (currentBatch.stok_potongan_synced) return;
+
+    const currentDetailBerhasil = hitungDetailBerhasil(currentBatch);
+    const stokSnapshots = await Promise.all(
+      currentDetailBerhasil.map(async (item) => {
+        const stokRef = stokRefs.get(item.ukuran);
+        if (!stokRef) throw new Error('Data batch berubah, muat ulang lalu coba lagi');
+        const stokSnap = await transaction.get(stokRef);
+        return { item, stokRef, stokSnap };
+      })
+    );
+
+    for (const { item, stokRef, stokSnap } of stokSnapshots) {
+      if (!stokSnap.exists()) {
+        transaction.set(stokRef, {
+          model_id: currentBatch.model_id,
+          nama_model: currentBatch.nama_model,
+          ...(currentBatch.nama_warna ? { nama_warna: currentBatch.nama_warna } : {}),
+          ...(currentBatch.kode_hex_warna ? { kode_hex_warna: currentBatch.kode_hex_warna } : {}),
+          ukuran: item.ukuran,
+          stok_tersedia: item.jumlah_pcs,
+          total_masuk: item.jumlah_pcs,
+          total_terpakai: 0,
+          updatedAt: serverTimestamp(),
+        });
+        continue;
+      }
+
+      const stok = stokSnap.data() as { stok_tersedia: number; total_masuk: number };
+      transaction.update(stokRef, {
+        stok_tersedia: stok.stok_tersedia + item.jumlah_pcs,
+        total_masuk: stok.total_masuk + item.jumlah_pcs,
+        ...(currentBatch.nama_warna ? { nama_warna: currentBatch.nama_warna } : {}),
+        ...(currentBatch.kode_hex_warna ? { kode_hex_warna: currentBatch.kode_hex_warna } : {}),
+        updatedAt: serverTimestamp(),
+      });
+    }
+
+    transaction.update(batchRef, {
+      stok_potongan_synced: true,
+      updatedAt: serverTimestamp(),
+    });
+  });
 }
 
 // Selesaikan batch + tambah stok barang jadi dalam satu transaction

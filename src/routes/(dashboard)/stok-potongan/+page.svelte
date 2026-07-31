@@ -1,9 +1,8 @@
 <script lang="ts">
   import { afterNavigate } from "$app/navigation";
-  import { onMount } from "svelte";
   import { stokPotonganCache, batchCache } from "$lib/stores/data-cache.svelte";
   import { sinkronStokPotonganBatch } from "$lib/firebase/batch-produksi";
-  import { koreksiStokPotongan } from "$lib/firebase/stok-potongan";
+  import { hapusStokPotongan, koreksiStokPotongan } from "$lib/firebase/stok-potongan";
   import type { StokPotongan, UkuranBaju } from "$lib/types";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -13,6 +12,7 @@
   import PackageIcon from "@lucide/svelte/icons/package";
   import PackageXIcon from "@lucide/svelte/icons/package-x";
   import PencilIcon from "@lucide/svelte/icons/pencil";
+  import Trash2Icon from "@lucide/svelte/icons/trash-2";
 
   const URUTAN_UKURAN: UkuranBaju[] = ['XS', 'S', 'M', 'L', 'XL', 'XXL'];
 
@@ -21,6 +21,7 @@
   let loading = $state(true);
   let errorMsg = $state<string | null>(null);
   let searchQuery = $state("");
+  let refreshInProgress = false;
 
   // ── Group per model+warna ─────────────────────────────────────────
   type ModelGroup = {
@@ -116,14 +117,15 @@
     }
   }
 
-  onMount(async () => {
-    await load();
-    await autoSyncPending();
-  });
-
   afterNavigate(async () => {
-    await load();
-    await autoSyncPending();
+    if (refreshInProgress) return;
+    refreshInProgress = true;
+    try {
+      await load();
+      await autoSyncPending();
+    } finally {
+      refreshInProgress = false;
+    }
   });
 
   function stokColor(stok: number) {
@@ -139,6 +141,11 @@
   let koreksiSaving = $state(false);
   let koreksiError = $state<string | null>(null);
   let successMsg = $state<string | null>(null);
+
+  let hapusTarget = $state<StokPotongan | null>(null);
+  let hapusOpen = $state(false);
+  let hapusSaving = $state(false);
+  let hapusError = $state<string | null>(null);
 
   function bukaKoreksi(item: StokPotongan) {
     koreksiTarget = item;
@@ -162,6 +169,30 @@
       koreksiError = e?.message ?? 'Gagal menyimpan koreksi.';
     } finally {
       koreksiSaving = false;
+    }
+  }
+
+  function bukaHapus(item: StokPotongan) {
+    hapusTarget = item;
+    hapusError = null;
+    hapusOpen = true;
+  }
+
+  async function submitHapus() {
+    if (!hapusTarget) return;
+    hapusSaving = true;
+    hapusError = null;
+    try {
+      await hapusStokPotongan(hapusTarget.id);
+      stokPotonganCache.invalidate();
+      await load(true);
+      hapusOpen = false;
+      successMsg = `Stok potongan ${hapusTarget.nama_model} ${hapusTarget.ukuran} berhasil dihapus.`;
+      setTimeout(() => (successMsg = null), 3500);
+    } catch (e: any) {
+      hapusError = e?.message ?? 'Gagal menghapus stok potongan.';
+    } finally {
+      hapusSaving = false;
     }
   }
 </script>
@@ -275,16 +306,27 @@
             <!-- Ukuran pills -->
             <div class="flex flex-wrap gap-1.5">
               {#each group.items as item}
-                <button
-                  type="button"
-                  onclick={() => bukaKoreksi(item)}
-                  title="Koreksi stok {item.ukuran}"
-                  class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-medium transition hover:opacity-80 {stokColor(item.stok_tersedia)}"
-                >
-                  <span class="font-bold">{item.ukuran}</span>
-                  <span class="text-[11px] opacity-80">{item.stok_tersedia}</span>
-                  <PencilIcon class="h-2.5 w-2.5 opacity-50" />
-                </button>
+                <span class="inline-flex overflow-hidden rounded-md border text-xs font-medium {stokColor(item.stok_tersedia)}">
+                  <button
+                    type="button"
+                    onclick={() => bukaKoreksi(item)}
+                    title="Koreksi stok {item.ukuran}"
+                    class="inline-flex items-center gap-1 px-2 py-0.5 transition hover:bg-black/5"
+                  >
+                    <span class="font-bold">{item.ukuran}</span>
+                    <span class="text-[11px] opacity-80">{item.stok_tersedia}</span>
+                    <PencilIcon class="h-2.5 w-2.5 opacity-50" />
+                  </button>
+                  <button
+                    type="button"
+                    onclick={() => bukaHapus(item)}
+                    title="Hapus stok {item.ukuran}"
+                    aria-label="Hapus stok {item.nama_model} ukuran {item.ukuran}"
+                    class="border-l border-black/10 px-1.5 py-0.5 text-red-500 transition hover:bg-red-100 hover:text-red-700"
+                  >
+                    <Trash2Icon class="h-3 w-3" />
+                  </button>
+                </span>
               {/each}
             </div>
           </div>
@@ -361,6 +403,36 @@
         <Button variant="outline" onclick={() => (koreksiOpen = false)} disabled={koreksiSaving}>Batal</Button>
         <Button onclick={submitKoreksi} disabled={koreksiSaving || koreksiJumlah < 0}>
           {koreksiSaving ? 'Menyimpan...' : 'Simpan Koreksi'}
+        </Button>
+      </Dialog.Footer>
+    </Dialog.Content>
+  </Dialog.Root>
+{/if}
+
+<!-- Hapus Dialog -->
+{#if hapusTarget}
+  <Dialog.Root bind:open={hapusOpen}>
+    <Dialog.Content class="max-w-sm">
+      <Dialog.Header>
+        <Dialog.Title class="text-red-700">Hapus Stok Potongan?</Dialog.Title>
+        <Dialog.Description>
+          Stok potongan <span class="font-semibold text-gray-800">{hapusTarget.nama_model}</span>
+          ukuran <span class="font-semibold">{hapusTarget.ukuran}</span>
+          {#if hapusTarget.nama_warna}· {hapusTarget.nama_warna}{/if}
+          akan dihapus permanen dari daftar stok.
+        </Dialog.Description>
+      </Dialog.Header>
+      <div class="rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
+        Jumlah saat ini: <span class="font-semibold">{hapusTarget.stok_tersedia} pcs</span>.
+        Data total masuk dan terpakai untuk ukuran ini juga ikut hilang.
+      </div>
+      {#if hapusError}
+        <p class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{hapusError}</p>
+      {/if}
+      <Dialog.Footer class="gap-2">
+        <Button variant="outline" onclick={() => (hapusOpen = false)} disabled={hapusSaving}>Batal</Button>
+        <Button variant="destructive" onclick={submitHapus} disabled={hapusSaving}>
+          {hapusSaving ? 'Menghapus...' : 'Hapus'}
         </Button>
       </Dialog.Footer>
     </Dialog.Content>

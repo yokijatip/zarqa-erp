@@ -105,11 +105,8 @@
   let actionSaving = $state(false);
   let actionError = $state<string | null>(null);
   let actionWorkerUid = $state('');
-  // Per-ukuran PCS input — hanya reject yang diinput, berhasil = stok - reject (auto)
-  let actionUkuranReject   = $state<number[]>([]);
-  let actionUkuranBerhasil = $derived(
-    batch?.detail_ukuran.map((du, i) => Math.max(0, du.jumlah_pcs - (Number(actionUkuranReject[i]) || 0))) ?? []
-  );
+  // Per-ukuran PCS aktual yang berhasil di tahap ini.
+  let actionUkuranBerhasil = $state<number[]>([]);
 
   let canAction = $derived(
     !!$userRole && ACTION_ROLES.includes($userRole as UserRole) &&
@@ -240,8 +237,15 @@
   );
 
   // Totals derived dari per-ukuran
-  let actionTotalBerhasil = $derived(actionUkuranBerhasil.reduce((s, n) => s + n, 0));
-  let actionTotalReject   = $derived(actionUkuranReject.reduce((s, n) => s + (Number(n) || 0), 0));
+  let actionTotalBerhasil = $derived(actionUkuranBerhasil.reduce((s, n) => s + (Number(n) || 0), 0));
+  let actionTotalReject = $derived(
+    batch
+      ? batch.detail_ukuran.reduce(
+          (sum, du, i) => sum + Math.max(0, du.jumlah_pcs - (Number(actionUkuranBerhasil[i]) || 0)),
+          0,
+        )
+      : 0,
+  );
   let actionMaxPcs = $derived(batch ? (batch.pcs_saat_ini ?? batch.total_pcs) : 0);
 
   let actionFormValid = $derived.by(() => {
@@ -249,7 +253,9 @@
     if (currentAction.needsWorker && !actionWorkerUid) return false;
     if (currentAction.needsPcs) {
       if (actionTotalReject > actionMaxPcs) return false;
-      // Minimal harus ada 1 pcs berhasil
+      if (actionUkuranBerhasil.some((jumlah) => (Number(jumlah) || 0) < 0)) return false;
+      if (batch?.detail_ukuran.some((du, i) => (Number(actionUkuranBerhasil[i]) || 0) > du.jumlah_pcs)) return false;
+      // Minimal harus ada 1 pcs berjalan di batch
       if (actionTotalBerhasil <= 0 && !currentAction.isFinal) return false;
     }
     return true;
@@ -287,7 +293,7 @@
   function openActionDialog() {
     if (!batch) return;
     actionWorkerUid = '';
-    actionUkuranReject = batch.detail_ukuran.map(() => 0);
+    actionUkuranBerhasil = batch.detail_ukuran.map((du) => du.jumlah_pcs);
     actionError = null;
     actionOpen = true;
   }
@@ -305,7 +311,6 @@
       const pcsBerhasil = currentAction.needsPcs ? actionTotalBerhasil : (batch.pcs_saat_ini ?? batch.total_pcs);
       const pcsReject   = currentAction.needsPcs ? actionTotalReject   : 0;
 
-      // Buat detail_ukuran baru berisi hasil berhasil per ukuran
       const newDetailUkuran = currentAction.needsPcs
         ? batch.detail_ukuran.map((du, i) => ({
             ukuran: du.ukuran,
@@ -877,24 +882,22 @@
               </thead>
               <tbody>
                 {#each batch.detail_ukuran as du, i}
-                  {@const reject = Number(actionUkuranReject[i]) || 0}
                   {@const berhasil = actionUkuranBerhasil[i] ?? 0}
-                  {@const overLimit = reject > du.jumlah_pcs}
+                  {@const reject = Math.max(0, du.jumlah_pcs - (Number(berhasil) || 0))}
+                  {@const overLimit = berhasil > du.jumlah_pcs}
                   <tr class="border-t border-gray-100">
                     <td class="px-3 py-2 font-semibold text-gray-700">{du.ukuran}</td>
                     <td class="px-3 py-2 text-center text-gray-500">{du.jumlah_pcs}</td>
                     <td class="px-3 py-2 text-center">
-                      <span class="text-sm font-semibold text-gray-800">{berhasil}</span>
-                    </td>
-                    <td class="px-2 py-1.5">
                       <Input
                         type="number"
                         min="0"
                         max={du.jumlah_pcs}
                         class="h-8 text-center text-sm {overLimit ? 'border-red-400' : ''}"
-                        bind:value={actionUkuranReject[i]}
+                        bind:value={actionUkuranBerhasil[i]}
                       />
                     </td>
+                    <td class="px-3 py-2 text-center text-red-600">{reject}</td>
                   </tr>
                 {/each}
               </tbody>

@@ -128,6 +128,8 @@ export async function catatBarangKeluar(
   const ref = doc(collection(db, COL_KELUAR));
 
   await runTransaction(db, async (transaction) => {
+    const stokSnapshots = new Map<string, { ref: ReturnType<typeof doc>; data: StokBarangJadi }>();
+
     for (const item of data.detail_keluar) {
       const stokRef = stokRefs.get(item.ukuran);
       if (!stokRef) {
@@ -144,6 +146,16 @@ export async function catatBarangKeluar(
         throw new Error(`Stok ${data.nama_model} ukuran ${item.ukuran} tidak mencukupi`);
       }
 
+      stokSnapshots.set(item.ukuran, { ref: stokRef, data: stok });
+    }
+
+    for (const item of data.detail_keluar) {
+      const stokSnapshot = stokSnapshots.get(item.ukuran);
+      if (!stokSnapshot) {
+        throw new Error(`Stok ${data.nama_model} ukuran ${item.ukuran} tidak ditemukan`);
+      }
+
+      const { ref: stokRef, data: stok } = stokSnapshot;
       transaction.update(stokRef, {
         stok_tersedia: stok.stok_tersedia - item.jumlah_pcs,
         total_keluar: stok.total_keluar + item.jumlah_pcs,

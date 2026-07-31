@@ -47,7 +47,7 @@
   let quickWorkerUid = $state("");
   let quickUkuranReject   = $state<number[]>([]);
   let quickUkuranBerhasil = $derived(
-    quickBatch?.detail_ukuran.map((du, i) => Math.max(0, du.jumlah_pcs - (Number(quickUkuranReject[i]) || 0))) ?? []
+    quickBatch?.detail_ukuran.map((du) => du.jumlah_pcs) ?? []
   );
   let quickSaving = $state(false);
   let quickError = $state<string | null>(null);
@@ -94,9 +94,9 @@
       const pcsBerhasil = quickNeedsPcs ? quickTotalBerhasil : (quickBatch.pcs_saat_ini ?? quickBatch.total_pcs);
       const pcsReject   = quickNeedsPcs ? quickTotalReject   : 0;
       const newDetailUkuran = quickNeedsPcs
-        ? quickBatch.detail_ukuran.map((du, i) => ({
+        ? quickBatch.detail_ukuran.map((du) => ({
             ukuran: du.ukuran,
-            jumlah_pcs: Number(quickUkuranBerhasil[i]) || 0,
+            jumlah_pcs: du.jumlah_pcs,
           })).filter((du) => du.jumlah_pcs > 0)
         : undefined;
 
