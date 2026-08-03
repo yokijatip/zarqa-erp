@@ -66,6 +66,8 @@
   // ── Derived ────────────────────────────────────────────────────────
   let canCatat = $derived(
     $userRole === "admin_gudang" ||
+      $userRole === "admin_hr" ||
+      $userRole === "admin_keuangan" ||
       $userRole === "owner" ||
       $userRole === "developer",
   );

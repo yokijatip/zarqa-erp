@@ -29,10 +29,9 @@ Sistem mengenal beberapa `UserRole` yang tersimpan di Firestore collection `user
 | `kepala_jahit` | Tukang Jahit | JahitScreen — lihat & proses batch jahit |
 | `kepala_steam` | Tukang Steam | SteamScreen — lihat & proses batch steam |
 | `admin_gudang` | Admin Gudang | AdminScreen — lihat stok barang jadi + catat barang keluar |
-| `kepala_keluar` | Kepala Keluar | AdminScreen — sama seperti admin_gudang |
 
-> Role `developer`, `owner`, `hr` tidak perlu menggunakan aplikasi Android.
-> Jika user login dengan role di luar 5 di atas, tampilkan halaman "Akses tidak tersedia" dan opsi logout.
+> Role `developer`, `owner`, `admin_hr`, `admin_keuangan` tidak perlu menggunakan aplikasi Android.
+> Jika user login dengan role di luar 4 di atas, tampilkan halaman "Akses tidak tersedia" dan opsi logout.
 
 ---
 
@@ -91,7 +90,7 @@ WorkerActivity  (dibuka setelah login berhasil)
       ├── CuttingScreen        → hanya untuk kepala_cutting
       ├── JahitScreen          → hanya untuk kepala_jahit
       ├── SteamScreen          → hanya untuk kepala_steam
-      └── AdminScreen          → untuk admin_gudang & kepala_keluar
+      └── AdminScreen          → untuk admin_gudang
 ```
 
 > **WorkerActivity** tidak perlu bottom nav atau drawer karena setiap worker hanya memiliki **satu screen utama** sesuai role-nya. Navigasi ke screen dilakukan berdasarkan `role` yang dibaca dari Firestore setelah login.
@@ -415,7 +414,7 @@ Identik, dengan penyesuaian:
 
 ---
 
-### 9.6 AdminScreen (`admin_gudang` & `kepala_keluar`)
+### 9.6 AdminScreen (`admin_gudang`)
 
 **Tab / Sections (gunakan TabRow di Compose):**
 

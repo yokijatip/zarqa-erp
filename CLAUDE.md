@@ -74,7 +74,7 @@ Svelte stores for global reactive state:
 
 All types exported from `src/lib/types/index.ts`. Key types:
 
-- `UserRole`: `'admin_gudang' | 'kepala_cutting' | 'kepala_jahit' | 'kepala_steam' | 'kepala_keluar' | 'developer'`
+- `UserRole`: `'admin_gudang' | 'admin_hr' | 'admin_keuangan' | 'kepala_cutting' | 'kepala_jahit' | 'kepala_steam' | 'developer' | 'owner'`
 - `StatusBatch`: production stage enum (`PENDING_CUTTING` → `CUTTING_IN_PROGRESS` → ... → `COMPLETED`)
 - `StokKain`, `ModelBaju`, `BatchProduksi`, `BarangJadi`, `BarangKeluar`, `RiwayatProses`
 

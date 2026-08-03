@@ -16,7 +16,11 @@
   import NavSecondary from "./nav-secondary.svelte";
   import NavUser from "./nav-user.svelte";
   import * as Sidebar from "$lib/components/ui/sidebar/index.js";
-  import { currentUser, isKaryawanManager, userRole } from "$lib/stores/auth.store";
+  import {
+    currentUser,
+    isKaryawanManager,
+    userRole,
+  } from "$lib/stores/auth.store";
   import type { ComponentProps } from "svelte";
 
   let {
@@ -134,21 +138,38 @@
       .map((item) => {
         if (item.title !== "Produksi") return item;
         const role = $userRole;
-        const isAdminLike = role === "admin_gudang" || role === "owner" || role === "developer";
+        const isAdminLike = [
+          "admin_gudang",
+          "admin_hr",
+          "admin_keuangan",
+          "owner",
+          "developer",
+        ].includes(role ?? "");
         const subitems = [
-          ...(isAdminLike ? [{ title: "Monitor Produksi", url: "/monitor-produksi" }] : []),
-          ...(role === "kepala_cutting" || isAdminLike ? [{ title: "Produksi Cutting", url: "/produksi/cutting" }] : []),
-          ...(role === "kepala_jahit"   || isAdminLike ? [{ title: "Produksi Jahit",   url: "/produksi/jahit"   }] : []),
-          ...(role === "kepala_steam"   || isAdminLike ? [{ title: "Produksi Steam",   url: "/produksi/steam"   }] : []),
+          ...(isAdminLike
+            ? [{ title: "Monitor Produksi", url: "/monitor-produksi" }]
+            : []),
+          ...(role === "kepala_cutting" || isAdminLike
+            ? [{ title: "Produksi Cutting", url: "/produksi/cutting" }]
+            : []),
+          ...(role === "kepala_jahit" || isAdminLike
+            ? [{ title: "Produksi Jahit", url: "/produksi/jahit" }]
+            : []),
+          ...(role === "kepala_steam" || isAdminLike
+            ? [{ title: "Produksi Steam", url: "/produksi/steam" }]
+            : []),
         ];
         // Arahkan top-level klik ke halaman relevan per role
         const topUrl =
-          role === "kepala_cutting" ? "/produksi/cutting" :
-          role === "kepala_jahit"   ? "/produksi/jahit"   :
-          role === "kepala_steam"   ? "/produksi/steam"   :
-          "/monitor-produksi";
+          role === "kepala_cutting"
+            ? "/produksi/cutting"
+            : role === "kepala_jahit"
+              ? "/produksi/jahit"
+              : role === "kepala_steam"
+                ? "/produksi/steam"
+                : "/monitor-produksi";
         return { ...item, url: topUrl, items: subitems };
-      })
+      }),
   );
 </script>
 

@@ -5,6 +5,8 @@ import type { Timestamp } from 'firebase/firestore';
 
 export type UserRole =
   | 'admin_gudang'
+  | 'admin_hr'
+  | 'admin_keuangan'
   | 'kepala_cutting'
   | 'kepala_jahit'
   | 'kepala_steam'

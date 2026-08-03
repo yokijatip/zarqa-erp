@@ -65,7 +65,7 @@ users/{uid}
   name        : String
   email       : String
   role        : String   -- "kepala_cutting" | "kepala_jahit" | "kepala_steam"
-                                | "admin_gudang" | "kepala_keluar"
+                                | "admin_gudang"
   tipe_akun   : String   -- "permanent" | "temporary"
 
 batch_produksi/{batchId}
@@ -197,7 +197,7 @@ fun WorkerRouter(role: String, userProfile: UserProfile) {
         "kepala_cutting"             -> CuttingScreen(userProfile)
         "kepala_jahit"               -> JahitScreen(userProfile)
         "kepala_steam"               -> SteamScreen(userProfile)
-        "admin_gudang", "kepala_keluar" -> AdminScreen(userProfile)
+        "admin_gudang" -> AdminScreen(userProfile)
         else -> UnauthorizedScreen()
     }
 }

@@ -15,7 +15,7 @@ import { auth, db, storage } from './config';
 import type { UserProfile } from '$lib/types';
 
 // Role yang diizinkan login ke web admin
-const WEB_ALLOWED_ROLES = ['admin_gudang', 'owner', 'developer'];
+const WEB_ALLOWED_ROLES = ['admin_gudang', 'admin_hr', 'admin_keuangan', 'owner', 'developer'];
 
 // Login dengan email & password
 export async function login(email: string, password: string): Promise<UserProfile> {

@@ -17,10 +17,14 @@ export const isLoggedIn = derived(currentUser, ($user) => $user !== null);
 // Derived: role user saat ini
 export const userRole = derived(currentUser, ($user): UserRole | null => $user?.role ?? null);
 
-// Derived: apakah user adalah admin gudang
+// Derived: apakah user adalah admin web
 export const isAdmin = derived(
   currentUser,
-  ($user) => $user?.role === 'admin_gudang' || isSuperUser($user?.role)
+  ($user) =>
+    $user?.role === 'admin_gudang' ||
+    $user?.role === 'admin_hr' ||
+    $user?.role === 'admin_keuangan' ||
+    isSuperUser($user?.role)
 );
 
 // Derived: akses modul Gudang (admin_gudang / owner / developer)

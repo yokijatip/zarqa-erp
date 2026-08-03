@@ -13,6 +13,8 @@ const COL = 'users';
 // Label readable per role (untuk ditampilkan di tabel)
 export const ROLE_LABEL: Record<UserRole, string> = {
   admin_gudang: 'Admin Gudang',
+  admin_hr: 'Admin HR',
+  admin_keuangan: 'Admin Keuangan',
   kepala_cutting: 'Kepala Cutting',
   kepala_jahit: 'Kepala Jahit',
   kepala_steam: 'Kepala Steam',
@@ -26,6 +28,8 @@ export const ROLE_KARYAWAN: UserRole[] = [
   'kepala_jahit',
   'kepala_steam',
   'admin_gudang',
+  'admin_hr',
+  'admin_keuangan',
   'owner',
 ];
 
