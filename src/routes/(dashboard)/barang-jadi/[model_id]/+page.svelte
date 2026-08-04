@@ -11,7 +11,13 @@
     getRiwayatBarangJadiByModel,
   } from "$lib/firebase/barang-jadi";
   import { currentUser } from "$lib/stores/auth.store";
-  import { UKURAN_ORDER, type StokBarangJadi, type UkuranBaju, type BarangKeluar, type RiwayatBarangJadi } from "$lib/types";
+  import {
+    UKURAN_ORDER,
+    type StokBarangJadi,
+    type UkuranBaju,
+    type BarangKeluar,
+    type RiwayatBarangJadi,
+  } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -48,15 +54,21 @@
     ),
   );
 
-  let namaModel    = $derived(stokList[0]?.nama_model ?? "");
-  let namaWarna    = $derived(stokList[0]?.nama_warna);
+  let namaModel = $derived(stokList[0]?.nama_model ?? "");
+  let namaWarna = $derived(stokList[0]?.nama_warna);
   let kodeHexWarna = $derived(stokList[0]?.kode_hex_warna);
-  let totalTersedia = $derived(stokList.reduce((s, i) => s + i.stok_tersedia, 0));
-  let totalMasuk    = $derived(stokList.reduce((s, i) => s + i.total_masuk, 0));
-  let totalKeluar   = $derived(stokList.reduce((s, i) => s + i.total_keluar, 0));
-  let jumlahKritis  = $derived(stokList.filter((i) => getStatus(i) === "kritis").length);
+  let totalTersedia = $derived(
+    stokList.reduce((s, i) => s + i.stok_tersedia, 0),
+  );
+  let totalMasuk = $derived(stokList.reduce((s, i) => s + i.total_masuk, 0));
+  let totalKeluar = $derived(stokList.reduce((s, i) => s + i.total_keluar, 0));
+  let jumlahKritis = $derived(
+    stokList.filter((i) => getStatus(i) === "kritis").length,
+  );
 
-  function getStatus(item: StokBarangJadi): "kosong" | "kritis" | "low" | "aman" {
+  function getStatus(
+    item: StokBarangJadi,
+  ): "kosong" | "kritis" | "low" | "aman" {
     if (item.stok_tersedia === 0) return "kosong";
     if (item.stok_tersedia <= KRITIS_THRESHOLD) return "kritis";
     if (item.stok_tersedia <= LOW_THRESHOLD) return "low";
@@ -66,37 +78,53 @@
   const STATUS_BADGE: Record<string, string> = {
     kosong: "bg-gray-100 text-gray-500",
     kritis: "bg-red-100 text-red-600",
-    low:    "bg-amber-100 text-amber-600",
-    aman:   "bg-teal-100 text-teal-700",
+    low: "bg-amber-100 text-amber-600",
+    aman: "bg-teal-100 text-teal-700",
   };
   const STATUS_LABEL: Record<string, string> = {
-    kosong: "Habis", kritis: "Kritis", low: "Menipis", aman: "Aman",
+    kosong: "Habis",
+    kritis: "Kritis",
+    low: "Menipis",
+    aman: "Aman",
   };
   const STATUS_NUM: Record<string, string> = {
-    kosong: "text-gray-400", kritis: "text-red-600", low: "text-amber-600", aman: "text-gray-900",
+    kosong: "text-gray-400",
+    kritis: "text-red-600",
+    low: "text-amber-600",
+    aman: "text-gray-900",
   };
 
   const DIALOG_TITLE: Record<DialogMode, string> = {
     restock: "Restock Barang",
     kurangi: "Kurangi Stok",
-    edit:    "Set Stok Manual",
+    edit: "Set Stok Manual",
   };
   const DIALOG_DESC: Record<DialogMode, string> = {
     restock: "Tambah stok dari luar produksi (migrasi, restock manual).",
     kurangi: "Kurangi stok karena loss, kerusakan, atau koreksi.",
-    edit:    "Set stok ke nilai absolut untuk koreksi fisik.",
+    edit: "Set stok ke nilai absolut untuk koreksi fisik.",
   };
 
   function formatDate(ts: any): string {
     if (!ts) return "—";
     const d = ts.toDate ? ts.toDate() : new Date(ts);
-    return d.toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" });
+    return d.toLocaleDateString("id-ID", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    });
   }
 
   function formatDateTime(ts: any): string {
     if (!ts) return "—";
     const d = ts.toDate ? ts.toDate() : new Date(ts);
-    return d.toLocaleString("id-ID", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleString("id-ID", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
   }
 
   function showSuccess(msg: string) {
@@ -134,7 +162,7 @@
     if (!selectedItem || fJumlah < 0 || saving) return;
     saving = true;
     try {
-      const uid = $currentUser?.uid ?? '';
+      const uid = $currentUser?.uid ?? "";
       const nama = $currentUser?.name || $currentUser?.email || uid;
 
       if (dialogMode === "restock") {
@@ -144,17 +172,31 @@
           selectedItem.nama_model,
           [{ ukuran: selectedItem.ukuran, jumlah_pcs: fJumlah }],
           undefined,
-          { uid, nama, tipe: 'masuk_restock', catatan: 'Restock manual' },
+          { uid, nama, tipe: "masuk_restock", catatan: "Restock manual" },
         );
-        showSuccess(`+${fJumlah} pcs berhasil ditambahkan ke stok ukuran ${selectedItem.ukuran}.`);
+        showSuccess(
+          `+${fJumlah} pcs berhasil ditambahkan ke stok ukuran ${selectedItem.ukuran}.`,
+        );
       } else if (dialogMode === "kurangi") {
         if (fJumlah <= 0) throw new Error("Jumlah harus lebih dari 0");
-        await kurangiStokManual(selectedItem.id, fJumlah, { uid, nama, tipe: 'kurangi_manual' });
-        showSuccess(`-${fJumlah} pcs berhasil dikurangi dari stok ukuran ${selectedItem.ukuran}.`);
+        await kurangiStokManual(selectedItem.id, fJumlah, {
+          uid,
+          nama,
+          tipe: "kurangi_manual",
+        });
+        showSuccess(
+          `-${fJumlah} pcs berhasil dikurangi dari stok ukuran ${selectedItem.ukuran}.`,
+        );
       } else {
         if (fJumlah < 0) throw new Error("Stok tidak boleh negatif");
-        await setStokManual(selectedItem.id, fJumlah, { uid, nama, tipe: 'set_manual' });
-        showSuccess(`Stok ukuran ${selectedItem.ukuran} diset ke ${fJumlah} pcs.`);
+        await setStokManual(selectedItem.id, fJumlah, {
+          uid,
+          nama,
+          tipe: "set_manual",
+        });
+        showSuccess(
+          `Stok ukuran ${selectedItem.ukuran} diset ke ${fJumlah} pcs.`,
+        );
       }
       openDialog = false;
       await load();
@@ -168,7 +210,8 @@
   let formValid = $derived.by(() => {
     if (!selectedItem) return false;
     if (dialogMode === "restock") return fJumlah > 0;
-    if (dialogMode === "kurangi") return fJumlah > 0 && fJumlah <= selectedItem.stok_tersedia;
+    if (dialogMode === "kurangi")
+      return fJumlah > 0 && fJumlah <= selectedItem.stok_tersedia;
     return fJumlah >= 0;
   });
 
@@ -177,17 +220,43 @@
 
 <!-- ── Toasts ────────────────────────────────────────────────────── -->
 {#if successMsg}
-  <div class="fixed right-5 top-5 z-[9999] flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 shadow-lg">
-    <svg class="h-4 w-4 shrink-0 text-green-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-      <path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+  <div
+    class="fixed right-5 top-5 z-[9999] flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 shadow-lg"
+  >
+    <svg
+      class="h-4 w-4 shrink-0 text-green-600"
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke-width="2"
+      stroke="currentColor"
+    >
+      <path
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        d="m4.5 12.75 6 6 9-13.5"
+      />
     </svg>
     <p class="text-sm text-green-800">{successMsg}</p>
   </div>
 {/if}
 {#if errorMsg}
-  <div class="fixed right-5 top-5 z-[9999] flex max-w-sm items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 shadow-lg">
-    <svg class="mt-0.5 h-4 w-4 shrink-0 text-red-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-      <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+  <div
+    class="fixed right-5 top-5 z-[9999] flex max-w-sm items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 shadow-lg"
+  >
+    <svg
+      class="mt-0.5 h-4 w-4 shrink-0 text-red-500"
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke-width="2"
+      stroke="currentColor"
+    >
+      <path
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"
+      />
     </svg>
     <p class="text-sm text-red-800">{errorMsg}</p>
   </div>
@@ -201,8 +270,19 @@
     onclick={() => goto("/barang-jadi")}
     class="mb-3 -ml-2 gap-1.5 text-gray-400 hover:text-gray-700"
   >
-    <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-      <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
+    <svg
+      class="h-4 w-4"
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke-width="2"
+      stroke="currentColor"
+    >
+      <path
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18"
+      />
     </svg>
     Barang Jadi
   </Button>
@@ -213,17 +293,26 @@
     <div class="flex flex-wrap items-center justify-between gap-3">
       <div>
         <div class="flex flex-wrap items-center gap-2">
-          <h1 class="text-xl font-semibold text-gray-900">{namaModel || "Model tidak ditemukan"}</h1>
+          <h1 class="text-xl font-semibold text-gray-900">
+            {namaModel || "Model tidak ditemukan"}
+          </h1>
           {#if namaWarna}
-            <span class="inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-2.5 py-0.5 text-xs font-medium text-gray-700 shadow-sm">
+            <span
+              class="inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-2.5 py-0.5 text-xs font-medium text-gray-700 shadow-sm"
+            >
               {#if kodeHexWarna}
-                <span class="inline-block h-3 w-3 shrink-0 rounded-full" style="background-color: {kodeHexWarna}"></span>
+                <span
+                  class="inline-block h-3 w-3 shrink-0 rounded-full"
+                  style="background-color: {kodeHexWarna}"
+                ></span>
               {/if}
               {namaWarna}
             </span>
           {/if}
           {#if jumlahKritis > 0}
-            <span class="rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-600">
+            <span
+              class="rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-600"
+            >
               {jumlahKritis} ukuran kritis
             </span>
           {/if}
@@ -264,19 +353,34 @@
       {/each}
     </div>
   </div>
-
 {:else if stokList.length === 0}
   <div class="flex flex-col items-center gap-3 py-24 text-center">
-    <div class="flex h-14 w-14 items-center justify-center rounded-full bg-gray-100">
-      <svg class="h-7 w-7 text-gray-300" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-        <path stroke-linecap="round" stroke-linejoin="round" d="m20.25 7.5-.625 10.632a2.25 2.25 0 0 1-2.247 2.118H6.622a2.25 2.25 0 0 1-2.247-2.118L3.75 7.5m8.25 3v6.75m0 0-3-3m3 3 3-3M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125Z" />
+    <div
+      class="flex h-14 w-14 items-center justify-center rounded-full bg-gray-100"
+    >
+      <svg
+        class="h-7 w-7 text-gray-300"
+        xmlns="http://www.w3.org/2000/svg"
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke-width="1.5"
+        stroke="currentColor"
+      >
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          d="m20.25 7.5-.625 10.632a2.25 2.25 0 0 1-2.247 2.118H6.622a2.25 2.25 0 0 1-2.247-2.118L3.75 7.5m8.25 3v6.75m0 0-3-3m3 3 3-3M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125Z"
+        />
       </svg>
     </div>
     <p class="font-medium text-gray-600">Belum ada stok untuk model ini</p>
-    <p class="text-sm text-gray-400">Stok akan muncul setelah batch produksi selesai atau diisi manual.</p>
-    <Button variant="outline" onclick={() => goto("/barang-jadi")}>← Kembali</Button>
+    <p class="text-sm text-gray-400">
+      Stok akan muncul setelah batch produksi selesai atau diisi manual.
+    </p>
+    <Button variant="outline" onclick={() => goto("/barang-jadi")}
+      >← Kembali</Button
+    >
   </div>
-
 {:else}
   <!-- ── Summary Stats ──────────────────────────────────────────────── -->
   <div class="mb-5 grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -309,25 +413,42 @@
   </div>
 
   <!-- ── Ukuran Rows ───────────────────────────────────────────────── -->
-  <div class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
+  <div
+    class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm"
+  >
     {#each sorted as item, i}
       {@const status = getStatus(item)}
-      {@const pct = item.total_masuk > 0 ? Math.round((item.stok_tersedia / item.total_masuk) * 100) : 0}
+      {@const pct =
+        item.total_masuk > 0
+          ? Math.round((item.stok_tersedia / item.total_masuk) * 100)
+          : 0}
 
-      <div class="flex items-center gap-4 px-5 py-4 {i > 0 ? 'border-t border-gray-100' : ''}">
+      <div
+        class="flex items-center gap-4 px-5 py-4 {i > 0
+          ? 'border-t border-gray-100'
+          : ''}"
+      >
         <!-- Ukuran badge -->
-        <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-100 text-sm font-bold text-gray-700">
+        <span
+          class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-100 text-sm font-bold text-gray-700"
+        >
           {item.ukuran}
         </span>
 
         <!-- Status badge -->
-        <span class="w-16 shrink-0 rounded-full px-2 py-0.5 text-center text-[11px] font-semibold {STATUS_BADGE[status]}">
+        <span
+          class="w-16 shrink-0 rounded-full px-2 py-0.5 text-center text-[11px] font-semibold {STATUS_BADGE[
+            status
+          ]}"
+        >
           {STATUS_LABEL[status]}
         </span>
 
         <!-- Stok tersedia -->
         <div class="w-24 shrink-0">
-          <p class="text-xl font-bold {STATUS_NUM[status]}">{item.stok_tersedia}</p>
+          <p class="text-xl font-bold {STATUS_NUM[status]}">
+            {item.stok_tersedia}
+          </p>
           <p class="text-[10px] text-gray-400">pcs tersedia</p>
         </div>
 
@@ -335,7 +456,10 @@
         <div class="flex-1">
           {#if item.total_masuk > 0}
             <div class="h-1.5 w-full rounded-full bg-gray-100">
-              <div class="h-1.5 rounded-full bg-gray-300 transition-all" style="width: {pct}%"></div>
+              <div
+                class="h-1.5 rounded-full bg-gray-300 transition-all"
+                style="width: {pct}%"
+              ></div>
             </div>
             <p class="mt-0.5 text-[10px] text-gray-400">{pct}% sisa</p>
           {/if}
@@ -343,7 +467,9 @@
 
         <!-- Update date -->
         {#if item.updatedAt}
-          <p class="w-24 shrink-0 text-right text-[11px] text-gray-300">{formatDate(item.updatedAt)}</p>
+          <p class="w-24 shrink-0 text-right text-[11px] text-gray-300">
+            {formatDate(item.updatedAt)}
+          </p>
         {/if}
 
         <!-- Actions -->
@@ -375,26 +501,32 @@
     <h2 class="mb-3 text-sm font-semibold text-gray-700">Riwayat Masuk</h2>
 
     {#if riwayatMasuk.length === 0}
-      <div class="flex items-center gap-3 rounded-xl border border-gray-100 bg-white px-5 py-6 text-sm text-gray-400 shadow-sm">
+      <div
+        class="flex items-center gap-3 rounded-xl border border-gray-100 bg-white px-5 py-6 text-sm text-gray-400 shadow-sm"
+      >
         Belum ada riwayat masuk untuk model ini
       </div>
     {:else}
-      {@const TIPE_LABEL: Record<string, string> = {
-        masuk_produksi: 'Dari Produksi',
-        masuk_restock: 'Restock',
-        masuk_stok_awal: 'Stok Awal',
-        kurangi_manual: 'Kurangi Manual',
-        set_manual: 'Set Manual',
-      }}
-      {@const TIPE_STYLE: Record<string, string> = {
-        masuk_produksi: 'bg-teal-100 text-teal-700',
-        masuk_restock: 'bg-blue-100 text-blue-700',
-        masuk_stok_awal: 'bg-purple-100 text-purple-700',
-        kurangi_manual: 'bg-red-100 text-red-600',
-        set_manual: 'bg-gray-100 text-gray-600',
-      }}
-      <div class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
-        <div class="grid grid-cols-[auto_1fr_auto_auto_auto] gap-4 border-b border-gray-100 bg-gray-50 px-5 py-2.5 text-[11px] font-medium uppercase tracking-wider text-gray-400">
+      {@const TIPE_LABEL = {
+        masuk_produksi: "Dari Produksi",
+        masuk_restock: "Restock",
+        masuk_stok_awal: "Stok Awal",
+        kurangi_manual: "Kurangi Manual",
+        set_manual: "Set Manual",
+      } as Record<string, string>}
+      {@const TIPE_STYLE = {
+        masuk_produksi: "bg-teal-100 text-teal-700",
+        masuk_restock: "bg-blue-100 text-blue-700",
+        masuk_stok_awal: "bg-purple-100 text-purple-700",
+        kurangi_manual: "bg-red-100 text-red-600",
+        set_manual: "bg-gray-100 text-gray-600",
+      } as Record<string, string>}
+      <div
+        class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm"
+      >
+        <div
+          class="grid grid-cols-[auto_1fr_auto_auto_auto] gap-4 border-b border-gray-100 bg-gray-50 px-5 py-2.5 text-[11px] font-medium uppercase tracking-wider text-gray-400"
+        >
           <span>Tipe</span>
           <span>Oleh</span>
           <span class="text-right">Ukuran</span>
@@ -402,30 +534,53 @@
           <span class="w-28 text-right">Tanggal</span>
         </div>
         {#each riwayatMasuk as r, i}
-          <div class="grid grid-cols-[auto_1fr_auto_auto_auto] items-center gap-4 px-5 py-3 text-sm {i > 0 ? 'border-t border-gray-100' : ''}">
-            <span class="rounded-full px-2.5 py-0.5 text-[11px] font-semibold {TIPE_STYLE[r.tipe] ?? 'bg-gray-100 text-gray-600'}">
+          <div
+            class="grid grid-cols-[auto_1fr_auto_auto_auto] items-center gap-4 px-5 py-3 text-sm {i >
+            0
+              ? 'border-t border-gray-100'
+              : ''}"
+          >
+            <span
+              class="rounded-full px-2.5 py-0.5 text-[11px] font-semibold {TIPE_STYLE[
+                r.tipe
+              ] ?? 'bg-gray-100 text-gray-600'}"
+            >
               {TIPE_LABEL[r.tipe] ?? r.tipe}
             </span>
             <div class="min-w-0">
-              <p class="truncate text-sm font-medium text-gray-800">{r.dicatat_oleh_nama ?? '—'}</p>
+              <p class="truncate text-sm font-medium text-gray-800">
+                {r.dicatat_oleh_nama ?? "—"}
+              </p>
               {#if r.catatan}
                 <p class="truncate text-xs text-gray-400">{r.catatan}</p>
               {/if}
             </div>
-            <span class="rounded-md border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] font-semibold text-gray-700">
+            <span
+              class="rounded-md border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] font-semibold text-gray-700"
+            >
               {r.ukuran}
             </span>
             <div class="w-20 text-right">
-              <span class="text-sm font-semibold {r.tipe.startsWith('masuk') ? 'text-teal-700' : 'text-red-600'}">
-                {r.tipe.startsWith('masuk') ? '+' : '−'}{r.jumlah} pcs
+              <span
+                class="text-sm font-semibold {r.tipe.startsWith('masuk')
+                  ? 'text-teal-700'
+                  : 'text-red-600'}"
+              >
+                {r.tipe.startsWith("masuk") ? "+" : "−"}{r.jumlah} pcs
               </span>
-              <p class="text-[10px] text-gray-400">{r.stok_sebelum} → {r.stok_sesudah}</p>
+              <p class="text-[10px] text-gray-400">
+                {r.stok_sebelum} → {r.stok_sesudah}
+              </p>
             </div>
-            <p class="w-28 text-right text-xs text-gray-400">{formatDateTime(r.timestamp)}</p>
+            <p class="w-28 text-right text-xs text-gray-400">
+              {formatDateTime(r.timestamp)}
+            </p>
           </div>
         {/each}
       </div>
-      <p class="mt-2 text-right text-[11px] text-gray-300">Menampilkan {riwayatMasuk.length} catatan terbaru</p>
+      <p class="mt-2 text-right text-[11px] text-gray-300">
+        Menampilkan {riwayatMasuk.length} catatan terbaru
+      </p>
     {/if}
   </div>
 
@@ -434,23 +589,45 @@
     <h2 class="mb-3 text-sm font-semibold text-gray-700">Riwayat Keluar</h2>
 
     {#if riwayatKeluar.length === 0}
-      <div class="flex items-center gap-3 rounded-xl border border-gray-100 bg-white px-5 py-6 text-sm text-gray-400 shadow-sm">
-        <svg class="h-4 w-4 shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 18.75a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h6m-9 0H3.375a1.125 1.125 0 0 1-1.125-1.125V14.25m17.25 4.5a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h1.125c.621 0 1.129-.504 1.09-1.124a17.902 17.902 0 0 0-3.213-9.193 2.056 2.056 0 0 0-1.58-.86H14.25M16.5 18.75h-2.25m0-11.177v-.958c0-.568-.422-1.048-.987-1.106a48.554 48.554 0 0 0-10.026 0 1.106 1.106 0 0 0-.987 1.106v7.635m12-6.677v6.677m0 4.5v-4.5m0 0h-12" />
+      <div
+        class="flex items-center gap-3 rounded-xl border border-gray-100 bg-white px-5 py-6 text-sm text-gray-400 shadow-sm"
+      >
+        <svg
+          class="h-4 w-4 shrink-0"
+          xmlns="http://www.w3.org/2000/svg"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke-width="1.5"
+          stroke="currentColor"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M8.25 18.75a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h6m-9 0H3.375a1.125 1.125 0 0 1-1.125-1.125V14.25m17.25 4.5a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h1.125c.621 0 1.129-.504 1.09-1.124a17.902 17.902 0 0 0-3.213-9.193 2.056 2.056 0 0 0-1.58-.86H14.25M16.5 18.75h-2.25m0-11.177v-.958c0-.568-.422-1.048-.987-1.106a48.554 48.554 0 0 0-10.026 0 1.106 1.106 0 0 0-.987 1.106v7.635m12-6.677v6.677m0 4.5v-4.5m0 0h-12"
+          />
         </svg>
         Belum ada catatan pengiriman untuk model ini
       </div>
     {:else}
-      <div class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
+      <div
+        class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm"
+      >
         <!-- Header tabel -->
-        <div class="grid grid-cols-[1fr_auto_auto_auto] gap-4 border-b border-gray-100 bg-gray-50 px-5 py-2.5 text-[11px] font-medium uppercase tracking-wider text-gray-400">
+        <div
+          class="grid grid-cols-[1fr_auto_auto_auto] gap-4 border-b border-gray-100 bg-gray-50 px-5 py-2.5 text-[11px] font-medium uppercase tracking-wider text-gray-400"
+        >
           <span>Tujuan</span>
           <span class="text-right">Ukuran & Jumlah</span>
           <span class="w-16 text-right">Total</span>
           <span class="w-28 text-right">Tanggal</span>
         </div>
         {#each riwayatKeluar as r, i}
-          <div class="grid grid-cols-[1fr_auto_auto_auto] items-start gap-4 px-5 py-3.5 text-sm {i > 0 ? 'border-t border-gray-100' : ''}">
+          <div
+            class="grid grid-cols-[1fr_auto_auto_auto] items-start gap-4 px-5 py-3.5 text-sm {i >
+            0
+              ? 'border-t border-gray-100'
+              : ''}"
+          >
             <div>
               <p class="font-medium text-gray-800">{r.tujuan}</p>
               {#if r.keterangan}
@@ -459,17 +636,28 @@
             </div>
             <div class="flex flex-wrap justify-end gap-1.5">
               {#each r.detail_keluar as d}
-                <span class="rounded-md border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] text-gray-600">
-                  {d.ukuran} <span class="font-semibold text-gray-800">×{d.jumlah_pcs}</span>
+                <span
+                  class="rounded-md border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] text-gray-600"
+                >
+                  {d.ukuran}
+                  <span class="font-semibold text-gray-800"
+                    >×{d.jumlah_pcs}</span
+                  >
                 </span>
               {/each}
             </div>
-            <p class="w-16 text-right font-semibold text-gray-800">{r.total_pcs} pcs</p>
-            <p class="w-28 text-right text-xs text-gray-400">{formatDateTime(r.tanggal_keluar)}</p>
+            <p class="w-16 text-right font-semibold text-gray-800">
+              {r.total_pcs} pcs
+            </p>
+            <p class="w-28 text-right text-xs text-gray-400">
+              {formatDateTime(r.tanggal_keluar)}
+            </p>
           </div>
         {/each}
       </div>
-      <p class="mt-2 text-right text-[11px] text-gray-300">Menampilkan {riwayatKeluar.length} catatan terbaru</p>
+      <p class="mt-2 text-right text-[11px] text-gray-300">
+        Menampilkan {riwayatKeluar.length} catatan terbaru
+      </p>
     {/if}
   </div>
 {/if}
@@ -478,7 +666,8 @@
 <Dialog.Root bind:open={openDialog}>
   <Dialog.Content class="max-w-sm">
     <Dialog.Header>
-      <Dialog.Title>{selectedItem ? DIALOG_TITLE[dialogMode] : ""}</Dialog.Title>
+      <Dialog.Title>{selectedItem ? DIALOG_TITLE[dialogMode] : ""}</Dialog.Title
+      >
       <Dialog.Description>
         {selectedItem ? DIALOG_DESC[dialogMode] : ""}
       </Dialog.Description>
@@ -486,32 +675,49 @@
 
     {#if selectedItem}
       <div class="space-y-4">
-        <div class="flex items-center gap-3 rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
-          <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-200 text-sm font-bold text-gray-700">
+        <div
+          class="flex items-center gap-3 rounded-xl border border-gray-100 bg-gray-50 px-4 py-3"
+        >
+          <span
+            class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-200 text-sm font-bold text-gray-700"
+          >
             {selectedItem.ukuran}
           </span>
           <div>
-            <p class="text-sm font-semibold text-gray-800">{selectedItem.nama_model}</p>
-            <p class="text-xs text-gray-500">Stok saat ini: <strong>{selectedItem.stok_tersedia} pcs</strong></p>
+            <p class="text-sm font-semibold text-gray-800">
+              {selectedItem.nama_model}
+            </p>
+            <p class="text-xs text-gray-500">
+              Stok saat ini: <strong>{selectedItem.stok_tersedia} pcs</strong>
+            </p>
           </div>
         </div>
 
         {#if fJumlah > 0 || dialogMode === "edit"}
           {@const preview =
-            dialogMode === "restock" ? selectedItem.stok_tersedia + fJumlah :
-            dialogMode === "kurangi" ? selectedItem.stok_tersedia - fJumlah :
-            fJumlah}
-          <div class="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-xs text-blue-700">
+            dialogMode === "restock"
+              ? selectedItem.stok_tersedia + fJumlah
+              : dialogMode === "kurangi"
+                ? selectedItem.stok_tersedia - fJumlah
+                : fJumlah}
+          <div
+            class="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-xs text-blue-700"
+          >
             Stok setelah disimpan:
             <span class="ml-1 font-bold text-blue-900">{preview} pcs</span>
             {#if dialogMode === "kurangi" && preview < 0}
-              <span class="ml-2 font-semibold text-red-600">⚠ melebihi stok!</span>
+              <span class="ml-2 font-semibold text-red-600"
+                >⚠ melebihi stok!</span
+              >
             {/if}
           </div>
         {/if}
 
         <div>
-          <label class="mb-1.5 block text-sm font-medium text-gray-700" for="dialog-jumlah">
+          <label
+            class="mb-1.5 block text-sm font-medium text-gray-700"
+            for="dialog-jumlah"
+          >
             {dialogMode === "edit" ? "Stok Baru (pcs)" : "Jumlah (pcs)"}
             <span class="text-red-500">*</span>
           </label>
@@ -519,25 +725,43 @@
             id="dialog-jumlah"
             type="number"
             min={dialogMode === "edit" ? 0 : 1}
-            max={dialogMode === "kurangi" ? selectedItem.stok_tersedia : undefined}
+            max={dialogMode === "kurangi"
+              ? selectedItem.stok_tersedia
+              : undefined}
             bind:value={fJumlah}
           />
           {#if dialogMode === "kurangi"}
-            <p class="mt-1 text-xs text-gray-400">Maks: {selectedItem.stok_tersedia} pcs</p>
+            <p class="mt-1 text-xs text-gray-400">
+              Maks: {selectedItem.stok_tersedia} pcs
+            </p>
           {:else if dialogMode === "edit"}
-            <p class="mt-1 text-xs text-gray-400">Set ke nilai absolut — cocok untuk koreksi stok fisik.</p>
+            <p class="mt-1 text-xs text-gray-400">
+              Set ke nilai absolut — cocok untuk koreksi stok fisik.
+            </p>
           {/if}
         </div>
       </div>
 
       <Dialog.Footer class="gap-2">
-        <Button variant="outline" onclick={() => (openDialog = false)}>Batal</Button>
+        <Button variant="outline" onclick={() => (openDialog = false)}
+          >Batal</Button
+        >
         <Button
           onclick={submitDialog}
           disabled={saving || !formValid}
-          class={dialogMode === "kurangi" ? "bg-red-600 text-white hover:bg-red-700" : dialogMode === "edit" ? "" : "bg-teal-600 text-white hover:bg-teal-700"}
+          class={dialogMode === "kurangi"
+            ? "bg-red-600 text-white hover:bg-red-700"
+            : dialogMode === "edit"
+              ? ""
+              : "bg-teal-600 text-white hover:bg-teal-700"}
         >
-          {saving ? "Menyimpan..." : dialogMode === "restock" ? "Simpan Restock" : dialogMode === "kurangi" ? "Simpan Pengurangan" : "Simpan"}
+          {saving
+            ? "Menyimpan..."
+            : dialogMode === "restock"
+              ? "Simpan Restock"
+              : dialogMode === "kurangi"
+                ? "Simpan Pengurangan"
+                : "Simpan"}
         </Button>
       </Dialog.Footer>
     {/if}
