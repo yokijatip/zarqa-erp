@@ -10,6 +10,7 @@
     getRiwayatKeluarByModel,
     getRiwayatBarangJadiByModel,
   } from "$lib/firebase/barang-jadi";
+  import { getRiwayatBatch, getBatchById } from "$lib/firebase/batch-produksi";
   import { currentUser } from "$lib/stores/auth.store";
   import {
     UKURAN_ORDER,
@@ -26,6 +27,7 @@
   import PackagePlusIcon from "@lucide/svelte/icons/package-plus";
   import PackageMinusIcon from "@lucide/svelte/icons/package-minus";
   import RulerIcon from "@lucide/svelte/icons/ruler";
+  import ChevronDownIcon from "@lucide/svelte/icons/chevron-down";
 
   const KRITIS_THRESHOLD = 5;
   const LOW_THRESHOLD = 15;
@@ -34,6 +36,28 @@
   let stokList = $state<StokBarangJadi[]>([]);
   let riwayatKeluar = $state<BarangKeluar[]>([]);
   let riwayatMasuk = $state<RiwayatBarangJadi[]>([]);
+
+  // Filter tanggal untuk Riwayat Masuk (dari — sampai), kosong = tampilkan semua
+  let filterDari = $state("");
+  let filterSampai = $state("");
+
+  // Cache detail batch (nama tukang cutting + timeline lengkap) per batch_id, di-fetch lazy saat card di-expand
+  type BatchTimelineEntry = {
+    status_ke: string;
+    timestamp: any;
+    updated_by_nama: string;
+    pcs_berhasil: number;
+    pcs_reject: number;
+    catatan?: string;
+    dariSumberLain?: boolean; // true kalau entry ini ditarik dari batch cutting asal (dari_potongan)
+  };
+  type BatchDetail = {
+    cuttingNama: string | null;
+    timeline: BatchTimelineEntry[];
+  };
+  let batchDetailCache = $state<Record<string, BatchDetail>>({});
+  let loadingBatchId = $state<string | null>(null);
+  let expandedBatchId = $state<string | null>(null);
   let loading = $state(true);
   let saving = $state(false);
   let errorMsg = $state<string | null>(null);
@@ -139,16 +163,258 @@
   async function load() {
     loading = true;
     try {
-      [stokList, riwayatKeluar, riwayatMasuk] = await Promise.all([
-        getStokByModel($page.params.model_id!),
-        getRiwayatKeluarByModel($page.params.model_id!),
-        getRiwayatBarangJadiByModel($page.params.model_id!),
+      const modelId = $page.params.model_id!;
+      const [stokResult, keluarResult, masukResult] = await Promise.allSettled([
+        getStokByModel(modelId),
+        getRiwayatKeluarByModel(modelId),
+        getRiwayatBarangJadiByModel(modelId),
       ]);
-    } catch {
-      showError("Gagal memuat data stok.");
+
+      stokList = stokResult.status === "fulfilled" ? stokResult.value : [];
+      riwayatKeluar =
+        keluarResult.status === "fulfilled" ? keluarResult.value : [];
+      riwayatMasuk =
+        masukResult.status === "fulfilled" ? masukResult.value : [];
+
+      if (stokResult.status === "rejected") {
+        console.error("getStokByModel failed:", stokResult.reason);
+        showError("Gagal memuat data stok.");
+      }
+      if (keluarResult.status === "rejected") {
+        console.error("getRiwayatKeluarByModel failed:", keluarResult.reason);
+      }
+      if (masukResult.status === "rejected") {
+        console.error(
+          "getRiwayatBarangJadiByModel failed:",
+          masukResult.reason,
+        );
+        showError("Gagal memuat riwayat masuk (cek index Firestore).");
+      }
     } finally {
       loading = false;
     }
+  }
+
+  // ── Riwayat Masuk: grouping per batch + filter tanggal ────────────
+
+  type RiwayatMasukGroup = {
+    // key unik: batch_id untuk hasil produksi, atau id riwayat itu sendiri untuk entry manual
+    key: string;
+    batch_id?: string;
+    tipe: RiwayatBarangJadi["tipe"];
+    items: RiwayatBarangJadi[]; // bisa lebih dari satu kalau 1 batch hasilkan >1 ukuran
+    totalJumlah: number;
+    timestamp: any;
+  };
+
+  const TIPE_LABEL: Record<string, string> = {
+    masuk_produksi: "Dari Produksi",
+    masuk_restock: "Restock",
+    masuk_stok_awal: "Stok Awal",
+    kurangi_manual: "Kurangi Manual",
+    set_manual: "Set Manual",
+  };
+  const TIPE_STYLE: Record<string, string> = {
+    masuk_produksi: "bg-teal-100 text-teal-700",
+    masuk_restock: "bg-blue-100 text-blue-700",
+    masuk_stok_awal: "bg-purple-100 text-purple-700",
+    kurangi_manual: "bg-red-100 text-red-600",
+    set_manual: "bg-gray-100 text-gray-600",
+  };
+
+  const PROSES_LABEL: Record<string, string> = {
+    PENDING_CUTTING: "Menunggu Cutting",
+    CUTTING_IN_PROGRESS: "Cutting",
+    CUTTING_DONE: "Cutting Selesai",
+    JAHIT_IN_PROGRESS: "Jahit",
+    JAHIT_DONE: "Jahit Selesai",
+    STEAM_IN_PROGRESS: "Steam",
+    STEAM_DONE: "Steam Selesai",
+    COMPLETED: "Selesai → Masuk Gudang",
+  };
+  const PROSES_DOT: Record<string, string> = {
+    CUTTING_IN_PROGRESS: "bg-sky-500",
+    CUTTING_DONE: "bg-sky-500",
+    JAHIT_IN_PROGRESS: "bg-violet-500",
+    JAHIT_DONE: "bg-violet-500",
+    STEAM_IN_PROGRESS: "bg-amber-500",
+    STEAM_DONE: "bg-amber-500",
+    COMPLETED: "bg-teal-500",
+  };
+
+  function tsMillis(ts: any): number {
+    return ts?.toMillis ? ts.toMillis() : ts ? new Date(ts).getTime() : 0;
+  }
+
+  // Filter berdasarkan rentang tanggal (kalau diisi)
+  let riwayatMasukTerfilter = $derived.by(() => {
+    if (!filterDari && !filterSampai) return riwayatMasuk;
+    const dari = filterDari
+      ? new Date(filterDari + "T00:00:00").getTime()
+      : -Infinity;
+    const sampai = filterSampai
+      ? new Date(filterSampai + "T23:59:59").getTime()
+      : Infinity;
+    return riwayatMasuk.filter((r) => {
+      const t = tsMillis(r.timestamp);
+      return t >= dari && t <= sampai;
+    });
+  });
+
+  // Group: entry masuk_produksi dengan batch_id yang sama digabung jadi 1 card;
+  // entry manual (restock/stok_awal/kurangi/set) berdiri sendiri.
+  let riwayatMasukGrouped = $derived.by(() => {
+    const map = new Map<string, RiwayatMasukGroup>();
+    for (const r of riwayatMasukTerfilter) {
+      const key =
+        r.tipe === "masuk_produksi" && r.batch_id
+          ? `batch__${r.batch_id}`
+          : `single__${r.id}`;
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          batch_id: r.batch_id,
+          tipe: r.tipe,
+          items: [],
+          totalJumlah: 0,
+          timestamp: r.timestamp,
+        });
+      }
+      const g = map.get(key)!;
+      g.items.push(r);
+      g.totalJumlah += r.jumlah;
+      // Pakai timestamp paling baru dari item-item dalam grup
+      if (tsMillis(r.timestamp) > tsMillis(g.timestamp))
+        g.timestamp = r.timestamp;
+    }
+    return [...map.values()].sort(
+      (a, b) => tsMillis(b.timestamp) - tsMillis(a.timestamp),
+    );
+  });
+
+  // Prefetch nama tukang cutting untuk tiap batch begitu muncul di list,
+  // supaya judul card langsung tampil tanpa perlu diklik/expand dulu.
+  let batchNamaCache = $state<Record<string, string | null>>({});
+
+  $effect(() => {
+    for (const group of riwayatMasukGrouped) {
+      if (group.batch_id && !(group.batch_id in batchNamaCache)) {
+        prefetchCuttingNama(group.batch_id);
+      }
+    }
+  });
+
+  async function prefetchCuttingNama(batchId: string) {
+    // Tandai sedang di-fetch (value undefined) agar tidak dobel-fetch
+    batchNamaCache = {
+      ...batchNamaCache,
+      [batchId]: undefined as unknown as null,
+    };
+    try {
+      const batch = await getBatchById(batchId);
+      let nama: string | null = batch?.penugasan?.cutting?.nama ?? null;
+      if (!nama && batch?.sumber_cutting?.length) {
+        nama = batch.sumber_cutting[0].penugasan?.cutting?.nama ?? null;
+      }
+      batchNamaCache = { ...batchNamaCache, [batchId]: nama };
+    } catch (e) {
+      console.error("prefetchCuttingNama failed:", e);
+      batchNamaCache = { ...batchNamaCache, [batchId]: null };
+    }
+  }
+
+  async function toggleExpand(group: RiwayatMasukGroup) {
+    if (expandedBatchId === group.key) {
+      expandedBatchId = null;
+      return;
+    }
+    expandedBatchId = group.key;
+    if (group.batch_id && !batchDetailCache[group.batch_id]) {
+      loadingBatchId = group.batch_id;
+      try {
+        batchDetailCache = {
+          ...batchDetailCache,
+          [group.batch_id]: await loadBatchDetail(group.batch_id),
+        };
+      } catch (e) {
+        console.error("loadBatchDetail failed:", e);
+        showError("Gagal memuat riwayat proses batch.");
+      } finally {
+        loadingBatchId = null;
+      }
+    }
+  }
+
+  // Ambil timeline lengkap sebuah batch, termasuk tahap Cutting.
+  // Kalau batch ini dibuat dari stok potongan (dari_potongan), tahap Cutting-nya
+  // ada di batch ASAL (sumber_cutting) — bukan di riwayat_proses batch ini sendiri.
+  async function loadBatchDetail(batchId: string): Promise<BatchDetail> {
+    const [batch, ownProses] = await Promise.all([
+      getBatchById(batchId),
+      getRiwayatBatch(batchId),
+    ]);
+
+    const timeline: BatchTimelineEntry[] = ownProses.map((p) => ({
+      status_ke: p.status_ke,
+      timestamp: p.timestamp,
+      updated_by_nama: p.updated_by_nama,
+      pcs_berhasil: p.pcs_berhasil,
+      pcs_reject: p.pcs_reject,
+      catatan: p.catatan,
+    }));
+
+    let cuttingNama: string | null = batch?.penugasan?.cutting?.nama ?? null;
+
+    if (
+      batch?.dari_potongan &&
+      batch.sumber_cutting &&
+      batch.sumber_cutting.length > 0
+    ) {
+      for (const sumber of batch.sumber_cutting) {
+        if (!cuttingNama) cuttingNama = sumber.penugasan?.cutting?.nama ?? null;
+        try {
+          const sumberProses = await getRiwayatBatch(sumber.batch_id);
+          const cuttingEntries = sumberProses.filter(
+            (p) =>
+              p.status_ke === "CUTTING_IN_PROGRESS" ||
+              p.status_ke === "CUTTING_DONE",
+          );
+          for (const p of cuttingEntries) {
+            timeline.push({
+              status_ke: p.status_ke,
+              timestamp: p.timestamp,
+              updated_by_nama: p.updated_by_nama,
+              pcs_berhasil: p.pcs_berhasil,
+              pcs_reject: p.pcs_reject,
+              catatan: p.catatan,
+              dariSumberLain: true,
+            });
+          }
+        } catch (e) {
+          console.error(
+            `Gagal ambil riwayat batch sumber cutting ${sumber.batch_id}:`,
+            e,
+          );
+          // Fallback: tetap tampilkan bahwa cutting pernah terjadi, walau tanpa waktu pasti
+          timeline.push({
+            status_ke: "CUTTING_DONE",
+            timestamp: null,
+            updated_by_nama:
+              sumber.penugasan?.cutting?.nama ?? "Tidak diketahui",
+            pcs_berhasil: 0,
+            pcs_reject: 0,
+            catatan:
+              "Riwayat proses cutting asli tidak ditemukan (batch sumber mungkin sudah dihapus)",
+            dariSumberLain: true,
+          });
+        }
+      }
+    }
+
+    timeline.sort((a, b) => tsMillis(a.timestamp) - tsMillis(b.timestamp));
+    // Sinkronkan ke cache nama juga (bisa lebih akurat dari hasil prefetch cepat)
+    batchNamaCache = { ...batchNamaCache, [batchId]: cuttingNama };
+    return { cuttingNama, timeline };
   }
 
   function bukaDialog(mode: DialogMode, item: StokBarangJadi) {
@@ -498,88 +764,242 @@
   </div>
   <!-- ── Riwayat Masuk ────────────────────────────────────────────── -->
   <div class="mt-6">
-    <h2 class="mb-3 text-sm font-semibold text-gray-700">Riwayat Masuk</h2>
+    <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+      <h2 class="text-sm font-semibold text-gray-700">Riwayat Masuk</h2>
 
-    {#if riwayatMasuk.length === 0}
+      <!-- Filter tanggal -->
+      <div class="flex items-center gap-2 text-xs">
+        <span class="text-gray-400">Dari</span>
+        <input
+          type="date"
+          bind:value={filterDari}
+          class="rounded-lg border border-gray-200 px-2 py-1 text-xs text-gray-700 focus:border-teal-400 focus:outline-none"
+        />
+        <span class="text-gray-400">Sampai</span>
+        <input
+          type="date"
+          bind:value={filterSampai}
+          class="rounded-lg border border-gray-200 px-2 py-1 text-xs text-gray-700 focus:border-teal-400 focus:outline-none"
+        />
+        {#if filterDari || filterSampai}
+          <button
+            onclick={() => {
+              filterDari = "";
+              filterSampai = "";
+            }}
+            class="text-teal-600 hover:underline"
+          >
+            Reset
+          </button>
+        {/if}
+      </div>
+    </div>
+
+    {#if riwayatMasukTerfilter.length === 0}
       <div
         class="flex items-center gap-3 rounded-xl border border-gray-100 bg-white px-5 py-6 text-sm text-gray-400 shadow-sm"
       >
-        Belum ada riwayat masuk untuk model ini
+        {riwayatMasuk.length === 0
+          ? "Belum ada riwayat masuk untuk model ini"
+          : "Tidak ada riwayat pada rentang tanggal ini"}
       </div>
     {:else}
-      {@const TIPE_LABEL = {
-        masuk_produksi: "Dari Produksi",
-        masuk_restock: "Restock",
-        masuk_stok_awal: "Stok Awal",
-        kurangi_manual: "Kurangi Manual",
-        set_manual: "Set Manual",
-      } as Record<string, string>}
-      {@const TIPE_STYLE = {
-        masuk_produksi: "bg-teal-100 text-teal-700",
-        masuk_restock: "bg-blue-100 text-blue-700",
-        masuk_stok_awal: "bg-purple-100 text-purple-700",
-        kurangi_manual: "bg-red-100 text-red-600",
-        set_manual: "bg-gray-100 text-gray-600",
-      } as Record<string, string>}
-      <div
-        class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm"
-      >
-        <div
-          class="grid grid-cols-[auto_1fr_auto_auto_auto] gap-4 border-b border-gray-100 bg-gray-50 px-5 py-2.5 text-[11px] font-medium uppercase tracking-wider text-gray-400"
-        >
-          <span>Tipe</span>
-          <span>Oleh</span>
-          <span class="text-right">Ukuran</span>
-          <span class="w-20 text-right">Jumlah</span>
-          <span class="w-28 text-right">Tanggal</span>
-        </div>
-        {#each riwayatMasuk as r, i}
+      <div class="space-y-3">
+        {#each riwayatMasukGrouped as group}
+          {@const isBatch = group.tipe === "masuk_produksi" && !!group.batch_id}
+          {@const isExpanded = expandedBatchId === group.key}
+          {@const first = group.items[0]}
+          {@const cuttingNama = group.batch_id
+            ? batchNamaCache[group.batch_id]
+            : undefined}
+
           <div
-            class="grid grid-cols-[auto_1fr_auto_auto_auto] items-center gap-4 px-5 py-3 text-sm {i >
-            0
-              ? 'border-t border-gray-100'
-              : ''}"
+            class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm"
           >
-            <span
-              class="rounded-full px-2.5 py-0.5 text-[11px] font-semibold {TIPE_STYLE[
-                r.tipe
-              ] ?? 'bg-gray-100 text-gray-600'}"
+            <!-- Header card: bisa diklik untuk expand kalau ini hasil produksi (punya batch) -->
+            <button
+              onclick={() => toggleExpand(group)}
+              disabled={!isBatch}
+              class="flex w-full items-center gap-4 px-5 py-3.5 text-left transition {isBatch
+                ? 'hover:bg-gray-50'
+                : 'cursor-default'}"
             >
-              {TIPE_LABEL[r.tipe] ?? r.tipe}
-            </span>
-            <div class="min-w-0">
-              <p class="truncate text-sm font-medium text-gray-800">
-                {r.dicatat_oleh_nama ?? "—"}
-              </p>
-              {#if r.catatan}
-                <p class="truncate text-xs text-gray-400">{r.catatan}</p>
-              {/if}
-            </div>
-            <span
-              class="rounded-md border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] font-semibold text-gray-700"
-            >
-              {r.ukuran}
-            </span>
-            <div class="w-20 text-right">
               <span
-                class="text-sm font-semibold {r.tipe.startsWith('masuk')
-                  ? 'text-teal-700'
-                  : 'text-red-600'}"
+                class="rounded-full px-2.5 py-0.5 text-[11px] font-semibold shrink-0 {TIPE_STYLE[
+                  group.tipe
+                ] ?? 'bg-gray-100 text-gray-600'}"
               >
-                {r.tipe.startsWith("masuk") ? "+" : "−"}{r.jumlah} pcs
+                {TIPE_LABEL[group.tipe] ?? group.tipe}
               </span>
-              <p class="text-[10px] text-gray-400">
-                {r.stok_sebelum} → {r.stok_sesudah}
+
+              <div class="min-w-0 flex-1">
+                <p class="truncate text-sm font-medium text-gray-800">
+                  {#if isBatch}
+                    {cuttingNama === undefined
+                      ? "Memuat…"
+                      : (cuttingNama ?? "Tukang cutting tidak tercatat")}
+                  {:else}
+                    {first.catatan ||
+                      TIPE_LABEL[group.tipe] ||
+                      "Penyesuaian Stok"}
+                  {/if}
+                </p>
+                <p class="truncate text-xs text-gray-400">
+                  {isBatch
+                    ? "Tukang Cutting · klik untuk lihat proses lengkap"
+                    : `oleh ${first.dicatat_oleh_nama ?? "—"}`}
+                </p>
+              </div>
+
+              <!-- Ringkasan ukuran dalam grup -->
+              <div class="hidden flex-wrap justify-end gap-1 sm:flex">
+                {#each group.items as it}
+                  <span
+                    class="rounded-md border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] font-semibold text-gray-700"
+                  >
+                    {it.ukuran} ×{it.jumlah}
+                  </span>
+                {/each}
+              </div>
+
+              <div class="w-20 shrink-0 text-right">
+                <span
+                  class="text-sm font-semibold {group.tipe.startsWith('masuk')
+                    ? 'text-teal-700'
+                    : 'text-red-600'}"
+                >
+                  {group.tipe.startsWith("masuk")
+                    ? "+"
+                    : "−"}{group.totalJumlah} pcs
+                </span>
+              </div>
+
+              <p class="w-28 shrink-0 text-right text-xs text-gray-400">
+                {formatDateTime(group.timestamp)}
               </p>
-            </div>
-            <p class="w-28 text-right text-xs text-gray-400">
-              {formatDateTime(r.timestamp)}
-            </p>
+
+              {#if isBatch}
+                <ChevronDownIcon
+                  class="h-4 w-4 shrink-0 text-gray-400 transition-transform {isExpanded
+                    ? 'rotate-180'
+                    : ''}"
+                />
+              {:else}
+                <span class="w-4 shrink-0"></span>
+              {/if}
+            </button>
+
+            <!-- Detail timeline proses (cutting → jahit → steam → selesai) -->
+            {#if isBatch && isExpanded}
+              {@const detail = batchDetailCache[group.batch_id!]}
+              <div class="border-t border-gray-100 bg-gray-50 px-5 py-4">
+                {#if loadingBatchId === group.batch_id}
+                  <div
+                    class="flex items-center gap-2 py-2 text-xs text-gray-400"
+                  >
+                    <svg
+                      class="h-3.5 w-3.5 animate-spin"
+                      xmlns="http://www.w3.org/2000/svg"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke-width="2"
+                      stroke="currentColor"
+                    >
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"
+                      />
+                    </svg>
+                    Memuat riwayat proses...
+                  </div>
+                {:else if !detail || detail.timeline.length === 0}
+                  <p class="py-2 text-xs text-gray-400">
+                    Riwayat proses batch tidak ditemukan.
+                  </p>
+                {:else}
+                  <ol class="space-y-3">
+                    {#each detail.timeline as p, i}
+                      <li class="flex gap-3">
+                        <div class="flex flex-col items-center">
+                          <span
+                            class="h-2.5 w-2.5 shrink-0 rounded-full {PROSES_DOT[
+                              p.status_ke
+                            ] ?? 'bg-gray-400'}"
+                          ></span>
+                          <span class="w-px flex-1 bg-gray-200"></span>
+                        </div>
+                        <div class="min-w-0 flex-1 pb-3">
+                          <div
+                            class="flex flex-wrap items-center justify-between gap-2"
+                          >
+                            <p class="text-xs font-semibold text-gray-700">
+                              {PROSES_LABEL[p.status_ke] ?? p.status_ke}
+                              {#if p.dariSumberLain}
+                                <span
+                                  class="ml-1 rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium text-sky-600"
+                                  >dari batch cutting asal</span
+                                >
+                              {/if}
+                            </p>
+                            <p class="text-[11px] text-gray-400">
+                              {formatDateTime(p.timestamp)}
+                            </p>
+                          </div>
+                          <p class="text-[11px] text-gray-500">
+                            oleh <span class="font-medium text-gray-700"
+                              >{p.updated_by_nama}</span
+                            >
+                            {#if p.pcs_berhasil > 0}
+                              · {p.pcs_berhasil} pcs berhasil
+                            {/if}
+                            {#if p.pcs_reject > 0}
+                              <span class="text-red-500"
+                                >· {p.pcs_reject} reject</span
+                              >
+                            {/if}
+                          </p>
+                          {#if p.catatan}
+                            <p class="mt-0.5 text-[11px] italic text-gray-400">
+                              "{p.catatan}"
+                            </p>
+                          {/if}
+                        </div>
+                      </li>
+                    {/each}
+                    <!-- Tahap terakhir: masuk ke gudang -->
+                    <li class="flex gap-3">
+                      <span
+                        class="h-2.5 w-2.5 shrink-0 rounded-full bg-teal-500"
+                      ></span>
+                      <div class="min-w-0 flex-1">
+                        <div
+                          class="flex flex-wrap items-center justify-between gap-2"
+                        >
+                          <p class="text-xs font-semibold text-teal-700">
+                            Masuk Gudang (Barang Jadi)
+                          </p>
+                          <p class="text-[11px] text-gray-400">
+                            {formatDateTime(first.timestamp)}
+                          </p>
+                        </div>
+                        <p class="text-[11px] text-gray-500">
+                          {#each group.items as it, gi}{gi > 0
+                              ? ", "
+                              : ""}{it.ukuran} +{it.jumlah} pcs{/each}
+                        </p>
+                      </div>
+                    </li>
+                  </ol>
+                {/if}
+              </div>
+            {/if}
           </div>
         {/each}
       </div>
       <p class="mt-2 text-right text-[11px] text-gray-300">
-        Menampilkan {riwayatMasuk.length} catatan terbaru
+        Menampilkan {riwayatMasukGrouped.length} entri ({riwayatMasukTerfilter.length}
+        catatan)
       </p>
     {/if}
   </div>
