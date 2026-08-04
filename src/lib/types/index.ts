@@ -130,6 +130,15 @@ export interface PenugasanWorker {
   nama: string;
 }
 
+export interface SumberCutting {
+  batch_id: string;
+  nama_model: string;
+  nama_warna?: string;
+  penugasan?: {
+    cutting?: PenugasanWorker;
+  };
+}
+
 export interface BatchProduksi {
   id: string;
   model_id: string;
@@ -146,6 +155,7 @@ export interface BatchProduksi {
   catatan_admin?: string;
   dari_potongan?: boolean;
   stok_potongan_synced?: boolean;
+  sumber_cutting?: SumberCutting[];
   penugasan?: {
     cutting?: PenugasanWorker;
     jahit?: PenugasanWorker;
@@ -164,13 +174,15 @@ export type BatchProduksiInput = Omit<
 
 export interface RiwayatProses {
   id?: string;
-  tipe?: 'status_update' | 'edit_kuantitas';
+  tipe?: 'status_update' | 'edit_kuantitas' | 'setor_proses';
   status_dari: StatusBatch;
   status_ke: StatusBatch;
   updated_by_uid: string;
   updated_by_nama: string;
   pcs_berhasil: number;
   pcs_reject: number;
+  detail_ukuran?: DetailUkuran[];
+  detail_reject?: DetailUkuran[];
   catatan?: string;
   timestamp?: Timestamp;
 }
@@ -202,6 +214,7 @@ export interface StokPotongan {
   stok_tersedia: number;
   total_masuk: number;
   total_terpakai: number;
+  sumber_cutting?: SumberCutting[];
   updatedAt?: Timestamp;
 }
 

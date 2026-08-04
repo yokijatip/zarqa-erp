@@ -8,7 +8,7 @@ import {
 } from 'firebase/firestore';
 import { db } from './config';
 import { getModelBajuById } from './model-baju';
-import type { BatchProduksi, BatchProduksiInput, StatusBatch, RiwayatProses, PenugasanWorker, DetailUkuran, KainDigunakan, ModelBaju } from '$lib/types';
+import type { BatchProduksi, BatchProduksiInput, StatusBatch, RiwayatProses, PenugasanWorker, DetailUkuran, KainDigunakan, ModelBaju, SumberCutting } from '$lib/types';
 
 const COL = 'batch_produksi';
 
@@ -19,6 +19,23 @@ function warnaDocKey(namaWarna: string): string {
 function buildStokPotonganDocId(modelId: string, ukuran: string, namaWarna?: string): string {
   if (!namaWarna) return `${modelId}__${ukuran}`;
   return `${modelId}__${ukuran}__${warnaDocKey(namaWarna)}`;
+}
+
+function buildSumberCutting(batch: BatchProduksi): SumberCutting {
+  return {
+    batch_id: batch.id,
+    nama_model: batch.nama_model,
+    ...(batch.nama_warna ? { nama_warna: batch.nama_warna } : {}),
+    ...(batch.penugasan?.cutting ? { penugasan: { cutting: batch.penugasan.cutting } } : {}),
+  };
+}
+
+function mergeSumberCutting(existing: SumberCutting[] | undefined, next: SumberCutting[]): SumberCutting[] {
+  const map = new Map<string, SumberCutting>();
+  for (const item of [...(existing ?? []), ...next]) {
+    map.set(item.batch_id, item);
+  }
+  return Array.from(map.values());
 }
 
 // Status yang menandakan kain sudah dipotong (stok kain sudah berkurang)
@@ -86,6 +103,15 @@ export async function createBatchDariPotongan(
       }
     }
 
+    const sumberCutting = mergeSumberCutting(
+      data.sumber_cutting,
+      stokSnapshots.flatMap(({ stokSnap }) => {
+        const stok = stokSnap.data() as { sumber_cutting?: SumberCutting[] };
+        return stok.sumber_cutting ?? [];
+      })
+    );
+    const firstCuttingWorker = sumberCutting.find((source) => source.penugasan?.cutting)?.penugasan?.cutting;
+
     for (const { du, stokRef, stokSnap } of stokSnapshots) {
       const stok = stokSnap.data() as { stok_tersedia: number; total_terpakai: number };
       transaction.update(stokRef, {
@@ -102,6 +128,10 @@ export async function createBatchDariPotongan(
       pcs_saat_ini: totalPcs,
       status: 'CUTTING_DONE' as StatusBatch,
       dari_potongan: true,
+      ...(sumberCutting.length > 0 ? { sumber_cutting: sumberCutting } : {}),
+      ...(firstCuttingWorker
+        ? { penugasan: { ...data.penugasan, cutting: data.penugasan?.cutting ?? firstCuttingWorker } }
+        : {}),
       dibuat_oleh: dibuatOlehUid,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
@@ -270,6 +300,143 @@ export async function updateStatusBatch(
   });
 }
 
+export async function recordBatchProgress(
+  batchId: string,
+  updatedByUid: string,
+  updatedByNama: string,
+  riwayat: Pick<RiwayatProses, 'status_dari' | 'pcs_berhasil' | 'pcs_reject' | 'detail_ukuran' | 'detail_reject' | 'catatan'>
+): Promise<void> {
+  const batchRef = doc(db, COL, batchId);
+  const riwayatRef = doc(collection(db, COL, batchId, 'riwayat_proses'));
+
+  await runTransaction(db, async (transaction) => {
+    const batchSnap = await transaction.get(batchRef);
+    if (!batchSnap.exists()) throw new Error('Batch tidak ditemukan');
+
+    const batch = { id: batchSnap.id, ...batchSnap.data() } as BatchProduksi;
+    if (batch.status !== riwayat.status_dari) {
+      throw new Error('Status batch sudah berubah, muat ulang halaman lalu coba lagi');
+    }
+    if (riwayat.pcs_berhasil <= 0 && riwayat.pcs_reject <= 0) {
+      throw new Error('Isi minimal 1 pcs berhasil atau reject');
+    }
+
+    transaction.update(batchRef, {
+      updatedAt: serverTimestamp(),
+    });
+
+    transaction.set(riwayatRef, {
+      ...riwayat,
+      tipe: 'setor_proses',
+      status_ke: batch.status,
+      updated_by_uid: updatedByUid,
+      updated_by_nama: updatedByNama,
+      timestamp: serverTimestamp(),
+    });
+  });
+}
+
+export async function splitJahitPartialToSteam(
+  batchId: string,
+  updatedByUid: string,
+  updatedByNama: string,
+  detailBerhasil: DetailUkuran[],
+  detailReject: DetailUkuran[] = []
+): Promise<string | null> {
+  const batchRef = doc(db, COL, batchId);
+  const childRef = doc(collection(db, COL));
+  const sourceRiwayatRef = doc(collection(db, COL, batchId, 'riwayat_proses'));
+  const childRiwayatRef = doc(collection(db, COL, childRef.id, 'riwayat_proses'));
+
+  let createdChildId: string | null = null;
+
+  await runTransaction(db, async (transaction) => {
+    const batchSnap = await transaction.get(batchRef);
+    if (!batchSnap.exists()) throw new Error('Batch tidak ditemukan');
+
+    const batch = { id: batchSnap.id, ...batchSnap.data() } as BatchProduksi;
+    if (batch.status !== 'JAHIT_IN_PROGRESS') {
+      throw new Error('Setor parsial hanya bisa dilakukan dari status Sedang Jahit');
+    }
+
+    const berhasilBySize = new Map(detailBerhasil.map((du) => [du.ukuran, du.jumlah_pcs]));
+    const rejectBySize = new Map(detailReject.map((du) => [du.ukuran, du.jumlah_pcs]));
+    const remainingDetail = batch.detail_ukuran
+      .map((du) => ({
+        ukuran: du.ukuran,
+        jumlah_pcs: du.jumlah_pcs - (berhasilBySize.get(du.ukuran) ?? 0) - (rejectBySize.get(du.ukuran) ?? 0),
+      }))
+      .filter((du) => du.jumlah_pcs > 0);
+    const childDetail = batch.detail_ukuran
+      .map((du) => ({
+        ukuran: du.ukuran,
+        jumlah_pcs: berhasilBySize.get(du.ukuran) ?? 0,
+      }))
+      .filter((du) => du.jumlah_pcs > 0);
+
+    const totalBerhasil = childDetail.reduce((sum, du) => sum + du.jumlah_pcs, 0);
+    const totalReject = detailReject.reduce((sum, du) => sum + du.jumlah_pcs, 0);
+    const totalRemaining = remainingDetail.reduce((sum, du) => sum + du.jumlah_pcs, 0);
+    const totalInput = totalBerhasil + totalReject;
+
+    if (totalInput <= 0) throw new Error('Isi minimal 1 pcs berhasil atau reject');
+    if (totalRemaining <= 0) throw new Error('Gunakan Selesaikan Jahit untuk setoran terakhir');
+    for (const du of batch.detail_ukuran) {
+      const used = (berhasilBySize.get(du.ukuran) ?? 0) + (rejectBySize.get(du.ukuran) ?? 0);
+      if (used < 0 || used > du.jumlah_pcs) {
+        throw new Error(`Jumlah ukuran ${du.ukuran} melebihi sisa pekerjaan`);
+      }
+    }
+
+    transaction.update(batchRef, {
+      detail_ukuran: remainingDetail,
+      pcs_saat_ini: totalRemaining,
+      updatedAt: serverTimestamp(),
+    });
+
+    transaction.set(sourceRiwayatRef, {
+      tipe: 'setor_proses',
+      status_dari: batch.status,
+      status_ke: batch.status,
+      updated_by_uid: updatedByUid,
+      updated_by_nama: updatedByNama,
+      pcs_berhasil: totalBerhasil,
+      pcs_reject: totalReject,
+      catatan: `Setor parsial ${totalBerhasil} pcs${totalReject > 0 ? `, ${totalReject} reject` : ''}`,
+      timestamp: serverTimestamp(),
+    });
+
+    if (totalBerhasil > 0) {
+      const { id: _id, ...batchData } = batch as BatchProduksi;
+      transaction.set(childRef, {
+        ...batchData,
+        detail_ukuran: childDetail,
+        total_pcs: totalBerhasil,
+        pcs_saat_ini: totalBerhasil,
+        status: 'JAHIT_DONE' as StatusBatch,
+        sumber_batch_id: batch.id,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      transaction.set(childRiwayatRef, {
+        tipe: 'status_update',
+        status_dari: 'JAHIT_IN_PROGRESS' as StatusBatch,
+        status_ke: 'JAHIT_DONE' as StatusBatch,
+        updated_by_uid: updatedByUid,
+        updated_by_nama: updatedByNama,
+        pcs_berhasil: totalBerhasil,
+        pcs_reject: 0,
+        detail_ukuran: childDetail,
+        catatan: `Hasil setor parsial dari batch ${batch.nama_model}`,
+        timestamp: serverTimestamp(),
+      });
+      createdChildId = childRef.id;
+    }
+  });
+
+  return createdChildId;
+}
+
 // Sinkronkan hasil cutting batch ke stok_potongan
 // Dipakai untuk batch CUTTING_DONE yang hasil cuttingnya belum masuk stok_potongan
 export async function sinkronStokPotonganBatch(batchId: string): Promise<void> {
@@ -324,6 +491,7 @@ export async function sinkronStokPotonganBatch(batchId: string): Promise<void> {
     if (currentBatch.stok_potongan_synced) return;
 
     const currentDetailBerhasil = hitungDetailBerhasil(currentBatch);
+    const currentSumberCutting = buildSumberCutting(currentBatch);
     const stokSnapshots = await Promise.all(
       currentDetailBerhasil.map(async (item) => {
         const stokRef = stokRefs.get(item.ukuran);
@@ -344,17 +512,19 @@ export async function sinkronStokPotonganBatch(batchId: string): Promise<void> {
           stok_tersedia: item.jumlah_pcs,
           total_masuk: item.jumlah_pcs,
           total_terpakai: 0,
+          sumber_cutting: [currentSumberCutting],
           updatedAt: serverTimestamp(),
         });
         continue;
       }
 
-      const stok = stokSnap.data() as { stok_tersedia: number; total_masuk: number };
+      const stok = stokSnap.data() as { stok_tersedia: number; total_masuk: number; sumber_cutting?: SumberCutting[] };
       transaction.update(stokRef, {
         stok_tersedia: stok.stok_tersedia + item.jumlah_pcs,
         total_masuk: stok.total_masuk + item.jumlah_pcs,
         ...(currentBatch.nama_warna ? { nama_warna: currentBatch.nama_warna } : {}),
         ...(currentBatch.kode_hex_warna ? { kode_hex_warna: currentBatch.kode_hex_warna } : {}),
+        sumber_cutting: mergeSumberCutting(stok.sumber_cutting, [currentSumberCutting]),
         updatedAt: serverTimestamp(),
       });
     }

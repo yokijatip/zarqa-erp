@@ -2,10 +2,10 @@
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
-  import { getBatchById, getRiwayatBatch, updateStatusBatch, completeBatchProduksi, sinkronStokPotonganBatch, deleteBatchProduksi, editKuantitasBatch, updatePenugasanBatch } from '$lib/firebase/batch-produksi';
+  import { getBatchById, getRiwayatBatch, updateStatusBatch, completeBatchProduksi, sinkronStokPotonganBatch, deleteBatchProduksi, editKuantitasBatch, updatePenugasanBatch, splitJahitPartialToSteam } from '$lib/firebase/batch-produksi';
   import { karyawanCache, batchCache, stokKainCache } from '$lib/stores/data-cache.svelte';
   import { userRole, currentUser } from '$lib/stores/auth.store';
-  import type { BatchProduksi, RiwayatProses, StatusBatch, UserProfile, UserRole } from '$lib/types';
+  import type { BatchProduksi, PenugasanWorker, RiwayatProses, StatusBatch, UserProfile, UserRole } from '$lib/types';
   import { STATUS_LABEL } from '$lib/types';
   import * as Dialog from '$lib/components/ui/dialog';
   import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
@@ -96,6 +96,8 @@
   // ─── State ────────────────────────────────────────────────────────
   let batch = $state<BatchProduksi | null>(null);
   let riwayat = $state<RiwayatProses[]>([]);
+  let sourceCuttingBatches = $state<BatchProduksi[]>([]);
+  let sourceCuttingRiwayat = $state<RiwayatProses[]>([]);
   let loading = $state(true);
   let notFound = $state(false);
   let karyawanList = $state<UserProfile[]>([]);
@@ -105,8 +107,10 @@
   let actionSaving = $state(false);
   let actionError = $state<string | null>(null);
   let actionWorkerUid = $state('');
+  let directSteamSaving = $state(false);
   // Per-ukuran PCS aktual yang berhasil di tahap ini.
   let actionUkuranBerhasil = $state<number[]>([]);
+  let actionUkuranReject = $state<number[]>([]);
 
   let canAction = $derived(
     !!$userRole && ACTION_ROLES.includes($userRole as UserRole) &&
@@ -114,6 +118,13 @@
   );
 
   let currentAction = $derived(batch ? getAction(batch) : null);
+  let combinedRiwayat = $derived(
+    [...sourceCuttingRiwayat, ...riwayat].sort((a, b) => {
+      const ta = a.timestamp?.toMillis ? a.timestamp.toMillis() : a.timestamp ? new Date(a.timestamp as any).getTime() : 0;
+      const tb = b.timestamp?.toMillis ? b.timestamp.toMillis() : b.timestamp ? new Date(b.timestamp as any).getTime() : 0;
+      return ta - tb;
+    })
+  );
 
   const MANAGE_ROLES: UserRole[] = ['admin_gudang', 'owner', 'developer'];
   let canManage = $derived(!!$userRole && MANAGE_ROLES.includes($userRole as UserRole) && !!batch && batch.status !== 'COMPLETED');
@@ -236,27 +247,99 @@
       : []
   );
 
+  function assignedWorkerForStatus(b: BatchProduksi, status: StatusBatch): PenugasanWorker | undefined {
+    if (status === 'PENDING_CUTTING' || status === 'CUTTING_IN_PROGRESS' || status === 'CUTTING_DONE') {
+      return b.penugasan?.cutting;
+    }
+    if (status === 'JAHIT_IN_PROGRESS' || status === 'JAHIT_DONE') {
+      return b.penugasan?.jahit;
+    }
+    if (status === 'STEAM_IN_PROGRESS' || status === 'STEAM_DONE' || status === 'COMPLETED') {
+      return b.penugasan?.steam;
+    }
+    return undefined;
+  }
+
+  function assignedWorkerForAction(b: BatchProduksi, action: ActionInfo): PenugasanWorker | undefined {
+    return assignedWorkerForStatus(b, action.needsWorker ? action.nextStatus : b.status);
+  }
+
+  function sourceCuttingWorker(): PenugasanWorker | undefined {
+    return sourceCuttingBatches.find((source) => source.penugasan?.cutting)?.penugasan?.cutting;
+  }
+
+  function displayRiwayatWorkerName(r: RiwayatProses): string {
+    if (!batch || (r.tipe && r.tipe !== 'status_update' && r.tipe !== 'setor_proses')) {
+      return r.updated_by_nama;
+    }
+    if (r.status_ke === 'CUTTING_IN_PROGRESS' || r.status_ke === 'CUTTING_DONE') {
+      return sourceCuttingBatches.find((source) => source.penugasan?.cutting)?.penugasan?.cutting?.nama
+        ?? batch.penugasan?.cutting?.nama
+        ?? r.updated_by_nama;
+    }
+    return assignedWorkerForStatus(batch, r.status_ke)?.nama ?? r.updated_by_nama;
+  }
+
+  let currentAssignedWorker = $derived(
+    batch && currentAction ? assignedWorkerForAction(batch, currentAction) : undefined
+  );
+
+  function sumRiwayatDetail(status: StatusBatch, field: 'detail_ukuran' | 'detail_reject') {
+    const totals = new Map<string, number>();
+    for (const r of riwayat) {
+      if (r.tipe !== 'setor_proses' || r.status_dari !== status || r.status_ke !== status) continue;
+      for (const item of r[field] ?? []) {
+        totals.set(item.ukuran, (totals.get(item.ukuran) ?? 0) + item.jumlah_pcs);
+      }
+    }
+    return totals;
+  }
+
+  let actionSubmittedBySize = $derived(batch ? sumRiwayatDetail(batch.status, 'detail_ukuran') : new Map<string, number>());
+  let actionRejectedBySize = $derived(batch ? sumRiwayatDetail(batch.status, 'detail_reject') : new Map<string, number>());
+  let actionRemainingBySize = $derived(
+    batch?.detail_ukuran.map((du) =>
+      Math.max(0, du.jumlah_pcs - (actionSubmittedBySize.get(du.ukuran) ?? 0) - (actionRejectedBySize.get(du.ukuran) ?? 0))
+    ) ?? []
+  );
+
   // Totals derived dari per-ukuran
   let actionTotalBerhasil = $derived(actionUkuranBerhasil.reduce((s, n) => s + (Number(n) || 0), 0));
-  let actionTotalReject = $derived(
-    batch
-      ? batch.detail_ukuran.reduce(
-          (sum, du, i) => sum + Math.max(0, du.jumlah_pcs - (Number(actionUkuranBerhasil[i]) || 0)),
-          0,
-        )
-      : 0,
-  );
+  let actionTotalReject = $derived(actionUkuranReject.reduce((s, n) => s + (Number(n) || 0), 0));
+  let actionTotalSubmittedBefore = $derived(Array.from(actionSubmittedBySize.values()).reduce((s, n) => s + n, 0));
+  let actionTotalRejectedBefore = $derived(Array.from(actionRejectedBySize.values()).reduce((s, n) => s + n, 0));
+  let actionTotalRemaining = $derived(actionRemainingBySize.reduce((s, n) => s + n, 0));
   let actionMaxPcs = $derived(batch ? (batch.pcs_saat_ini ?? batch.total_pcs) : 0);
+  let displayTotalPcsAwal = $derived.by(() => {
+    if (!batch) return 0;
+    return Math.max(
+      batch.total_pcs,
+      batch.pcs_saat_ini ?? 0,
+      ...riwayat.map((r) => r.pcs_berhasil + (r.pcs_reject ?? 0)),
+    );
+  });
+  let actionCompletesStage = $derived(
+    currentAction?.needsPcs
+      ? actionTotalBerhasil + actionTotalReject >= actionTotalRemaining
+      : true
+  );
+  let actionCanPartial = $derived(batch?.status === 'JAHIT_IN_PROGRESS');
 
   let actionFormValid = $derived.by(() => {
     if (!currentAction) return false;
-    if (currentAction.needsWorker && !actionWorkerUid) return false;
+    if (currentAction.needsWorker && !actionWorkerUid && !currentAssignedWorker) return false;
     if (currentAction.needsPcs) {
-      if (actionTotalReject > actionMaxPcs) return false;
+      if (actionTotalBerhasil + actionTotalReject > actionTotalRemaining) return false;
       if (actionUkuranBerhasil.some((jumlah) => (Number(jumlah) || 0) < 0)) return false;
-      if (batch?.detail_ukuran.some((du, i) => (Number(actionUkuranBerhasil[i]) || 0) > du.jumlah_pcs)) return false;
-      // Minimal harus ada 1 pcs berjalan di batch
-      if (actionTotalBerhasil <= 0 && !currentAction.isFinal) return false;
+      if (actionUkuranReject.some((jumlah) => (Number(jumlah) || 0) < 0)) return false;
+      if (batch?.detail_ukuran.some((_, i) => {
+        const berhasil = Number(actionUkuranBerhasil[i]) || 0;
+        const reject = Number(actionUkuranReject[i]) || 0;
+        return berhasil + reject > (actionRemainingBySize[i] ?? 0);
+      })) return false;
+      if (actionTotalBerhasil <= 0 && actionTotalReject <= 0) return false;
+      if (currentAction.isFinal && !actionCompletesStage) return false;
+      if (!currentAction.isFinal && !actionCanPartial && !actionCompletesStage) return false;
     }
     return true;
   });
@@ -292,8 +375,9 @@
   // ─── Action handlers ──────────────────────────────────────────────
   function openActionDialog() {
     if (!batch) return;
-    actionWorkerUid = '';
-    actionUkuranBerhasil = batch.detail_ukuran.map((du) => du.jumlah_pcs);
+    actionWorkerUid = currentAction ? (assignedWorkerForAction(batch, currentAction)?.uid ?? '') : '';
+    actionUkuranBerhasil = batch.detail_ukuran.map((_, i) => actionRemainingBySize[i] ?? 0);
+    actionUkuranReject = batch.detail_ukuran.map(() => 0);
     actionError = null;
     actionOpen = true;
   }
@@ -302,37 +386,62 @@
     if (!batch || !currentAction || !$currentUser || !actionFormValid) return;
     actionSaving = true;
     actionError = null;
-    const uid = $currentUser.uid;
-    const nama = $currentUser.name || $currentUser.email || $currentUser.uid;
+    const operatorUid = $currentUser.uid;
+    const operatorNama = $currentUser.name || $currentUser.email || $currentUser.uid;
     try {
-      const worker = currentAction.needsWorker
+      const selectedWorker = currentAction.needsWorker
         ? actionWorkers.find((k) => k.uid === actionWorkerUid)
         : undefined;
+      const assignedWorker = assignedWorkerForAction(batch, currentAction);
+      const worker = selectedWorker
+        ? { uid: selectedWorker.uid, nama: selectedWorker.name }
+        : assignedWorker;
+      const riwayatWorker = worker ?? assignedWorkerForStatus(batch, batch.status);
+      const riwayatUid = riwayatWorker?.uid ?? operatorUid;
+      const riwayatNama = riwayatWorker?.nama ?? operatorNama;
       const pcsBerhasil = currentAction.needsPcs ? actionTotalBerhasil : (batch.pcs_saat_ini ?? batch.total_pcs);
       const pcsReject   = currentAction.needsPcs ? actionTotalReject   : 0;
+      const pcsBerhasilFinal = currentAction.needsPcs && actionCompletesStage
+        ? actionTotalSubmittedBefore + actionTotalBerhasil
+        : pcsBerhasil;
+      const pcsRejectFinal = currentAction.needsPcs && actionCompletesStage
+        ? actionTotalRejectedBefore + actionTotalReject
+        : pcsReject;
+      const submitDetailUkuran = batch.detail_ukuran.map((du, i) => ({
+        ukuran: du.ukuran,
+        jumlah_pcs: Number(actionUkuranBerhasil[i]) || 0,
+      })).filter((du) => du.jumlah_pcs > 0);
+      const submitDetailReject = batch.detail_ukuran.map((du, i) => ({
+        ukuran: du.ukuran,
+        jumlah_pcs: Number(actionUkuranReject[i]) || 0,
+      })).filter((du) => du.jumlah_pcs > 0);
 
       const newDetailUkuran = currentAction.needsPcs
         ? batch.detail_ukuran.map((du, i) => ({
             ukuran: du.ukuran,
-            jumlah_pcs: Number(actionUkuranBerhasil[i]) || 0,
+            jumlah_pcs:
+              (actionSubmittedBySize.get(du.ukuran) ?? 0) +
+              (Number(actionUkuranBerhasil[i]) || 0),
           })).filter((du) => du.jumlah_pcs > 0)
         : undefined;
 
-      if (currentAction.isFinal) {
+      if (currentAction.needsPcs && actionCanPartial && !actionCompletesStage) {
+        await splitJahitPartialToSteam(batch.id, riwayatUid, riwayatNama, submitDetailUkuran, submitDetailReject);
+      } else if (currentAction.isFinal) {
         // Steam selesai: langsung complete dalam satu operasi (skip STEAM_DONE)
-        await completeBatchProduksi(batch.id, uid, nama, {
+        await completeBatchProduksi(batch.id, riwayatUid, riwayatNama, {
           status_dari: batch.status,
-          pcs_berhasil: pcsBerhasil,
-          pcs_reject: pcsReject,
+          pcs_berhasil: pcsBerhasilFinal,
+          pcs_reject: pcsRejectFinal,
         }, newDetailUkuran ?? undefined);
       } else {
         await updateStatusBatch(
           batch.id,
           currentAction.nextStatus,
-          uid,
-          nama,
-          { status_dari: batch.status, pcs_berhasil: pcsBerhasil, pcs_reject: pcsReject },
-          worker ? { uid: worker.uid, nama: worker.name } : undefined,
+          riwayatUid,
+          riwayatNama,
+          { status_dari: batch.status, pcs_berhasil: pcsBerhasilFinal, pcs_reject: pcsRejectFinal },
+          worker,
           newDetailUkuran,
         );
       }
@@ -359,6 +468,41 @@
     }
   }
 
+  async function completeSteamDirectly() {
+    if (!batch || !$currentUser || batch.status !== 'JAHIT_DONE' || directSteamSaving) return;
+    directSteamSaving = true;
+    const operatorUid = $currentUser.uid;
+    const operatorNama = $currentUser.name || $currentUser.email || operatorUid;
+    const steamWorker = assignedWorkerForStatus(batch, 'STEAM_IN_PROGRESS');
+    const uid = steamWorker?.uid ?? operatorUid;
+    const nama = steamWorker?.nama ?? operatorNama;
+    const pcs = batch.pcs_saat_ini ?? batch.total_pcs;
+    try {
+      await updateStatusBatch(
+        batch.id,
+        'STEAM_IN_PROGRESS',
+        uid,
+        nama,
+        { status_dari: batch.status, pcs_berhasil: pcs, pcs_reject: 0 },
+      );
+      await completeBatchProduksi(batch.id, uid, nama, {
+        status_dari: 'STEAM_IN_PROGRESS',
+        pcs_berhasil: pcs,
+        pcs_reject: 0,
+        catatan: 'Steam diselesaikan langsung oleh admin',
+      });
+      batchCache.invalidate();
+      const id = $page.params.id ?? '';
+      const [b, r] = await Promise.all([getBatchById(id), getRiwayatBatch(id)]);
+      if (b) { batch = b; riwayat = r; }
+    } catch (e: any) {
+      actionError = e?.message ?? 'Gagal menyelesaikan steam langsung.';
+      actionOpen = true;
+    } finally {
+      directSteamSaving = false;
+    }
+  }
+
   // ─── Load ─────────────────────────────────────────────────────────
   async function load() {
     loading = true;
@@ -368,13 +512,17 @@
     batch = b;
     riwayat = r;
     karyawanList = karyawan;
+    await loadSourceCuttingHistory(b);
     loading = false;
 
     // Auto-selesaikan batch yang stuck di STEAM_DONE dari alur lama
     if (b.status === 'STEAM_DONE' && $currentUser) {
       try {
-        const uid = $currentUser.uid;
-        const nama = $currentUser.name || $currentUser.email || uid;
+        const operatorUid = $currentUser.uid;
+        const operatorNama = $currentUser.name || $currentUser.email || operatorUid;
+        const steamWorker = assignedWorkerForStatus(b, 'STEAM_DONE');
+        const uid = steamWorker?.uid ?? operatorUid;
+        const nama = steamWorker?.nama ?? operatorNama;
         await completeBatchProduksi(b.id, uid, nama, {
           status_dari: 'STEAM_DONE',
           pcs_berhasil: b.pcs_saat_ini ?? b.total_pcs,
@@ -387,6 +535,44 @@
         console.error('[auto-complete-steam] Gagal complete batch', b.id, e);
       }
     }
+  }
+
+  async function loadSourceCuttingHistory(currentBatch: BatchProduksi) {
+    sourceCuttingBatches = [];
+    sourceCuttingRiwayat = [];
+    if (!currentBatch.dari_potongan) return;
+
+    let sourceIds = Array.from(new Set((currentBatch.sumber_cutting ?? []).map((source) => source.batch_id)));
+    let allBatches: BatchProduksi[] = [];
+
+    if (sourceIds.length === 0) {
+      try {
+        allBatches = await batchCache.get();
+        sourceIds = allBatches
+          .filter(
+            (candidate) =>
+              candidate.status === 'CUTTING_DONE' &&
+              !candidate.dari_potongan &&
+              candidate.model_id === currentBatch.model_id &&
+              (candidate.nama_warna ?? '') === (currentBatch.nama_warna ?? ''),
+          )
+          .map((candidate) => candidate.id);
+      } catch {
+        sourceIds = [];
+      }
+    }
+
+    if (sourceIds.length === 0) return;
+
+    const sourceBatches = await Promise.all(
+      sourceIds.map(async (sourceId) => allBatches.find((candidate) => candidate.id === sourceId) ?? getBatchById(sourceId))
+    );
+    sourceCuttingBatches = sourceBatches.filter(Boolean) as BatchProduksi[];
+
+    const histories = await Promise.all(sourceIds.map((sourceId) => getRiwayatBatch(sourceId).catch(() => [])));
+    sourceCuttingRiwayat = histories
+      .flat()
+      .filter((item) => item.status_ke === 'CUTTING_IN_PROGRESS' || item.status_ke === 'CUTTING_DONE');
   }
 
   onMount(load);
@@ -494,6 +680,12 @@
                 <UsersIcon class="mr-2 h-4 w-4" />
                 Ganti Penugasan
               </DropdownMenu.Item>
+              {#if batch.status === 'JAHIT_DONE'}
+                <DropdownMenu.Item onclick={completeSteamDirectly}>
+                  <ZapIcon class="mr-2 h-4 w-4" />
+                  {directSteamSaving ? 'Menyelesaikan...' : 'Selesaikan Steam Langsung'}
+                </DropdownMenu.Item>
+              {/if}
             {/if}
             {#if canDelete}
               <DropdownMenu.Separator />
@@ -551,7 +743,7 @@
           </div>
           <div>
             <p class="text-xs text-gray-400">Total PCS Awal</p>
-            <p class="font-medium text-gray-800">{batch.total_pcs.toLocaleString('id-ID')} pcs</p>
+            <p class="font-medium text-gray-800">{displayTotalPcsAwal.toLocaleString('id-ID')} pcs</p>
           </div>
           <div>
             <p class="text-xs text-gray-400">PCS Saat Ini</p>
@@ -585,7 +777,7 @@
         <p class="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-400">Penugasan</p>
         <div class="space-y-2">
           {#each [
-            { label: 'Cutting', worker: batch.penugasan?.cutting, icon: ScissorsIcon },
+            { label: 'Cutting', worker: batch.penugasan?.cutting ?? sourceCuttingWorker(), icon: ScissorsIcon },
             { label: 'Jahit',   worker: batch.penugasan?.jahit,   icon: PackageIcon  },
             { label: 'Steam',   worker: batch.penugasan?.steam,   icon: ZapIcon      },
           ] as p}
@@ -629,14 +821,14 @@
     <!-- Right col: riwayat -->
     <div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
       <p class="mb-4 text-xs font-semibold uppercase tracking-wide text-gray-400">Riwayat Proses</p>
-      {#if riwayat.length === 0}
+      {#if combinedRiwayat.length === 0}
         <p class="text-center text-xs text-gray-400 py-6">Belum ada riwayat</p>
       {:else}
         <div class="relative">
           <!-- vertical line -->
           <div class="absolute left-[11px] top-3 bottom-3 w-px bg-gray-100"></div>
           <div class="space-y-5">
-            {#each riwayat as r}
+            {#each combinedRiwayat as r}
               <div class="relative flex gap-3">
                 <div class="relative z-10 mt-0.5 flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full border-2 border-gray-200 bg-white">
                   <CircleIcon class="h-2 w-2 fill-gray-400 text-gray-400" />
@@ -648,10 +840,12 @@
                     </span>
                     {#if r.tipe === 'edit_kuantitas'}
                       <span class="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-500">edit</span>
+                    {:else if r.tipe === 'setor_proses'}
+                      <span class="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-600">setor parsial</span>
                     {/if}
                   </div>
                   <p class="mt-0.5 text-[11px] text-gray-400">{formatDateTime(r.timestamp)}</p>
-                  <p class="mt-0.5 text-[11px] font-medium text-gray-600">{r.updated_by_nama}</p>
+                  <p class="mt-0.5 text-[11px] font-medium text-gray-600">{displayRiwayatWorkerName(r)}</p>
                   <div class="mt-1 flex flex-wrap gap-2 text-[11px] text-gray-500">
                     <span>{r.pcs_berhasil} pcs berhasil</span>
                     {#if r.pcs_reject > 0}
@@ -843,7 +1037,11 @@
             <p class="text-sm font-medium text-gray-700">
               Petugas {currentAction.workerRole === 'kepala_cutting' ? 'Cutting' : currentAction.workerRole === 'kepala_jahit' ? 'Jahit' : 'Steam'}
             </p>
-            {#if actionWorkers.length === 0}
+            {#if currentAssignedWorker}
+              <div class="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm font-medium text-gray-800">
+                {currentAssignedWorker.nama}
+              </div>
+            {:else if actionWorkers.length === 0}
               <p class="text-xs text-amber-600">Belum ada akun petugas yang sesuai di sistem.</p>
             {:else}
               <Select.Root
@@ -869,35 +1067,49 @@
         {/if}
 
         {#if currentAction.needsPcs}
-          <!-- Tabel per-ukuran: Ukuran | Stok | Berhasil | Reject -->
+          <!-- Tabel per-ukuran -->
           <div class="overflow-hidden rounded-lg border border-gray-200">
             <table class="w-full text-sm">
               <thead class="bg-gray-50">
                 <tr>
                   <th class="px-3 py-2 text-left text-xs font-semibold text-gray-500">Ukuran</th>
                   <th class="px-3 py-2 text-center text-xs font-semibold text-gray-500">Stok</th>
+                  <th class="px-3 py-2 text-center text-xs font-semibold text-gray-500">Sudah</th>
+                  <th class="px-3 py-2 text-center text-xs font-semibold text-gray-500">Sisa</th>
                   <th class="px-3 py-2 text-center text-xs font-semibold text-gray-500">Berhasil</th>
                   <th class="px-3 py-2 text-center text-xs font-semibold text-gray-500">Reject</th>
                 </tr>
               </thead>
               <tbody>
                 {#each batch.detail_ukuran as du, i}
-                  {@const berhasil = actionUkuranBerhasil[i] ?? 0}
-                  {@const reject = Math.max(0, du.jumlah_pcs - (Number(berhasil) || 0))}
-                  {@const overLimit = berhasil > du.jumlah_pcs}
+                  {@const berhasil = Number(actionUkuranBerhasil[i]) || 0}
+                  {@const reject = Number(actionUkuranReject[i]) || 0}
+                  {@const sudah = (actionSubmittedBySize.get(du.ukuran) ?? 0) + (actionRejectedBySize.get(du.ukuran) ?? 0)}
+                  {@const sisa = actionRemainingBySize[i] ?? 0}
+                  {@const overLimit = berhasil + reject > sisa}
                   <tr class="border-t border-gray-100">
                     <td class="px-3 py-2 font-semibold text-gray-700">{du.ukuran}</td>
                     <td class="px-3 py-2 text-center text-gray-500">{du.jumlah_pcs}</td>
+                    <td class="px-3 py-2 text-center text-gray-500">{sudah}</td>
+                    <td class="px-3 py-2 text-center font-medium text-gray-700">{sisa}</td>
                     <td class="px-3 py-2 text-center">
                       <Input
                         type="number"
                         min="0"
-                        max={du.jumlah_pcs}
+                        max={sisa}
                         class="h-8 text-center text-sm {overLimit ? 'border-red-400' : ''}"
                         bind:value={actionUkuranBerhasil[i]}
                       />
                     </td>
-                    <td class="px-3 py-2 text-center text-red-600">{reject}</td>
+                    <td class="px-3 py-2 text-center">
+                      <Input
+                        type="number"
+                        min="0"
+                        max={sisa}
+                        class="h-8 text-center text-sm text-red-600 {overLimit ? 'border-red-400' : ''}"
+                        bind:value={actionUkuranReject[i]}
+                      />
+                    </td>
                   </tr>
                 {/each}
               </tbody>
@@ -905,17 +1117,21 @@
                 <tr>
                   <td class="px-3 py-2 text-xs font-semibold text-gray-500">Total</td>
                   <td class="px-3 py-2 text-center text-xs font-semibold text-gray-700">{actionMaxPcs}</td>
+                  <td class="px-3 py-2 text-center text-xs font-semibold text-gray-700">{actionTotalSubmittedBefore + actionTotalRejectedBefore}</td>
+                  <td class="px-3 py-2 text-center text-xs font-semibold text-gray-700">{actionTotalRemaining}</td>
                   <td class="px-3 py-2 text-center text-xs font-semibold text-gray-700">{actionTotalBerhasil}</td>
                   <td class="px-3 py-2 text-center text-xs font-semibold text-red-600">{actionTotalReject}</td>
                 </tr>
               </tfoot>
             </table>
           </div>
-          {#if actionTotalReject > actionMaxPcs}
-            <p class="text-xs text-red-500">Total reject melebihi stok saat ini ({actionMaxPcs} pcs)</p>
+          {#if actionTotalBerhasil + actionTotalReject > actionTotalRemaining}
+            <p class="text-xs text-red-500">Total berhasil + reject melebihi sisa pekerjaan ({actionTotalRemaining} pcs)</p>
           {/if}
           {#if currentAction.isFinal}
             <p class="text-xs text-emerald-600">Batch akan langsung diselesaikan dan masuk ke stok barang jadi.</p>
+          {:else if actionCanPartial && !actionCompletesStage}
+            <p class="text-xs text-blue-600">Setoran ini dicatat sebagai parsial. Status batch tetap {STATUS_LABEL[batch.status]}.</p>
           {/if}
         {/if}
 

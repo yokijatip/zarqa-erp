@@ -1,11 +1,13 @@
 <script lang="ts">
   import { createBatchProduksi, createBatchDariPotongan } from "$lib/firebase/batch-produksi";
   import { getKaryawanList } from "$lib/firebase/karyawan";
-  import { modelBajuCache, stokPotonganCache } from "$lib/stores/data-cache.svelte";
+  import { batchCache, modelBajuCache, stokPotonganCache } from "$lib/stores/data-cache.svelte";
   import { currentUser } from "$lib/stores/auth.store";
   import {
     UKURAN_ORDER,
+    type BatchProduksi,
     type ModelBaju,
+    type SumberCutting,
     type StokPotongan,
     type UkuranBaju,
     type UserProfile,
@@ -50,6 +52,7 @@
   let fPenugasanUid = $state("");
   let fJumlah = $state<Partial<Record<UkuranBaju, number>>>({});
   let stokPotonganModel = $state<StokPotongan[]>([]);
+  let batchList = $state<BatchProduksi[]>([]);
   let workerList = $state<UserProfile[]>([]);
 
   let rolePenugasan = $derived<UserRole>(
@@ -176,6 +179,46 @@
     return (model.warna_tersedia ?? []).map((w) => w.nama_warna).join(" · ");
   }
 
+  function mergeSources(sources: SumberCutting[]): SumberCutting[] {
+    const map = new Map<string, SumberCutting>();
+    for (const source of sources) map.set(source.batch_id, source);
+    return Array.from(map.values());
+  }
+
+  function cuttingSourcesForGroup(group: StokPotonganGroup | null): SumberCutting[] {
+    if (!group) return [];
+    const explicitSources = mergeSources(group.items.flatMap((item) => item.sumber_cutting ?? []));
+    if (explicitSources.length > 0) return explicitSources;
+
+    return batchList
+      .filter(
+        (batch) =>
+          batch.status === "CUTTING_DONE" &&
+          !batch.dari_potongan &&
+          batch.model_id === group.model_id &&
+          (batch.nama_warna ?? "") === (group.nama_warna ?? ""),
+      )
+      .map((batch) => ({
+        batch_id: batch.id,
+        nama_model: batch.nama_model,
+        ...(batch.nama_warna ? { nama_warna: batch.nama_warna } : {}),
+        ...(batch.penugasan?.cutting ? { penugasan: { cutting: batch.penugasan.cutting } } : {}),
+      }));
+  }
+
+  function cuttingInfoForGroup(group: StokPotonganGroup | null): string {
+    const names = Array.from(
+      new Set(
+        cuttingSourcesForGroup(group)
+          .map((source) => source.penugasan?.cutting?.nama)
+          .filter(Boolean) as string[],
+      ),
+    );
+    if (names.length === 0) return "Cutting: belum tercatat";
+    if (names.length === 1) return `Cutting: ${names[0]}`;
+    return `Cutting: ${names.slice(0, 2).join(", ")}${names.length > 2 ? ` +${names.length - 2}` : ""}`;
+  }
+
   async function loadModels() {
     loadingModels = true;
     try {
@@ -198,9 +241,12 @@
   async function loadReadyPotongan() {
     loadingStock = true;
     try {
-      stokPotonganModel = await stokPotonganCache.get();
+      const [stok, batches] = await Promise.all([stokPotonganCache.get(), batchCache.get()]);
+      stokPotonganModel = stok;
+      batchList = batches;
     } catch {
       stokPotonganModel = [];
+      batchList = [];
     } finally {
       loadingStock = false;
     }
@@ -216,6 +262,7 @@
     fPenugasanUid = "";
     fJumlah = {};
     stokPotonganModel = [];
+    batchList = [];
     errorMsg = null;
     await Promise.all([mode === "jahit" ? loadReadyPotongan() : loadModels(), loadWorkers()]);
   }
@@ -245,6 +292,7 @@
     saving = true;
     errorMsg = null;
     try {
+      const sumberCutting = mode === "jahit" ? cuttingSourcesForGroup(selectedPotonganGroup) : [];
       const inputData = {
         model_id: mode === "jahit" ? selectedPotonganGroup!.model_id : fModelId,
         nama_model: selectedNamaModel,
@@ -256,6 +304,7 @@
           : {}),
         detail_ukuran: detailUkuran,
         kain_digunakan: kainDibutuhkan,
+        ...(sumberCutting.length > 0 ? { sumber_cutting: sumberCutting } : {}),
         penugasan: {
           [mode]: {
             uid: fPenugasanUid,
@@ -368,20 +417,23 @@
                 {#if mode === "jahit"}
                   {#each stokPotonganGroups as group}
                     <Select.Item value={group.key} class="overflow-hidden">
-                      <span class="flex min-w-0 items-center gap-2">
-                        {#if group.nama_warna}
-                          <span
-                            class="inline-block h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-black/10"
-                            style="background:{group.kode_hex_warna}"
-                          ></span>
-                        {/if}
-                        <span class="truncate">
-                          {group.nama_model}
-                          {group.nama_warna ? ` - ${group.nama_warna}` : ""}
+                      <span class="flex min-w-0 flex-col gap-0.5">
+                        <span class="flex min-w-0 items-center gap-2">
+                          {#if group.nama_warna}
+                            <span
+                              class="inline-block h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-black/10"
+                              style="background:{group.kode_hex_warna}"
+                            ></span>
+                          {/if}
+                          <span class="truncate">
+                            {group.nama_model}
+                            {group.nama_warna ? ` - ${group.nama_warna}` : ""}
+                          </span>
+                          <span class="ml-auto shrink-0 text-xs text-gray-400">
+                            {group.items.reduce((sum, item) => sum + item.stok_tersedia, 0)} pcs
+                          </span>
                         </span>
-                        <span class="ml-auto shrink-0 text-xs text-gray-400">
-                          {group.items.reduce((sum, item) => sum + item.stok_tersedia, 0)} pcs
-                        </span>
+                        <span class="truncate text-[11px] text-gray-400">{cuttingInfoForGroup(group)}</span>
                       </span>
                     </Select.Item>
                   {/each}
@@ -412,6 +464,15 @@
             </Select.Root>
           {/if}
         </div>
+
+        {#if mode === "jahit" && selectedPotonganGroup}
+          <div class="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-sm text-gray-600">
+            <span class="font-medium text-gray-800">{cuttingInfoForGroup(selectedPotonganGroup)}</span>
+            <span class="ml-2 text-xs text-gray-400">
+              {selectedPotonganGroup.items.reduce((sum, item) => sum + item.stok_tersedia, 0)} pcs tersedia
+            </span>
+          </div>
+        {/if}
 
         {#if mode === "cutting" && selectedModel && (selectedModel.warna_tersedia?.length ?? 0) > 0}
           <div>

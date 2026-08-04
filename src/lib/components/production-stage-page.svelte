@@ -68,7 +68,7 @@
   let quickMaxPcs = $derived(quickBatch ? (quickBatch.pcs_saat_ini ?? quickBatch.total_pcs) : 0);
   let quickFormValid = $derived.by(() => {
     if (!quickNextStatus) return false;
-    if (quickNeedsWorker && !quickWorkerUid) return false;
+    if (quickNeedsWorker && !quickWorkerUid && !quickBatch?.penugasan?.steam) return false;
     if (quickNeedsPcs && quickTotalReject > quickMaxPcs) return false;
     return true;
   });
@@ -85,12 +85,17 @@
     if (!quickBatch || !quickNextStatus || !$currentUser || !quickFormValid) return;
     quickSaving = true;
     quickError = null;
-    const uid = $currentUser.uid;
-    const nama = $currentUser.name || $currentUser.email || $currentUser.uid;
+    const operatorUid = $currentUser.uid;
+    const operatorNama = $currentUser.name || $currentUser.email || $currentUser.uid;
     try {
-      const worker = quickNeedsWorker
+      const selectedWorker = quickNeedsWorker
         ? quickWorkers.find((k) => k.uid === quickWorkerUid)
         : undefined;
+      const worker = selectedWorker
+        ? { uid: selectedWorker.uid, nama: selectedWorker.name }
+        : quickBatch.penugasan?.steam;
+      const riwayatUid = worker?.uid ?? operatorUid;
+      const riwayatNama = worker?.nama ?? operatorNama;
       const pcsBerhasil = quickNeedsPcs ? quickTotalBerhasil : (quickBatch.pcs_saat_ini ?? quickBatch.total_pcs);
       const pcsReject   = quickNeedsPcs ? quickTotalReject   : 0;
       const newDetailUkuran = quickNeedsPcs
@@ -102,7 +107,7 @@
 
       if (quickNextStatus === "STEAM_DONE") {
         // Langsung complete, skip STEAM_DONE sebagai status perantara
-        await completeBatchProduksi(quickBatch.id, uid, nama, {
+        await completeBatchProduksi(quickBatch.id, riwayatUid, riwayatNama, {
           status_dari: quickBatch.status as any,
           pcs_berhasil: pcsBerhasil,
           pcs_reject: pcsReject,
@@ -111,10 +116,10 @@
         await updateStatusBatch(
           quickBatch.id,
           quickNextStatus as any,
-          uid,
-          nama,
+          riwayatUid,
+          riwayatNama,
           { status_dari: quickBatch.status as any, pcs_berhasil: pcsBerhasil, pcs_reject: pcsReject },
-          worker ? { uid: worker.uid, nama: worker.name } : undefined,
+          worker,
           newDetailUkuran,
         );
       }
@@ -215,13 +220,13 @@
     if (config.key !== 'steam') return;
     const stuck = batchList.filter((b) => b.status === 'STEAM_DONE');
     if (stuck.length === 0) return;
-    const uid = $currentUser?.uid ?? 'system';
-    const nama = $currentUser?.name || $currentUser?.email || 'system';
+    const operatorUid = $currentUser?.uid ?? 'system';
+    const operatorNama = $currentUser?.name || $currentUser?.email || 'system';
     let completed = false;
     for (const b of stuck) {
       try {
         const pcsBerhasil = b.pcs_saat_ini ?? b.total_pcs;
-        await completeBatchProduksi(b.id, uid, nama, {
+        await completeBatchProduksi(b.id, b.penugasan?.steam?.uid ?? operatorUid, b.penugasan?.steam?.nama ?? operatorNama, {
           status_dari: 'STEAM_DONE',
           pcs_berhasil: pcsBerhasil,
           pcs_reject: 0,
@@ -507,7 +512,11 @@
           <!-- Pilih petugas steam -->
           <div class="space-y-1.5">
             <p class="text-sm font-medium text-gray-700">Petugas Steam</p>
-            {#if quickWorkers.length === 0}
+            {#if quickBatch.penugasan?.steam}
+              <div class="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm font-medium text-gray-800">
+                {quickBatch.penugasan.steam.nama}
+              </div>
+            {:else if quickWorkers.length === 0}
               <p class="text-xs text-amber-600">Belum ada akun Kepala Steam di sistem.</p>
             {:else}
               <Select.Root
