@@ -134,6 +134,14 @@ export interface SumberCutting {
   batch_id: string;
   nama_model: string;
   nama_warna?: string;
+  // Ukuran spesifik yang dikontribusikan lot ini (stok_potongan disimpan per-ukuran,
+  // jadi field ini menandai lot tsb ada di "antrian" ukuran mana).
+  ukuran?: string;
+  // Jumlah pcs dari batch_id ini yang benar-benar terpakai/tersisa untuk lot ini.
+  // Dipakai untuk konsumsi FIFO dari pool stok_potongan, supaya batch baru yang
+  // ditarik dari pool hanya "mewarisi" sumber cutting sebanyak yang benar-benar
+  // diambil — bukan seluruh riwayat kontributor pool tersebut.
+  jumlah_pcs?: number;
   penugasan?: {
     cutting?: PenugasanWorker;
   };

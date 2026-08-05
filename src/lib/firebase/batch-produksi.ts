@@ -21,21 +21,58 @@ function buildStokPotonganDocId(modelId: string, ukuran: string, namaWarna?: str
   return `${modelId}__${ukuran}__${warnaDocKey(namaWarna)}`;
 }
 
-function buildSumberCutting(batch: BatchProduksi): SumberCutting {
+function buildSumberCutting(batch: BatchProduksi, ukuran: string, jumlahPcs: number): SumberCutting {
   return {
     batch_id: batch.id,
     nama_model: batch.nama_model,
     ...(batch.nama_warna ? { nama_warna: batch.nama_warna } : {}),
+    ukuran,
+    jumlah_pcs: jumlahPcs,
     ...(batch.penugasan?.cutting ? { penugasan: { cutting: batch.penugasan.cutting } } : {}),
   };
 }
 
-function mergeSumberCutting(existing: SumberCutting[] | undefined, next: SumberCutting[]): SumberCutting[] {
-  const map = new Map<string, SumberCutting>();
-  for (const item of [...(existing ?? []), ...next]) {
-    map.set(item.batch_id, item);
+// Tambahkan satu lot baru ke akhir antrian sumber_cutting sebuah pool stok_potongan.
+// Kalau lot paling belakang berasal dari batch_id yang sama (misalnya cutting yang
+// disetor bertahap), jumlah pcs-nya digabung supaya antrian tidak pecah jadi banyak
+// entri kecil untuk satu batch cutting yang sama.
+function appendSumberCuttingLot(existing: SumberCutting[] | undefined, lot: SumberCutting): SumberCutting[] {
+  const list = existing ? [...existing] : [];
+  const last = list[list.length - 1];
+  if (last && last.batch_id === lot.batch_id) {
+    list[list.length - 1] = { ...last, jumlah_pcs: (last.jumlah_pcs ?? 0) + (lot.jumlah_pcs ?? 0) };
+    return list;
   }
-  return Array.from(map.values());
+  list.push(lot);
+  return list;
+}
+
+// Ambil `qty` pcs dari antrian sumber_cutting sebuah pool secara FIFO (lot paling lama
+// diambil duluan). Mengembalikan lot-lot yang benar-benar terpakai (untuk diwariskan ke
+// batch baru sebagai sumber_cutting-nya) beserta sisa antrian setelah pengambilan.
+// Ini yang memastikan batch baru hanya "mewarisi" sumber cutting sebanyak yang memang
+// diambil dari pool — bukan seluruh histori kontributor pool tersebut.
+function consumeSumberCuttingLots(
+  queue: SumberCutting[] | undefined,
+  qty: number,
+): { consumed: SumberCutting[]; remaining: SumberCutting[] } {
+  const consumed: SumberCutting[] = [];
+  const remaining: SumberCutting[] = [];
+  let sisa = qty;
+  for (const lot of queue ?? []) {
+    const tersedia = lot.jumlah_pcs ?? 0;
+    if (sisa <= 0 || tersedia <= 0) {
+      remaining.push(lot);
+      continue;
+    }
+    const diambil = Math.min(sisa, tersedia);
+    consumed.push({ ...lot, jumlah_pcs: diambil });
+    sisa -= diambil;
+    if (tersedia > diambil) {
+      remaining.push({ ...lot, jumlah_pcs: tersedia - diambil });
+    }
+  }
+  return { consumed, remaining };
 }
 
 // Status yang menandakan kain sudah dipotong (stok kain sudah berkurang)
@@ -103,23 +140,25 @@ export async function createBatchDariPotongan(
       }
     }
 
-    const sumberCutting = mergeSumberCutting(
-      data.sumber_cutting,
-      stokSnapshots.flatMap(({ stokSnap }) => {
-        const stok = stokSnap.data() as { sumber_cutting?: SumberCutting[] };
-        return stok.sumber_cutting ?? [];
-      })
-    );
-    const firstCuttingWorker = sumberCutting.find((source) => source.penugasan?.cutting)?.penugasan?.cutting;
-
+    // Tarik lot cutting secara FIFO per ukuran, sebanyak pcs yang benar-benar diambil.
+    // Sisa antrian (yang tidak terpakai) dikembalikan ke pool agar tetap bisa dilacak
+    // untuk penarikan berikutnya.
+    const sumberCuttingBaru: SumberCutting[] = [];
     for (const { du, stokRef, stokSnap } of stokSnapshots) {
-      const stok = stokSnap.data() as { stok_tersedia: number; total_terpakai: number };
+      const stok = stokSnap.data() as { stok_tersedia: number; total_terpakai: number; sumber_cutting?: SumberCutting[] };
+      const { consumed, remaining } = consumeSumberCuttingLots(stok.sumber_cutting, du.jumlah_pcs);
+      sumberCuttingBaru.push(...consumed.map((lot) => ({ ...lot, ukuran: du.ukuran })));
+
       transaction.update(stokRef, {
         stok_tersedia: stok.stok_tersedia - du.jumlah_pcs,
         total_terpakai: stok.total_terpakai + du.jumlah_pcs,
+        sumber_cutting: remaining,
         updatedAt: serverTimestamp(),
       });
     }
+
+    const sumberCutting = [...(data.sumber_cutting ?? []), ...sumberCuttingBaru];
+    const firstCuttingWorker = sumberCutting.find((source) => source.penugasan?.cutting)?.penugasan?.cutting;
 
     transaction.set(ref, {
       ...data,
@@ -491,7 +530,6 @@ export async function sinkronStokPotonganBatch(batchId: string): Promise<void> {
     if (currentBatch.stok_potongan_synced) return;
 
     const currentDetailBerhasil = hitungDetailBerhasil(currentBatch);
-    const currentSumberCutting = buildSumberCutting(currentBatch);
     const stokSnapshots = await Promise.all(
       currentDetailBerhasil.map(async (item) => {
         const stokRef = stokRefs.get(item.ukuran);
@@ -502,6 +540,8 @@ export async function sinkronStokPotonganBatch(batchId: string): Promise<void> {
     );
 
     for (const { item, stokRef, stokSnap } of stokSnapshots) {
+      const lot = buildSumberCutting(currentBatch, item.ukuran, item.jumlah_pcs);
+
       if (!stokSnap.exists()) {
         transaction.set(stokRef, {
           model_id: currentBatch.model_id,
@@ -512,7 +552,7 @@ export async function sinkronStokPotonganBatch(batchId: string): Promise<void> {
           stok_tersedia: item.jumlah_pcs,
           total_masuk: item.jumlah_pcs,
           total_terpakai: 0,
-          sumber_cutting: [currentSumberCutting],
+          sumber_cutting: [lot],
           updatedAt: serverTimestamp(),
         });
         continue;
@@ -524,7 +564,7 @@ export async function sinkronStokPotonganBatch(batchId: string): Promise<void> {
         total_masuk: stok.total_masuk + item.jumlah_pcs,
         ...(currentBatch.nama_warna ? { nama_warna: currentBatch.nama_warna } : {}),
         ...(currentBatch.kode_hex_warna ? { kode_hex_warna: currentBatch.kode_hex_warna } : {}),
-        sumber_cutting: mergeSumberCutting(stok.sumber_cutting, [currentSumberCutting]),
+        sumber_cutting: appendSumberCuttingLot(stok.sumber_cutting, lot),
         updatedAt: serverTimestamp(),
       });
     }

@@ -18,6 +18,7 @@
     type UkuranBaju,
     type BarangKeluar,
     type RiwayatBarangJadi,
+    type SumberCutting,
   } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
@@ -370,7 +371,17 @@
       batch.sumber_cutting &&
       batch.sumber_cutting.length > 0
     ) {
+      // Dedupe by batch_id: satu batch sumber cutting bisa muncul lebih dari satu
+      // kali sebagai lot berbeda (misalnya penarikan dari pool yang terpecah jadi
+      // beberapa lot dari sumber yang sama). Riwayat proses batch itu hanya perlu
+      // diambil & ditampilkan SEKALI, bukan sebanyak jumlah lot-nya.
+      const sumberUnik = new Map<string, SumberCutting>();
       for (const sumber of batch.sumber_cutting) {
+        if (!sumberUnik.has(sumber.batch_id))
+          sumberUnik.set(sumber.batch_id, sumber);
+      }
+
+      for (const sumber of sumberUnik.values()) {
         if (!cuttingNama) cuttingNama = sumber.penugasan?.cutting?.nama ?? null;
         try {
           const sumberProses = await getRiwayatBatch(sumber.batch_id);
