@@ -259,6 +259,19 @@ export interface DetailKeluar {
   jumlah_pcs: number;
 }
 
+// Daftar tujuan pengiriman baku — dipakai di dropdown form & rekap,
+// supaya nilai `tujuan` selalu konsisten dan bisa direkap per kategori.
+export const TUJUAN_PENGIRIMAN_OPTIONS = [
+  'Gudang Central',
+  'Shopee',
+  'Tiktok',
+  'Lazada',
+  'Tokopedia',
+  'Web E-Commerce',
+] as const;
+
+export type TujuanPengiriman = (typeof TUJUAN_PENGIRIMAN_OPTIONS)[number];
+
 export interface BarangKeluar {
   id: string;
   model_id: string;
@@ -267,6 +280,9 @@ export interface BarangKeluar {
   kode_hex_warna?: string;
   detail_keluar: DetailKeluar[];
   total_pcs: number;
+  // Tetap `string` (bukan union) supaya catatan lama dengan teks bebas
+  // masih valid secara tipe. Form baru hanya mengisi lewat dropdown
+  // TUJUAN_PENGIRIMAN_OPTIONS, jadi data ke depannya konsisten.
   tujuan: string;
   keterangan?: string;
   dicatat_oleh: string;

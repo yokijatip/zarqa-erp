@@ -1,9 +1,19 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { catatBarangKeluar, getRiwayatBarangKeluarByPeriod, batalBarangKeluar } from "$lib/firebase/barang-jadi";
+  import {
+    catatBarangKeluar,
+    getRiwayatBarangKeluarByPeriod,
+    batalBarangKeluar,
+  } from "$lib/firebase/barang-jadi";
   import { barangJadiCache } from "$lib/stores/data-cache.svelte";
   import { currentUser, userRole } from "$lib/stores/auth.store";
-  import { UKURAN_ORDER, type StokBarangJadi, type BarangKeluar, type UkuranBaju } from "$lib/types";
+  import {
+    UKURAN_ORDER,
+    TUJUAN_PENGIRIMAN_OPTIONS,
+    type StokBarangJadi,
+    type BarangKeluar,
+    type UkuranBaju,
+  } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
   import * as Select from "$lib/components/ui/select/index.js";
   import * as Table from "$lib/components/ui/table";
@@ -15,6 +25,8 @@
   import BoxesIcon from "@lucide/svelte/icons/boxes";
   import ShirtIcon from "@lucide/svelte/icons/shirt";
   import Trash2Icon from "@lucide/svelte/icons/trash-2";
+  import ClipboardListIcon from "@lucide/svelte/icons/clipboard-list";
+  import DownloadIcon from "@lucide/svelte/icons/download";
   import { type DateRange, getPeriodRange } from "$lib/period";
   import PeriodSelector from "$lib/components/period-selector.svelte";
 
@@ -26,7 +38,7 @@
   let errorMsg = $state<string | null>(null);
   let successMsg = $state<string | null>(null);
   let searchQuery = $state("");
-  let dateRange = $state<DateRange>(getPeriodRange('bulan_ini'));
+  let dateRange = $state<DateRange>(getPeriodRange("bulan_ini"));
   let openCatat = $state(false);
 
   // Cancel dialog
@@ -35,7 +47,11 @@
   let batalSaving = $state(false);
   let batalError = $state<string | null>(null);
 
-  function bukaBatal(r: BarangKeluar) { batalTarget = r; batalError = null; batalOpen = true; }
+  function bukaBatal(r: BarangKeluar) {
+    batalTarget = r;
+    batalError = null;
+    batalOpen = true;
+  }
 
   async function submitBatal() {
     if (!batalTarget || !$currentUser) return;
@@ -49,9 +65,11 @@
       barangJadiCache.invalidate();
       await load(true);
       batalOpen = false;
-      showSuccess(`Pengiriman ${batalTarget.total_pcs} pcs "${batalTarget.nama_model}" ke ${batalTarget.tujuan} berhasil dibatalkan.`);
+      showSuccess(
+        `Pengiriman ${batalTarget.total_pcs} pcs "${batalTarget.nama_model}" ke ${batalTarget.tujuan} berhasil dibatalkan.`,
+      );
     } catch (e: any) {
-      batalError = e?.message ?? 'Gagal membatalkan pengiriman.';
+      batalError = e?.message ?? "Gagal membatalkan pengiriman.";
     } finally {
       batalSaving = false;
     }
@@ -75,11 +93,18 @@
   let modelDenganStok = $derived.by(() => {
     const map = new Map<
       string,
-      { key: string; model_id: string; nama_model: string; nama_warna?: string; kode_hex_warna?: string; stok: StokBarangJadi[] }
+      {
+        key: string;
+        model_id: string;
+        nama_model: string;
+        nama_warna?: string;
+        kode_hex_warna?: string;
+        stok: StokBarangJadi[];
+      }
     >();
     for (const item of stokList) {
       if (item.stok_tersedia > 0) {
-        const key = `${item.model_id}__${item.nama_warna ?? ''}`;
+        const key = `${item.model_id}__${item.nama_warna ?? ""}`;
         if (!map.has(key)) {
           map.set(key, {
             key,
@@ -121,11 +146,70 @@
 
   // Stats (totalPengiriman & totalPcsKeluar ikut periode; stok & model = current state)
   let totalPengiriman = $derived(riwayatPeriod.length);
-  let totalPcsKeluar = $derived(riwayatPeriod.reduce((s, r) => s + r.total_pcs, 0));
+  let totalPcsKeluar = $derived(
+    riwayatPeriod.reduce((s, r) => s + r.total_pcs, 0),
+  );
   let totalStokTersedia = $derived(
     stokList.reduce((s, i) => s + i.stok_tersedia, 0),
   );
   let totalModelTersedia = $derived(modelDenganStok.length);
+
+  // Rekap barang keluar per tujuan pengiriman untuk periode yang aktif
+  // (ikut PeriodSelector yang sama dengan tabel riwayat di bawah:
+  // hari ini / minggu ini / bulan ini / custom "dari — sampai").
+  // Selalu memuat semua tujuan baku (walau 0) supaya rekapnya konstan
+  // antar periode; sisa nilai tujuan lama yang bebas teks dikumpulkan
+  // di baris "Lainnya".
+  type RekapTujuan = {
+    tujuan: string;
+    jumlahPengiriman: number;
+    totalPcs: number;
+  };
+  let rekapPerTujuan = $derived.by(() => {
+    const map = new Map<string, RekapTujuan>();
+    for (const t of TUJUAN_PENGIRIMAN_OPTIONS) {
+      map.set(t, { tujuan: t, jumlahPengiriman: 0, totalPcs: 0 });
+    }
+    for (const r of riwayatPeriod) {
+      const key = (TUJUAN_PENGIRIMAN_OPTIONS as readonly string[]).includes(
+        r.tujuan,
+      )
+        ? r.tujuan
+        : "Lainnya";
+      if (!map.has(key))
+        map.set(key, { tujuan: key, jumlahPengiriman: 0, totalPcs: 0 });
+      const item = map.get(key)!;
+      item.jumlahPengiriman += 1;
+      item.totalPcs += r.total_pcs;
+    }
+    return [...map.values()].sort((a, b) => b.totalPcs - a.totalPcs);
+  });
+
+  let rekapMaxPcs = $derived(
+    Math.max(1, ...rekapPerTujuan.map((r) => r.totalPcs)),
+  );
+
+  function exportRekapCsv() {
+    const header = ["Tujuan", "Jumlah Pengiriman", "Total Pcs"];
+    const rows = rekapPerTujuan.map((r) => [
+      r.tujuan,
+      r.jumlahPengiriman,
+      r.totalPcs,
+    ]);
+    const csv = [header, ...rows]
+      .map((row) =>
+        row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","),
+      )
+      .join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const tanggal = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = `rekap-barang-keluar-${tanggal}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 
   let filteredRiwayat = $derived.by(() => {
     if (!searchQuery.trim()) return riwayatPeriod;
@@ -175,6 +259,11 @@
       minute: "2-digit",
     });
   }
+
+  let rekapPeriodLabel = $derived.by(() => {
+    if (!dateRange) return "Semua Data";
+    return `${formatDate(dateRange.start)} – ${formatDate(dateRange.end)}`;
+  });
 
   function showSuccess(msg: string) {
     successMsg = msg;
@@ -228,8 +317,12 @@
         {
           model_id: selectedModelData!.model_id,
           nama_model: selectedModelData!.nama_model,
-          ...(selectedModelData!.nama_warna ? { nama_warna: selectedModelData!.nama_warna } : {}),
-          ...(selectedModelData!.kode_hex_warna ? { kode_hex_warna: selectedModelData!.kode_hex_warna } : {}),
+          ...(selectedModelData!.nama_warna
+            ? { nama_warna: selectedModelData!.nama_warna }
+            : {}),
+          ...(selectedModelData!.kode_hex_warna
+            ? { kode_hex_warna: selectedModelData!.kode_hex_warna }
+            : {}),
           detail_keluar: detailKeluar,
           tujuan: fTujuan.trim(),
           ...(keteranganTrimmed ? { keterangan: keteranganTrimmed } : {}),
@@ -381,6 +474,61 @@
       icon={ShirtIcon}
       footerSubtext="model ada stoknya"
     />
+  {/if}
+</div>
+
+<!-- ── Rekap per Tujuan ──────────────────────────────────────────── -->
+<div
+  class="mb-5 overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm"
+>
+  <div
+    class="flex items-center justify-between border-b border-gray-100 px-5 py-3"
+  >
+    <div class="flex items-center gap-2">
+      <ClipboardListIcon class="h-4 w-4 text-gray-400" />
+      <h2 class="text-sm font-semibold text-gray-800">
+        Rekap Pengiriman per Tujuan
+      </h2>
+      <span class="text-xs text-gray-400">— {rekapPeriodLabel}</span>
+    </div>
+    {#if !loading && rekapPerTujuan.length > 0}
+      <Button variant="outline" size="sm" onclick={exportRekapCsv}>
+        <DownloadIcon class="h-3.5 w-3.5" />
+        Export CSV
+      </Button>
+    {/if}
+  </div>
+
+  {#if loading}
+    <div class="space-y-2 p-5">
+      {#each Array(3) as _}
+        <div class="h-6 w-full animate-pulse rounded bg-gray-100"></div>
+      {/each}
+    </div>
+  {:else}
+    <div class="divide-y divide-gray-50">
+      {#each rekapPerTujuan as r (r.tujuan)}
+        <div class="flex items-center gap-4 px-5 py-3">
+          <p class="w-36 shrink-0 truncate text-sm font-medium text-gray-700">
+            {r.tujuan}
+          </p>
+          <div class="h-2 flex-1 overflow-hidden rounded-full bg-gray-100">
+            <div
+              class="h-full rounded-full bg-green-500"
+              style="width: {(r.totalPcs / rekapMaxPcs) * 100}%"
+            ></div>
+          </div>
+          <p class="w-20 shrink-0 text-right text-xs text-gray-400">
+            {r.jumlahPengiriman} kirim
+          </p>
+          <p
+            class="w-20 shrink-0 text-right text-sm font-semibold text-gray-800"
+          >
+            {r.totalPcs.toLocaleString("id-ID")} pcs
+          </p>
+        </div>
+      {/each}
+    </div>
   {/if}
 </div>
 
@@ -592,9 +740,14 @@
                   {#if selectedModelData.nama_warna}
                     <span class="text-gray-300">·</span>
                     {#if selectedModelData.kode_hex_warna}
-                      <span class="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-black/10" style="background:{selectedModelData.kode_hex_warna}"></span>
+                      <span
+                        class="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-black/10"
+                        style="background:{selectedModelData.kode_hex_warna}"
+                      ></span>
                     {/if}
-                    <span class="text-gray-500">{selectedModelData.nama_warna}</span>
+                    <span class="text-gray-500"
+                      >{selectedModelData.nama_warna}</span
+                    >
                   {/if}
                 </span>
               {:else}
@@ -609,7 +762,10 @@
                     {#if m.nama_warna}
                       <span class="text-gray-300">·</span>
                       {#if m.kode_hex_warna}
-                        <span class="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-black/10" style="background:{m.kode_hex_warna}"></span>
+                        <span
+                          class="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-black/10"
+                          style="background:{m.kode_hex_warna}"
+                        ></span>
                       {/if}
                       <span class="text-gray-400 text-xs">{m.nama_warna}</span>
                     {/if}
@@ -682,12 +838,26 @@
         >
           Tujuan Pengiriman <span class="text-red-500">*</span>
         </label>
-        <Input
-          id="tujuan-keluar"
-          type="text"
-          placeholder="Contoh: Toko Anisa, Reseller Jakarta..."
-          bind:value={fTujuan}
-        />
+        <Select.Root
+          type="single"
+          value={fTujuan || undefined}
+          onValueChange={(val) => (fTujuan = val ?? "")}
+        >
+          <Select.Trigger id="tujuan-keluar" class="w-full">
+            {#if fTujuan}
+              <span>{fTujuan}</span>
+            {:else}
+              <span class="text-muted-foreground"
+                >— Pilih tujuan pengiriman —</span
+              >
+            {/if}
+          </Select.Trigger>
+          <Select.Content preventScroll={false}>
+            {#each TUJUAN_PENGIRIMAN_OPTIONS as t}
+              <Select.Item value={t}>{t}</Select.Item>
+            {/each}
+          </Select.Content>
+        </Select.Root>
       </div>
 
       <!-- Keterangan -->
@@ -730,22 +900,47 @@
       <Dialog.Header>
         <Dialog.Title class="text-red-700">Batalkan Pengiriman?</Dialog.Title>
         <Dialog.Description>
-          Pengiriman <span class="font-semibold text-gray-800">{batalTarget.total_pcs} pcs "{batalTarget.nama_model}"</span>
+          Pengiriman <span class="font-semibold text-gray-800"
+            >{batalTarget.total_pcs} pcs "{batalTarget.nama_model}"</span
+          >
           ke <span class="font-medium">{batalTarget.tujuan}</span> akan dihapus dan
           stok barang jadi akan dikembalikan.
         </Dialog.Description>
       </Dialog.Header>
       {#if batalError}
-        <p class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{batalError}</p>
+        <p
+          class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+        >
+          {batalError}
+        </p>
       {/if}
       <Dialog.Footer class="gap-2">
-        <Button variant="outline" onclick={() => (batalOpen = false)} disabled={batalSaving}>
+        <Button
+          variant="outline"
+          onclick={() => (batalOpen = false)}
+          disabled={batalSaving}
+        >
           Batal
         </Button>
-        <Button variant="destructive" onclick={submitBatal} disabled={batalSaving}>
+        <Button
+          variant="destructive"
+          onclick={submitBatal}
+          disabled={batalSaving}
+        >
           {#if batalSaving}
-            <svg class="mr-2 h-4 w-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+            <svg
+              class="mr-2 h-4 w-4 animate-spin"
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke-width="2"
+              stroke="currentColor"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"
+              />
             </svg>
           {/if}
           Ya, Batalkan
