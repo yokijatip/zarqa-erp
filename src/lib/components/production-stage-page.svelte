@@ -1,9 +1,23 @@
 <script lang="ts">
   import { afterNavigate, goto } from "$app/navigation";
-  import { batchCache, stokPotonganCache, karyawanCache } from "$lib/stores/data-cache.svelte";
+  import {
+    batchCache,
+    stokPotonganCache,
+    karyawanCache,
+  } from "$lib/stores/data-cache.svelte";
   import { userRole, currentUser } from "$lib/stores/auth.store";
-  import { sinkronStokPotonganBatch, updateStatusBatch, completeBatchProduksi } from "$lib/firebase/batch-produksi";
-  import { STATUS_LABEL, type BatchProduksi, type StokPotongan, type UserRole, type UserProfile } from "$lib/types";
+  import {
+    sinkronStokPotonganBatch,
+    updateStatusBatch,
+    completeBatchProduksi,
+  } from "$lib/firebase/batch-produksi";
+  import {
+    STATUS_LABEL,
+    type BatchProduksi,
+    type StokPotongan,
+    type UserRole,
+    type UserProfile,
+  } from "$lib/types";
   import type { ProductionStageConfig } from "$lib/production-stages";
   import { filterBatchesByStage, STATUS_STYLE } from "$lib/production-stages";
   import ProductionCreateDialog from "$lib/components/production-create-dialog.svelte";
@@ -22,8 +36,8 @@
 
   const STAGE_ROLES: Record<string, UserRole[]> = {
     cutting: ["kepala_cutting", "admin_gudang", "owner", "developer"],
-    jahit:   ["kepala_jahit",   "admin_gudang", "owner", "developer"],
-    steam:   ["kepala_steam",   "admin_gudang", "owner", "developer"],
+    jahit: ["kepala_jahit", "admin_gudang", "owner", "developer"],
+    steam: ["kepala_steam", "admin_gudang", "owner", "developer"],
   };
 
   $effect(() => {
@@ -45,9 +59,9 @@
   let quickOpen = $state(false);
   let quickBatch = $state<BatchProduksi | null>(null);
   let quickWorkerUid = $state("");
-  let quickUkuranReject   = $state<number[]>([]);
+  let quickUkuranReject = $state<number[]>([]);
   let quickUkuranBerhasil = $derived(
-    quickBatch?.detail_ukuran.map((du) => du.jumlah_pcs) ?? []
+    quickBatch?.detail_ukuran.map((du) => du.jumlah_pcs) ?? [],
   );
   let quickSaving = $state(false);
   let quickError = $state<string | null>(null);
@@ -57,18 +71,27 @@
     STEAM_IN_PROGRESS: "STEAM_DONE",
   };
 
-  let quickNextStatus = $derived(quickBatch ? (NEXT_STATUS[quickBatch.status] ?? null) : null);
+  let quickNextStatus = $derived(
+    quickBatch ? (NEXT_STATUS[quickBatch.status] ?? null) : null,
+  );
   let quickNeedsWorker = $derived(quickNextStatus === "STEAM_IN_PROGRESS");
   let quickNeedsPcs = $derived(quickNextStatus === "STEAM_DONE");
   let quickWorkers = $derived(
     karyawanList.filter((k) => k.role === config.quickActionWorkerRole),
   );
-  let quickTotalBerhasil = $derived(quickUkuranBerhasil.reduce((s, n) => s + n, 0));
-  let quickTotalReject   = $derived(quickUkuranReject.reduce((s, n) => s + (Number(n) || 0), 0));
-  let quickMaxPcs = $derived(quickBatch ? (quickBatch.pcs_saat_ini ?? quickBatch.total_pcs) : 0);
+  let quickTotalBerhasil = $derived(
+    quickUkuranBerhasil.reduce((s, n) => s + n, 0),
+  );
+  let quickTotalReject = $derived(
+    quickUkuranReject.reduce((s, n) => s + (Number(n) || 0), 0),
+  );
+  let quickMaxPcs = $derived(
+    quickBatch ? (quickBatch.pcs_saat_ini ?? quickBatch.total_pcs) : 0,
+  );
   let quickFormValid = $derived.by(() => {
     if (!quickNextStatus) return false;
-    if (quickNeedsWorker && !quickWorkerUid && !quickBatch?.penugasan?.steam) return false;
+    if (quickNeedsWorker && !quickWorkerUid && !quickBatch?.penugasan?.steam)
+      return false;
     if (quickNeedsPcs && quickTotalReject > quickMaxPcs) return false;
     return true;
   });
@@ -82,11 +105,13 @@
   }
 
   async function submitQuickAction() {
-    if (!quickBatch || !quickNextStatus || !$currentUser || !quickFormValid) return;
+    if (!quickBatch || !quickNextStatus || !$currentUser || !quickFormValid)
+      return;
     quickSaving = true;
     quickError = null;
     const operatorUid = $currentUser.uid;
-    const operatorNama = $currentUser.name || $currentUser.email || $currentUser.uid;
+    const operatorNama =
+      $currentUser.name || $currentUser.email || $currentUser.uid;
     try {
       const selectedWorker = quickNeedsWorker
         ? quickWorkers.find((k) => k.uid === quickWorkerUid)
@@ -96,29 +121,43 @@
         : quickBatch.penugasan?.steam;
       const riwayatUid = worker?.uid ?? operatorUid;
       const riwayatNama = worker?.nama ?? operatorNama;
-      const pcsBerhasil = quickNeedsPcs ? quickTotalBerhasil : (quickBatch.pcs_saat_ini ?? quickBatch.total_pcs);
-      const pcsReject   = quickNeedsPcs ? quickTotalReject   : 0;
+      const pcsBerhasil = quickNeedsPcs
+        ? quickTotalBerhasil
+        : (quickBatch.pcs_saat_ini ?? quickBatch.total_pcs);
+      const pcsReject = quickNeedsPcs ? quickTotalReject : 0;
       const newDetailUkuran = quickNeedsPcs
-        ? quickBatch.detail_ukuran.map((du) => ({
-            ukuran: du.ukuran,
-            jumlah_pcs: du.jumlah_pcs,
-          })).filter((du) => du.jumlah_pcs > 0)
+        ? quickBatch.detail_ukuran
+            .map((du) => ({
+              ukuran: du.ukuran,
+              jumlah_pcs: du.jumlah_pcs,
+            }))
+            .filter((du) => du.jumlah_pcs > 0)
         : undefined;
 
       if (quickNextStatus === "STEAM_DONE") {
         // Langsung complete, skip STEAM_DONE sebagai status perantara
-        await completeBatchProduksi(quickBatch.id, riwayatUid, riwayatNama, {
-          status_dari: quickBatch.status as any,
-          pcs_berhasil: pcsBerhasil,
-          pcs_reject: pcsReject,
-        }, newDetailUkuran ?? undefined);
+        await completeBatchProduksi(
+          quickBatch.id,
+          riwayatUid,
+          riwayatNama,
+          {
+            status_dari: quickBatch.status as any,
+            pcs_berhasil: pcsBerhasil,
+            pcs_reject: pcsReject,
+          },
+          newDetailUkuran ?? undefined,
+        );
       } else {
         await updateStatusBatch(
           quickBatch.id,
           quickNextStatus as any,
           riwayatUid,
           riwayatNama,
-          { status_dari: quickBatch.status as any, pcs_berhasil: pcsBerhasil, pcs_reject: pcsReject },
+          {
+            status_dari: quickBatch.status as any,
+            pcs_berhasil: pcsBerhasil,
+            pcs_reject: pcsReject,
+          },
           worker,
           newDetailUkuran,
         );
@@ -135,8 +174,32 @@
     }
   }
 
+  // Batch cutting (CUTTING_DONE, original) yang potongannya masih ada sisa
+  // di pool stok_potongan — dicek dari lot sumber_cutting yang jumlah_pcs > 0.
+  // Batch yang sudah habis diserap proses jahit tidak lagi masuk set ini,
+  // sehingga tidak perlu ditampilkan lagi di tabel "Hasil Cutting".
+  let batchIdMasihAdaSisaPotongan = $derived.by(() => {
+    if (config.key !== "cutting") return null;
+    const set = new Set<string>();
+    for (const stok of stokPotonganList) {
+      for (const lot of stok.sumber_cutting ?? []) {
+        if ((lot.jumlah_pcs ?? 0) > 0) set.add(lot.batch_id);
+      }
+    }
+    return set;
+  });
+
   let filteredBatches = $derived.by(() => {
     let list = filterBatchesByStage(batchList, config);
+    if (config.key === "cutting" && batchIdMasihAdaSisaPotongan) {
+      list = list.filter((batch) => {
+        if (batch.status !== "CUTTING_DONE") return true;
+        // Belum sempat disinkronkan ke stok_potongan (auto-sync baru jalan) — tetap tampilkan
+        if (!batch.stok_potongan_synced) return true;
+        // Sudah sync: tampilkan hanya kalau potongannya masih ada sisa (belum habis dipakai jahit)
+        return batchIdMasihAdaSisaPotongan.has(batch.id);
+      });
+    }
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
       list = list.filter((batch) => batch.nama_model.toLowerCase().includes(q));
@@ -145,7 +208,9 @@
   });
 
   let readyCount = $derived(
-    filteredBatches.filter((batch) => config.readyStatuses.includes(batch.status)).length,
+    filteredBatches.filter((batch) =>
+      config.readyStatuses.includes(batch.status),
+    ).length,
   );
   let inProgressCount = $derived(
     filteredBatches.filter(
@@ -155,25 +220,42 @@
     ).length,
   );
   let doneCount = $derived(
-    filteredBatches.filter((batch) => (config.doneStatuses ?? []).includes(batch.status)).length,
+    filteredBatches.filter((batch) =>
+      (config.doneStatuses ?? []).includes(batch.status),
+    ).length,
   );
-  let totalPcs = $derived(filteredBatches.reduce((sum, batch) => sum + (batch.pcs_saat_ini ?? batch.total_pcs), 0));
-  let stokPotonganReady = $derived(stokPotonganList.filter((stok) => stok.stok_tersedia > 0));
-  let stokPotonganPcs = $derived(stokPotonganReady.reduce((sum, stok) => sum + stok.stok_tersedia, 0));
+  let totalPcs = $derived(
+    filteredBatches.reduce(
+      (sum, batch) => sum + (batch.pcs_saat_ini ?? batch.total_pcs),
+      0,
+    ),
+  );
+  let stokPotonganReady = $derived(
+    stokPotonganList.filter((stok) => stok.stok_tersedia > 0),
+  );
+  let stokPotonganPcs = $derived(
+    stokPotonganReady.reduce((sum, stok) => sum + stok.stok_tersedia, 0),
+  );
 
   function getPrimaryAction(batch: BatchProduksi): string {
     if (config.key === "cutting") {
-      return batch.status === "PENDING_CUTTING" ? "Mulai Cutting" : "Selesaikan Cutting";
+      return batch.status === "PENDING_CUTTING"
+        ? "Mulai Cutting"
+        : "Selesaikan Cutting";
     }
     if (config.key === "jahit") {
-      return batch.status === "CUTTING_DONE" ? "Mulai Jahit" : "Selesaikan Jahit";
+      return batch.status === "CUTTING_DONE"
+        ? "Mulai Jahit"
+        : "Selesaikan Jahit";
     }
     return batch.status === "JAHIT_DONE" ? "Mulai Steam" : "Selesaikan Steam";
   }
 
   function getAssignedWorker(batch: BatchProduksi): string {
-    if (config.key === "cutting") return batch.penugasan?.cutting?.nama ?? "Belum ditugaskan";
-    if (config.key === "jahit") return batch.penugasan?.jahit?.nama ?? "Belum ditugaskan";
+    if (config.key === "cutting")
+      return batch.penugasan?.cutting?.nama ?? "Belum ditugaskan";
+    if (config.key === "jahit")
+      return batch.penugasan?.jahit?.nama ?? "Belum ditugaskan";
     return batch.penugasan?.steam?.nama ?? "Belum ditugaskan";
   }
 
@@ -200,7 +282,9 @@
   }
 
   async function loadStock(force = false) {
-    if (!config.stockTitle) return;
+    // Cutting butuh data stok_potongan juga, untuk cek batch mana yang
+    // potongannya sudah habis diserap jahit (lihat filteredBatches).
+    if (!config.stockTitle && config.key !== "cutting") return;
     stockLoading = true;
     try {
       stokPotonganList = await stokPotonganCache.get(force);
@@ -217,23 +301,28 @@
 
   // Otomatis selesaikan batch STEAM_DONE yang tersisa dari alur lama
   async function autoCompleteSteamDone() {
-    if (config.key !== 'steam') return;
-    const stuck = batchList.filter((b) => b.status === 'STEAM_DONE');
+    if (config.key !== "steam") return;
+    const stuck = batchList.filter((b) => b.status === "STEAM_DONE");
     if (stuck.length === 0) return;
-    const operatorUid = $currentUser?.uid ?? 'system';
-    const operatorNama = $currentUser?.name || $currentUser?.email || 'system';
+    const operatorUid = $currentUser?.uid ?? "system";
+    const operatorNama = $currentUser?.name || $currentUser?.email || "system";
     let completed = false;
     for (const b of stuck) {
       try {
         const pcsBerhasil = b.pcs_saat_ini ?? b.total_pcs;
-        await completeBatchProduksi(b.id, b.penugasan?.steam?.uid ?? operatorUid, b.penugasan?.steam?.nama ?? operatorNama, {
-          status_dari: 'STEAM_DONE',
-          pcs_berhasil: pcsBerhasil,
-          pcs_reject: 0,
-        });
+        await completeBatchProduksi(
+          b.id,
+          b.penugasan?.steam?.uid ?? operatorUid,
+          b.penugasan?.steam?.nama ?? operatorNama,
+          {
+            status_dari: "STEAM_DONE",
+            pcs_berhasil: pcsBerhasil,
+            pcs_reject: 0,
+          },
+        );
         completed = true;
       } catch (e) {
-        console.error('[auto-complete-steam] Gagal complete batch', b.id, e);
+        console.error("[auto-complete-steam] Gagal complete batch", b.id, e);
       }
     }
     if (completed) {
@@ -244,9 +333,12 @@
 
   // Otomatis sync semua batch CUTTING_DONE yang belum masuk stok_potongan
   async function autoSyncPending() {
-    if (config.key !== 'cutting') return;
+    if (config.key !== "cutting") return;
     const pending = batchList.filter(
-      (b) => b.status === 'CUTTING_DONE' && !b.dari_potongan && !b.stok_potongan_synced
+      (b) =>
+        b.status === "CUTTING_DONE" &&
+        !b.dari_potongan &&
+        !b.stok_potongan_synced,
     );
     if (pending.length === 0) return;
     let synced = false;
@@ -255,7 +347,7 @@
         await sinkronStokPotonganBatch(b.id);
         synced = true;
       } catch (e) {
-        console.error('[auto-sync] Gagal sync batch', b.id, e);
+        console.error("[auto-sync] Gagal sync batch", b.id, e);
       }
     }
     if (synced) {
@@ -267,7 +359,12 @@
 
   afterNavigate(async () => {
     const tasks: Promise<unknown>[] = [load(), loadStock()];
-    if (config.quickAction) tasks.push(karyawanCache.get().then((list) => { karyawanList = list; }));
+    if (config.quickAction)
+      tasks.push(
+        karyawanCache.get().then((list) => {
+          karyawanList = list;
+        }),
+      );
     await Promise.all(tasks);
     await autoSyncPending();
     await autoCompleteSteamDone();
@@ -289,7 +386,9 @@
         />
       {/if}
       {#if config.stockTitle}
-        <Button variant="outline" onclick={() => goto("/stok-potongan")}>Lihat Stok Cutting</Button>
+        <Button variant="outline" onclick={() => goto("/stok-potongan")}
+          >Lihat Stok Cutting</Button
+        >
       {/if}
       <Button variant="outline" onclick={refreshAll}>
         <svg
@@ -353,14 +452,20 @@
           <p class="mt-1 text-sm text-gray-500">{config.stockDescription}</p>
         </div>
         <div class="text-right">
-          <p class="text-2xl font-semibold text-gray-900">{stockLoading ? "…" : stokPotonganPcs}</p>
-          <p class="text-xs text-gray-400">{stokPotonganReady.length} jenis stok siap jahit</p>
+          <p class="text-2xl font-semibold text-gray-900">
+            {stockLoading ? "…" : stokPotonganPcs}
+          </p>
+          <p class="text-xs text-gray-400">
+            {stokPotonganReady.length} jenis stok siap jahit
+          </p>
         </div>
       </div>
     </div>
   {/if}
 
-  <div class="rounded-xl border border-dashed {config.borderClass} {config.accentSoftClass} px-4 py-3 text-sm {config.textClass}">
+  <div
+    class="rounded-xl border border-dashed {config.borderClass} {config.accentSoftClass} px-4 py-3 text-sm {config.textClass}"
+  >
     {config.detailHint}
   </div>
 
@@ -388,30 +493,44 @@
   </div>
 
   {#if errorMsg}
-    <div class="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+    <div
+      class="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+    >
       {errorMsg}
     </div>
   {:else}
-    <div class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
+    <div
+      class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm"
+    >
       {#if loading}
         <div class="space-y-0">
           {#each Array(5) as _}
-            <div class="flex items-center gap-4 border-b border-gray-50 px-5 py-4">
+            <div
+              class="flex items-center gap-4 border-b border-gray-50 px-5 py-4"
+            >
               <div class="h-4 w-44 animate-pulse rounded bg-gray-100"></div>
               <div class="h-4 w-20 animate-pulse rounded bg-gray-100"></div>
               <div class="h-4 w-24 animate-pulse rounded bg-gray-100"></div>
               <div class="h-4 w-20 animate-pulse rounded bg-gray-100"></div>
-              <div class="ml-auto h-8 w-18 animate-pulse rounded bg-gray-100"></div>
+              <div
+                class="ml-auto h-8 w-18 animate-pulse rounded bg-gray-100"
+              ></div>
             </div>
           {/each}
         </div>
       {:else if filteredBatches.length === 0}
         <div class="flex flex-col items-center justify-center gap-3 py-16">
-          <div class="flex h-14 w-14 items-center justify-center rounded-full bg-gray-100">
+          <div
+            class="flex h-14 w-14 items-center justify-center rounded-full bg-gray-100"
+          >
             <ClipboardListIcon class="h-7 w-7 text-gray-300" />
           </div>
-          <p class="text-sm font-medium text-gray-500">Belum ada batch di tahap ini</p>
-          <p class="text-xs text-gray-400">Batch akan muncul otomatis saat statusnya masuk ke proses {config.key}</p>
+          <p class="text-sm font-medium text-gray-500">
+            Belum ada batch di tahap ini
+          </p>
+          <p class="text-xs text-gray-400">
+            Batch akan muncul otomatis saat statusnya masuk ke proses {config.key}
+          </p>
         </div>
       {:else}
         <Table.Root>
@@ -427,28 +546,43 @@
           </Table.Header>
           <Table.Body>
             {#each filteredBatches as batch}
-              {@const isDone = (config.doneStatuses ?? []).includes(batch.status)}
+              {@const isDone = (config.doneStatuses ?? []).includes(
+                batch.status,
+              )}
               {@const useQuick = config.quickAction && !isDone}
               <Table.Row
-                class="cursor-pointer {isDone ? 'opacity-60 bg-gray-50/50' : ''}"
+                class="cursor-pointer {isDone
+                  ? 'opacity-60 bg-gray-50/50'
+                  : ''}"
                 onclick={() => goto(`/monitor-produksi/${batch.id}`)}
                 tabindex={0}
-                onkeydown={(event) => event.key === "Enter" && goto(`/monitor-produksi/${batch.id}`)}
+                onkeydown={(event) =>
+                  event.key === "Enter" &&
+                  goto(`/monitor-produksi/${batch.id}`)}
               >
                 <Table.Cell>
                   <div class="space-y-1">
                     <div class="flex items-center gap-2">
-                      <p class="text-sm font-medium text-gray-800">{batch.nama_model}</p>
+                      <p class="text-sm font-medium text-gray-800">
+                        {batch.nama_model}
+                      </p>
                       {#if batch.nama_warna}
-                        <span class="inline-flex items-center gap-1 rounded-full bg-gray-100 px-1.5 py-0.5 text-[11px] font-medium text-gray-600">
-                          <span class="inline-block h-2 w-2 rounded-full" style="background-color: {batch.kode_hex_warna}"></span>
+                        <span
+                          class="inline-flex items-center gap-1 rounded-full bg-gray-100 px-1.5 py-0.5 text-[11px] font-medium text-gray-600"
+                        >
+                          <span
+                            class="inline-block h-2 w-2 rounded-full"
+                            style="background-color: {batch.kode_hex_warna}"
+                          ></span>
                           {batch.nama_warna}
                         </span>
                       {/if}
                     </div>
                     <div class="flex flex-wrap gap-1">
                       {#each batch.detail_ukuran as ukuran}
-                        <span class="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-500">
+                        <span
+                          class="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-500"
+                        >
                           {ukuran.ukuran}: {ukuran.jumlah_pcs}
                         </span>
                       {/each}
@@ -456,28 +590,43 @@
                   </div>
                 </Table.Cell>
                 <Table.Cell>
-                  <span class="inline-flex rounded-full px-2.5 py-1 text-xs font-semibold {STATUS_STYLE[batch.status]}">
+                  <span
+                    class="inline-flex rounded-full px-2.5 py-1 text-xs font-semibold {STATUS_STYLE[
+                      batch.status
+                    ]}"
+                  >
                     {STATUS_LABEL[batch.status]}
                   </span>
                 </Table.Cell>
                 <Table.Cell>
-                  <p class="text-sm text-gray-700">{getAssignedWorker(batch)}</p>
+                  <p class="text-sm text-gray-700">
+                    {getAssignedWorker(batch)}
+                  </p>
                 </Table.Cell>
                 <Table.Cell class="text-center">
-                  <p class="text-sm font-semibold text-gray-800">{batch.pcs_saat_ini ?? batch.total_pcs}</p>
+                  <p class="text-sm font-semibold text-gray-800">
+                    {batch.pcs_saat_ini ?? batch.total_pcs}
+                  </p>
                   <p class="text-xs text-gray-400">pcs</p>
                 </Table.Cell>
                 <Table.Cell>
-                  <p class="text-xs text-gray-600">{formatDate(batch.createdAt)}</p>
+                  <p class="text-xs text-gray-600">
+                    {formatDate(batch.createdAt)}
+                  </p>
                 </Table.Cell>
                 <Table.Cell class="text-right">
                   {#if useQuick}
                     <Button
                       variant="default"
                       size="sm"
-                      onclick={(e: MouseEvent) => { e.stopPropagation(); openQuickAction(batch); }}
+                      onclick={(e: MouseEvent) => {
+                        e.stopPropagation();
+                        openQuickAction(batch);
+                      }}
                     >
-                      {batch.status === "JAHIT_DONE" ? "Mulai Steam" : "Selesaikan"}
+                      {batch.status === "JAHIT_DONE"
+                        ? "Mulai Steam"
+                        : "Selesaikan"}
                     </Button>
                   {/if}
                 </Table.Cell>
@@ -491,130 +640,192 @@
 </div>
 
 {#if config.quickAction}
-<Dialog.Root bind:open={quickOpen}>
-  <Dialog.Content class="max-w-md">
-    {#if quickBatch}
-      <Dialog.Header>
-        <Dialog.Title>
-          {quickNextStatus === "STEAM_IN_PROGRESS" ? "Mulai Steam" : "Selesaikan Steam & Kirim ke Barang Jadi"}
-        </Dialog.Title>
-        <Dialog.Description>
-          <span class="font-medium text-gray-800">{quickBatch.nama_model}</span>
-          {#if quickBatch.nama_warna}
-            · <span class="text-gray-600">{quickBatch.nama_warna}</span>
-          {/if}
-          · {quickBatch.pcs_saat_ini ?? quickBatch.total_pcs} pcs
-        </Dialog.Description>
-      </Dialog.Header>
-
-      <div class="space-y-4 py-2">
-        {#if quickNeedsWorker}
-          <!-- Pilih petugas steam -->
-          <div class="space-y-1.5">
-            <p class="text-sm font-medium text-gray-700">Petugas Steam</p>
-            {#if quickBatch.penugasan?.steam}
-              <div class="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm font-medium text-gray-800">
-                {quickBatch.penugasan.steam.nama}
-              </div>
-            {:else if quickWorkers.length === 0}
-              <p class="text-xs text-amber-600">Belum ada akun Kepala Steam di sistem.</p>
-            {:else}
-              <Select.Root
-                type="single"
-                value={quickWorkerUid || undefined}
-                onValueChange={(val) => { quickWorkerUid = val ?? ""; }}
-              >
-                <Select.Trigger class="w-full">
-                  {#if quickWorkerUid}
-                    <span>{quickWorkers.find((k) => k.uid === quickWorkerUid)?.name ?? "—"}</span>
-                  {:else}
-                    <span class="text-muted-foreground">— Pilih petugas —</span>
-                  {/if}
-                </Select.Trigger>
-                <Select.Content preventScroll={false}>
-                  {#each quickWorkers as k}
-                    <Select.Item value={k.uid}>{k.name}</Select.Item>
-                  {/each}
-                </Select.Content>
-              </Select.Root>
+  <Dialog.Root bind:open={quickOpen}>
+    <Dialog.Content class="max-w-md">
+      {#if quickBatch}
+        <Dialog.Header>
+          <Dialog.Title>
+            {quickNextStatus === "STEAM_IN_PROGRESS"
+              ? "Mulai Steam"
+              : "Selesaikan Steam & Kirim ke Barang Jadi"}
+          </Dialog.Title>
+          <Dialog.Description>
+            <span class="font-medium text-gray-800"
+              >{quickBatch.nama_model}</span
+            >
+            {#if quickBatch.nama_warna}
+              · <span class="text-gray-600">{quickBatch.nama_warna}</span>
             {/if}
-          </div>
-        {/if}
+            · {quickBatch.pcs_saat_ini ?? quickBatch.total_pcs} pcs
+          </Dialog.Description>
+        </Dialog.Header>
 
-        {#if quickNeedsPcs}
-          <!-- Tabel per-ukuran -->
-          <div class="overflow-hidden rounded-lg border border-gray-200">
-            <table class="w-full text-sm">
-              <thead class="bg-gray-50">
-                <tr>
-                  <th class="px-3 py-2 text-left text-xs font-semibold text-gray-500">Ukuran</th>
-                  <th class="px-3 py-2 text-center text-xs font-semibold text-gray-500">Stok</th>
-                  <th class="px-3 py-2 text-center text-xs font-semibold text-gray-500">Berhasil</th>
-                  <th class="px-3 py-2 text-center text-xs font-semibold text-gray-500">Reject</th>
-                </tr>
-              </thead>
-              <tbody>
-                {#each quickBatch.detail_ukuran as du, i}
-                  {@const reject = Number(quickUkuranReject[i]) || 0}
-                  {@const berhasil = quickUkuranBerhasil[i] ?? 0}
-                  {@const overLimit = reject > du.jumlah_pcs}
-                  <tr class="border-t border-gray-100">
-                    <td class="px-3 py-2 font-semibold text-gray-700">{du.ukuran}</td>
-                    <td class="px-3 py-2 text-center text-gray-500">{du.jumlah_pcs}</td>
-                    <td class="px-3 py-2 text-center">
-                      <span class="text-sm font-semibold text-gray-800">{berhasil}</span>
-                    </td>
-                    <td class="px-2 py-1.5">
-                      <Input
-                        type="number"
-                        min="0"
-                        max={du.jumlah_pcs}
-                        class="h-8 text-center text-sm {overLimit ? 'border-red-400' : ''}"
-                        bind:value={quickUkuranReject[i]}
-                      />
-                    </td>
+        <div class="space-y-4 py-2">
+          {#if quickNeedsWorker}
+            <!-- Pilih petugas steam -->
+            <div class="space-y-1.5">
+              <p class="text-sm font-medium text-gray-700">Petugas Steam</p>
+              {#if quickBatch.penugasan?.steam}
+                <div
+                  class="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm font-medium text-gray-800"
+                >
+                  {quickBatch.penugasan.steam.nama}
+                </div>
+              {:else if quickWorkers.length === 0}
+                <p class="text-xs text-amber-600">
+                  Belum ada akun Kepala Steam di sistem.
+                </p>
+              {:else}
+                <Select.Root
+                  type="single"
+                  value={quickWorkerUid || undefined}
+                  onValueChange={(val) => {
+                    quickWorkerUid = val ?? "";
+                  }}
+                >
+                  <Select.Trigger class="w-full">
+                    {#if quickWorkerUid}
+                      <span
+                        >{quickWorkers.find((k) => k.uid === quickWorkerUid)
+                          ?.name ?? "—"}</span
+                      >
+                    {:else}
+                      <span class="text-muted-foreground"
+                        >— Pilih petugas —</span
+                      >
+                    {/if}
+                  </Select.Trigger>
+                  <Select.Content preventScroll={false}>
+                    {#each quickWorkers as k}
+                      <Select.Item value={k.uid}>{k.name}</Select.Item>
+                    {/each}
+                  </Select.Content>
+                </Select.Root>
+              {/if}
+            </div>
+          {/if}
+
+          {#if quickNeedsPcs}
+            <!-- Tabel per-ukuran -->
+            <div class="overflow-hidden rounded-lg border border-gray-200">
+              <table class="w-full text-sm">
+                <thead class="bg-gray-50">
+                  <tr>
+                    <th
+                      class="px-3 py-2 text-left text-xs font-semibold text-gray-500"
+                      >Ukuran</th
+                    >
+                    <th
+                      class="px-3 py-2 text-center text-xs font-semibold text-gray-500"
+                      >Stok</th
+                    >
+                    <th
+                      class="px-3 py-2 text-center text-xs font-semibold text-gray-500"
+                      >Berhasil</th
+                    >
+                    <th
+                      class="px-3 py-2 text-center text-xs font-semibold text-gray-500"
+                      >Reject</th
+                    >
                   </tr>
-                {/each}
-              </tbody>
-              <tfoot class="border-t border-gray-200 bg-gray-50">
-                <tr>
-                  <td class="px-3 py-2 text-xs font-semibold text-gray-500">Total</td>
-                  <td class="px-3 py-2 text-center text-xs font-semibold text-gray-700">{quickMaxPcs}</td>
-                  <td class="px-3 py-2 text-center text-xs font-semibold text-gray-700">{quickTotalBerhasil}</td>
-                  <td class="px-3 py-2 text-center text-xs font-semibold text-red-600">{quickTotalReject}</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-          {#if quickTotalReject > quickMaxPcs}
-            <p class="text-xs text-red-500">Total reject melebihi stok saat ini ({quickMaxPcs} pcs)</p>
+                </thead>
+                <tbody>
+                  {#each quickBatch.detail_ukuran as du, i}
+                    {@const reject = Number(quickUkuranReject[i]) || 0}
+                    {@const berhasil = quickUkuranBerhasil[i] ?? 0}
+                    {@const overLimit = reject > du.jumlah_pcs}
+                    <tr class="border-t border-gray-100">
+                      <td class="px-3 py-2 font-semibold text-gray-700"
+                        >{du.ukuran}</td
+                      >
+                      <td class="px-3 py-2 text-center text-gray-500"
+                        >{du.jumlah_pcs}</td
+                      >
+                      <td class="px-3 py-2 text-center">
+                        <span class="text-sm font-semibold text-gray-800"
+                          >{berhasil}</span
+                        >
+                      </td>
+                      <td class="px-2 py-1.5">
+                        <Input
+                          type="number"
+                          min="0"
+                          max={du.jumlah_pcs}
+                          class="h-8 text-center text-sm {overLimit
+                            ? 'border-red-400'
+                            : ''}"
+                          bind:value={quickUkuranReject[i]}
+                        />
+                      </td>
+                    </tr>
+                  {/each}
+                </tbody>
+                <tfoot class="border-t border-gray-200 bg-gray-50">
+                  <tr>
+                    <td class="px-3 py-2 text-xs font-semibold text-gray-500"
+                      >Total</td
+                    >
+                    <td
+                      class="px-3 py-2 text-center text-xs font-semibold text-gray-700"
+                      >{quickMaxPcs}</td
+                    >
+                    <td
+                      class="px-3 py-2 text-center text-xs font-semibold text-gray-700"
+                      >{quickTotalBerhasil}</td
+                    >
+                    <td
+                      class="px-3 py-2 text-center text-xs font-semibold text-red-600"
+                      >{quickTotalReject}</td
+                    >
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+            {#if quickTotalReject > quickMaxPcs}
+              <p class="text-xs text-red-500">
+                Total reject melebihi stok saat ini ({quickMaxPcs} pcs)
+              </p>
+            {/if}
+            <p class="text-xs text-emerald-600">
+              Batch akan langsung diselesaikan dan masuk ke stok barang jadi.
+            </p>
           {/if}
-          <p class="text-xs text-emerald-600">Batch akan langsung diselesaikan dan masuk ke stok barang jadi.</p>
-        {/if}
 
-        {#if quickError}
-          <p class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{quickError}</p>
-        {/if}
-      </div>
-
-      <Dialog.Footer class="gap-2">
-        <Button variant="outline" onclick={() => { quickOpen = false; }} disabled={quickSaving}>
-          Batal
-        </Button>
-        <Button
-          class="bg-emerald-600 hover:bg-emerald-700 text-white"
-          onclick={submitQuickAction}
-          disabled={quickSaving || !quickFormValid}
-        >
-          {#if quickSaving}
-            <LoaderIcon class="mr-2 h-4 w-4 animate-spin" />
-            Menyimpan...
-          {:else}
-            {quickNextStatus === "STEAM_IN_PROGRESS" ? "Mulai Steam" : "Selesaikan & Kirim ke Barang Jadi"}
+          {#if quickError}
+            <p
+              class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+            >
+              {quickError}
+            </p>
           {/if}
-        </Button>
-      </Dialog.Footer>
-    {/if}
-  </Dialog.Content>
-</Dialog.Root>
+        </div>
+
+        <Dialog.Footer class="gap-2">
+          <Button
+            variant="outline"
+            onclick={() => {
+              quickOpen = false;
+            }}
+            disabled={quickSaving}
+          >
+            Batal
+          </Button>
+          <Button
+            class="bg-emerald-600 hover:bg-emerald-700 text-white"
+            onclick={submitQuickAction}
+            disabled={quickSaving || !quickFormValid}
+          >
+            {#if quickSaving}
+              <LoaderIcon class="mr-2 h-4 w-4 animate-spin" />
+              Menyimpan...
+            {:else}
+              {quickNextStatus === "STEAM_IN_PROGRESS"
+                ? "Mulai Steam"
+                : "Selesaikan & Kirim ke Barang Jadi"}
+            {/if}
+          </Button>
+        </Dialog.Footer>
+      {/if}
+    </Dialog.Content>
+  </Dialog.Root>
 {/if}
