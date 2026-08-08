@@ -23,6 +23,7 @@
   import * as Dialog from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
+  import RejectResolveDialog from "$lib/components/reject-resolve-dialog.svelte";
   import StatCard from "$lib/components/StatCard.svelte";
   import PackageCheckIcon from "@lucide/svelte/icons/package-check";
   import PackagePlusIcon from "@lucide/svelte/icons/package-plus";
@@ -159,6 +160,18 @@
   function showError(msg: string) {
     errorMsg = msg;
     setTimeout(() => (errorMsg = null), 4000);
+  }
+
+  // ── Reject dialog ────────────────────────────────────────────────
+  let rejectDialogOpen = $state(false);
+  let rejectDialogBatchId = $state<string | null>(null);
+  function openRejectDialog(batchId: string) {
+    rejectDialogBatchId = batchId;
+    rejectDialogOpen = true;
+  }
+  async function handleRejectResolved() {
+    // Reject yang "diperbaiki" menambah stok_barang_jadi → muat ulang stok & riwayat masuk
+    await load();
   }
 
   async function load() {
@@ -965,9 +978,15 @@
                               · {p.pcs_berhasil} pcs berhasil
                             {/if}
                             {#if p.pcs_reject > 0}
-                              <span class="text-red-500"
-                                >· {p.pcs_reject} reject</span
+                              ·
+                              <button
+                                type="button"
+                                class="font-medium text-red-500 underline decoration-dotted underline-offset-2 hover:text-red-600"
+                                onclick={() =>
+                                  openRejectDialog(group.batch_id!)}
                               >
+                                {p.pcs_reject} reject
+                              </button>
                             {/if}
                           </p>
                           {#if p.catatan}
@@ -1094,6 +1113,12 @@
 {/if}
 
 <!-- ── Dialog: Restock / Kurangi / Set ──────────────────────────── -->
+<RejectResolveDialog
+  bind:open={rejectDialogOpen}
+  batchId={rejectDialogBatchId}
+  onResolved={handleRejectResolved}
+/>
+
 <Dialog.Root bind:open={openDialog}>
   <Dialog.Content class="max-w-sm">
     <Dialog.Header>

@@ -33,6 +33,7 @@
   import * as Select from "$lib/components/ui/select";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
+  import RejectResolveDialog from "$lib/components/reject-resolve-dialog.svelte";
   import ArrowLeftIcon from "@lucide/svelte/icons/arrow-left";
   import ClockIcon from "@lucide/svelte/icons/clock";
   import UsersIcon from "@lucide/svelte/icons/users";
@@ -602,6 +603,21 @@
     });
   }
 
+  // ─── Reject dialog ──────────────────────────────────────────────
+  let rejectDialogOpen = $state(false);
+  function openRejectDialog() {
+    rejectDialogOpen = true;
+  }
+  async function handleRejectResolved() {
+    // Refresh riwayat supaya status batch (kalau ada perubahan stok) ikut update
+    const id = $page.params.id ?? "";
+    const [b, r] = await Promise.all([getBatchById(id), getRiwayatBatch(id)]);
+    if (b) {
+      batch = b;
+      riwayat = r;
+    }
+  }
+
   // ─── Action handlers ──────────────────────────────────────────────
   function openActionDialog() {
     if (!batch) return;
@@ -689,6 +705,7 @@
             status_dari: batch.status,
             pcs_berhasil: pcsBerhasilFinal,
             pcs_reject: pcsRejectFinal,
+            detail_reject: submitDetailReject,
           },
           newDetailUkuran ?? undefined,
         );
@@ -702,6 +719,7 @@
             status_dari: batch.status,
             pcs_berhasil: pcsBerhasilFinal,
             pcs_reject: pcsRejectFinal,
+            detail_reject: submitDetailReject,
           },
           worker,
           newDetailUkuran,
@@ -1227,7 +1245,13 @@
                   >
                     <span>{r.pcs_berhasil} pcs berhasil</span>
                     {#if r.pcs_reject > 0}
-                      <span class="text-red-500">{r.pcs_reject} reject</span>
+                      <button
+                        type="button"
+                        class="font-medium text-red-500 underline decoration-dotted underline-offset-2 hover:text-red-600"
+                        onclick={() => openRejectDialog()}
+                      >
+                        {r.pcs_reject} reject
+                      </button>
                     {/if}
                   </div>
                   {#if r.catatan}
@@ -1246,6 +1270,14 @@
 {/if}
 
 <!-- ── Delete Dialog ───────────────────────────────────────────────── -->
+{#if batch}
+  <RejectResolveDialog
+    bind:open={rejectDialogOpen}
+    batchId={batch.id}
+    onResolved={handleRejectResolved}
+  />
+{/if}
+
 {#if batch && canDelete}
   <Dialog.Root bind:open={deleteOpen}>
     <Dialog.Content class="max-w-sm">
