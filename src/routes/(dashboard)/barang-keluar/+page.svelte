@@ -35,6 +35,7 @@
   let riwayat = $state<BarangKeluar[]>([]);
   let loading = $state(true);
   let saving = $state(false);
+  let exportingPdf = $state(false);
   let errorMsg = $state<string | null>(null);
   let successMsg = $state<string | null>(null);
   let searchQuery = $state("");
@@ -189,26 +190,177 @@
     Math.max(1, ...rekapPerTujuan.map((r) => r.totalPcs)),
   );
 
-  function exportRekapCsv() {
-    const header = ["Tujuan", "Jumlah Pengiriman", "Total Pcs"];
-    const rows = rekapPerTujuan.map((r) => [
-      r.tujuan,
-      r.jumlahPengiriman,
-      r.totalPcs,
-    ]);
-    const csv = [header, ...rows]
-      .map((row) =>
-        row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","),
-      )
-      .join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    const tanggal = new Date().toISOString().slice(0, 10);
-    a.href = url;
-    a.download = `rekap-barang-keluar-${tanggal}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+  async function exportRekapPdf() {
+    exportingPdf = true;
+    try {
+      const { jsPDF } = await import("jspdf");
+      const autoTable = (await import("jspdf-autotable")).default;
+
+      const doc = new jsPDF({
+        orientation: "portrait",
+        unit: "mm",
+        format: "a4",
+      });
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const marginX = 14;
+
+      // ── Header ────────────────────────────────────────────────
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(14);
+      doc.setTextColor(20, 20, 20);
+      doc.text("Zarqa — Rekap Pengiriman Barang Keluar", marginX, 18);
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      doc.setTextColor(90, 90, 90);
+      doc.text("Moeslim Fashion", marginX, 24);
+      doc.text(`Periode: ${rekapPeriodLabel}`, marginX, 30);
+      doc.text(
+        `Dicetak: ${new Date().toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" })}`,
+        pageWidth - marginX,
+        30,
+        { align: "right" },
+      );
+
+      doc.setDrawColor(230, 230, 230);
+      doc.line(marginX, 34, pageWidth - marginX, 34);
+
+      // ── Ringkasan singkat ────────────────────────────────────
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(9);
+      doc.setTextColor(60, 60, 60);
+      doc.text(`Total Pengiriman: ${totalPengiriman}`, marginX, 41);
+      doc.text(`Total Pcs Keluar: ${totalPcsKeluar}`, marginX + 70, 41);
+
+      // ── Tabel rekap per tujuan ───────────────────────────────
+      const totalPcsSemua = rekapPerTujuan.reduce((s, r) => s + r.totalPcs, 0);
+      const body = rekapPerTujuan.map((r) => [
+        r.tujuan,
+        String(r.jumlahPengiriman),
+        String(r.totalPcs),
+        totalPcsSemua > 0
+          ? `${((r.totalPcs / totalPcsSemua) * 100).toFixed(1)}%`
+          : "0%",
+      ]);
+
+      autoTable(doc, {
+        startY: 47,
+        head: [
+          [
+            "Tujuan Pengiriman",
+            "Jumlah Pengiriman",
+            "Total Pcs",
+            "% dari Total",
+          ],
+        ],
+        body,
+        foot: [
+          [
+            "Total",
+            String(rekapPerTujuan.reduce((s, r) => s + r.jumlahPengiriman, 0)),
+            String(totalPcsSemua),
+            "100%",
+          ],
+        ],
+        theme: "grid",
+        margin: { left: marginX, right: marginX },
+        styles: {
+          font: "helvetica",
+          fontSize: 9,
+          cellPadding: 3,
+          lineColor: [230, 230, 230],
+          lineWidth: 0.1,
+        },
+        headStyles: {
+          fillColor: [17, 24, 39],
+          textColor: [255, 255, 255],
+          fontStyle: "bold",
+          halign: "left",
+        },
+        footStyles: {
+          fillColor: [243, 244, 246],
+          textColor: [17, 24, 39],
+          fontStyle: "bold",
+        },
+        columnStyles: {
+          0: { halign: "left" },
+          1: { halign: "center" },
+          2: { halign: "center" },
+          3: { halign: "center" },
+        },
+        alternateRowStyles: { fillColor: [250, 250, 250] },
+      });
+
+      // ── Detail riwayat pengiriman (jika ada) ─────────────────
+      if (riwayatPeriod.length > 0) {
+        const finalY = (doc as any).lastAutoTable.finalY ?? 47;
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(10);
+        doc.setTextColor(20, 20, 20);
+        doc.text("Detail Riwayat Pengiriman", marginX, finalY + 10);
+
+        const detailBody = [...riwayatPeriod]
+          .sort(
+            (a, b) => tsMillis(b.tanggal_keluar) - tsMillis(a.tanggal_keluar),
+          )
+          .map((r) => [
+            formatDate(r.tanggal_keluar),
+            r.nama_model,
+            r.nama_warna ?? "—",
+            r.tujuan,
+            String(r.total_pcs),
+          ]);
+
+        autoTable(doc, {
+          startY: finalY + 14,
+          head: [["Tanggal", "Model", "Warna", "Tujuan", "Pcs"]],
+          body: detailBody,
+          theme: "grid",
+          margin: { left: marginX, right: marginX },
+          styles: {
+            font: "helvetica",
+            fontSize: 8.5,
+            cellPadding: 2.5,
+            lineColor: [230, 230, 230],
+            lineWidth: 0.1,
+          },
+          headStyles: {
+            fillColor: [17, 24, 39],
+            textColor: [255, 255, 255],
+            fontStyle: "bold",
+            halign: "left",
+          },
+          columnStyles: {
+            4: { halign: "center" },
+          },
+          alternateRowStyles: { fillColor: [250, 250, 250] },
+        });
+      }
+
+      // ── Footer halaman ───────────────────────────────────────
+      const pageCount = doc.getNumberOfPages();
+      for (let i = 1; i <= pageCount; i++) {
+        doc.setPage(i);
+        const h = doc.internal.pageSize.getHeight();
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(8);
+        doc.setTextColor(150, 150, 150);
+        doc.text(
+          `Halaman ${i} dari ${pageCount} — Zarqa ERP`,
+          pageWidth / 2,
+          h - 8,
+          { align: "center" },
+        );
+      }
+
+      const tanggal = new Date().toISOString().slice(0, 10);
+      doc.save(`rekap-barang-keluar-${tanggal}.pdf`);
+    } catch (e) {
+      console.error("Gagal membuat PDF rekap:", e);
+      showError("Gagal membuat PDF rekap.");
+    } finally {
+      exportingPdf = false;
+    }
   }
 
   let filteredRiwayat = $derived.by(() => {
@@ -265,6 +417,10 @@
     return `${formatDate(dateRange.start)} – ${formatDate(dateRange.end)}`;
   });
 
+  function tsMillis(ts: any): number {
+    return ts?.toMillis ? ts.toMillis() : ts ? new Date(ts).getTime() : 0;
+  }
+
   function showSuccess(msg: string) {
     successMsg = msg;
     setTimeout(() => (successMsg = null), 3500);
@@ -313,6 +469,13 @@
     saving = true;
     try {
       const keteranganTrimmed = fKeterangan.trim();
+      // Simpan dulu ke variabel lokal SEBELUM load(true) — selectedModelData bersifat
+      // reactive dan bisa jadi null setelah reload kalau pengiriman ini menghabiskan
+      // sisa stok terakhir model tsb (model otomatis hilang dari modelDenganStok).
+      const namaModelDikirim = selectedModelData!.nama_model;
+      const tujuanDikirim = fTujuan.trim();
+      const totalPcsDikirim = totalPcs;
+
       await catatBarangKeluar(
         {
           model_id: selectedModelData!.model_id,
@@ -324,7 +487,7 @@
             ? { kode_hex_warna: selectedModelData!.kode_hex_warna }
             : {}),
           detail_keluar: detailKeluar,
-          tujuan: fTujuan.trim(),
+          tujuan: tujuanDikirim,
           ...(keteranganTrimmed ? { keterangan: keteranganTrimmed } : {}),
         },
         $currentUser.uid,
@@ -332,7 +495,7 @@
       await load(true);
       openCatat = false;
       showSuccess(
-        `Pengiriman ${totalPcs} pcs "${selectedModelData!.nama_model}" ke ${fTujuan.trim()} berhasil dicatat.`,
+        `Pengiriman ${totalPcsDikirim} pcs "${namaModelDikirim}" ke ${tujuanDikirim} berhasil dicatat.`,
       );
     } catch (e: any) {
       showError(e?.message ?? "Gagal mencatat barang keluar.");
@@ -492,9 +655,16 @@
       <span class="text-xs text-gray-400">— {rekapPeriodLabel}</span>
     </div>
     {#if !loading && rekapPerTujuan.length > 0}
-      <Button variant="outline" size="sm" onclick={exportRekapCsv}>
-        <DownloadIcon class="h-3.5 w-3.5" />
-        Export CSV
+      <Button
+        variant="outline"
+        size="sm"
+        onclick={exportRekapPdf}
+        disabled={exportingPdf}
+      >
+        <DownloadIcon
+          class="h-3.5 w-3.5 {exportingPdf ? 'animate-pulse' : ''}"
+        />
+        {exportingPdf ? "Membuat PDF..." : "Export PDF"}
       </Button>
     {/if}
   </div>

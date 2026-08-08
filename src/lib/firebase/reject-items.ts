@@ -143,6 +143,13 @@ export async function resolveRejectItem(
     const jumlahGagalBaru = reject.jumlah_gagal + (aksi === 'tidak_bisa_diperbaiki' ? jumlah : 0);
     const sisaBaru = reject.jumlah - jumlahDiperbaikiBaru - jumlahGagalBaru;
 
+    // PENTING: semua transaction.get() harus dieksekusi sebelum transaction.set/update
+    // apa pun di bawah. Baca stokRef di sini dulu, sebelum ada write.
+    let stokSnap: Awaited<ReturnType<typeof transaction.get>> | null = null;
+    if (aksi === 'diperbaiki' && stokRef) {
+      stokSnap = await transaction.get(stokRef);
+    }
+
     transaction.update(rejectRef, {
       jumlah_diperbaiki: jumlahDiperbaikiBaru,
       jumlah_gagal: jumlahGagalBaru,
@@ -159,8 +166,7 @@ export async function resolveRejectItem(
       timestamp: serverTimestamp(),
     });
 
-    if (aksi === 'diperbaiki' && stokRef) {
-      const stokSnap = await transaction.get(stokRef);
+    if (aksi === 'diperbaiki' && stokRef && stokSnap) {
       const stokSebelum = stokSnap.exists() ? (stokSnap.data() as StokBarangJadi).stok_tersedia : 0;
       const stokSesudah = stokSebelum + jumlah;
 

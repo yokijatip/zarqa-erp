@@ -227,6 +227,7 @@
     masuk_stok_awal: "Stok Awal",
     kurangi_manual: "Kurangi Manual",
     set_manual: "Set Manual",
+    reject_diperbaiki: "Reject Diperbaiki",
   };
   const TIPE_STYLE: Record<string, string> = {
     masuk_produksi: "bg-teal-100 text-teal-700",
@@ -234,7 +235,15 @@
     masuk_stok_awal: "bg-purple-100 text-purple-700",
     kurangi_manual: "bg-red-100 text-red-600",
     set_manual: "bg-gray-100 text-gray-600",
+    reject_diperbaiki: "bg-teal-100 text-teal-700",
   };
+
+  // Tipe yang MENAMBAH stok (ditampilkan hijau/teal dengan tanda "+").
+  // Selain yang diawali "masuk", reject_diperbaiki juga menambah stok
+  // (pcs reject yang berhasil diperbaiki masuk balik ke stok_tersedia).
+  function isTipeMasuk(tipe: string): boolean {
+    return tipe.startsWith("masuk") || tipe === "reject_diperbaiki";
+  }
 
   const PROSES_LABEL: Record<string, string> = {
     PENDING_CUTTING: "Menunggu Cutting",
@@ -888,13 +897,11 @@
 
               <div class="w-20 shrink-0 text-right">
                 <span
-                  class="text-sm font-semibold {group.tipe.startsWith('masuk')
+                  class="text-sm font-semibold {isTipeMasuk(group.tipe)
                     ? 'text-teal-700'
                     : 'text-red-600'}"
                 >
-                  {group.tipe.startsWith("masuk")
-                    ? "+"
-                    : "−"}{group.totalJumlah} pcs
+                  {isTipeMasuk(group.tipe) ? "+" : "−"}{group.totalJumlah} pcs
                 </span>
               </div>
 
