@@ -7,6 +7,7 @@ import {
   type Unsubscribe,
 } from 'firebase/firestore';
 import { db } from './config';
+import { createRejectItemsInTransaction } from './reject-items';
 import { getModelBajuById } from './model-baju';
 import type { BatchProduksi, BatchProduksiInput, StatusBatch, RiwayatProses, PenugasanWorker, DetailUkuran, KainDigunakan, ModelBaju, SumberCutting } from '$lib/types';
 
@@ -319,6 +320,20 @@ export async function updateStatusBatch(
       timestamp: serverTimestamp(),
     });
 
+    if (riwayat.detail_reject && riwayat.detail_reject.length > 0) {
+      createRejectItemsInTransaction(transaction, {
+        batchId,
+        modelId: batch.model_id,
+        namaModel: batch.nama_model,
+        namaWarna: batch.nama_warna,
+        kodeHexWarna: batch.kode_hex_warna,
+        asalProses: batch.status,
+        detailReject: riwayat.detail_reject,
+        uid: updatedByUid,
+        nama: updatedByNama,
+      });
+    }
+
     // Kurangi stok kain + tulis riwayat saat cutting selesai
     for (const { kain, kRef, riwayatRef, stok_tersedia, stok_terpakai } of kainEntries) {
       const stokBaru = stok_tersedia - kain.jumlah_dipakai;
@@ -372,6 +387,20 @@ export async function recordBatchProgress(
       updated_by_nama: updatedByNama,
       timestamp: serverTimestamp(),
     });
+
+    if (riwayat.detail_reject && riwayat.detail_reject.length > 0) {
+      createRejectItemsInTransaction(transaction, {
+        batchId,
+        modelId: batch.model_id,
+        namaModel: batch.nama_model,
+        namaWarna: batch.nama_warna,
+        kodeHexWarna: batch.kode_hex_warna,
+        asalProses: batch.status,
+        detailReject: riwayat.detail_reject,
+        uid: updatedByUid,
+        nama: updatedByNama,
+      });
+    }
   });
 }
 
@@ -441,9 +470,24 @@ export async function splitJahitPartialToSteam(
       updated_by_nama: updatedByNama,
       pcs_berhasil: totalBerhasil,
       pcs_reject: totalReject,
+      detail_reject: detailReject,
       catatan: `Setor parsial ${totalBerhasil} pcs${totalReject > 0 ? `, ${totalReject} reject` : ''}`,
       timestamp: serverTimestamp(),
     });
+
+    if (totalReject > 0) {
+      createRejectItemsInTransaction(transaction, {
+        batchId: batch.id,
+        modelId: batch.model_id,
+        namaModel: batch.nama_model,
+        namaWarna: batch.nama_warna,
+        kodeHexWarna: batch.kode_hex_warna,
+        asalProses: batch.status,
+        detailReject,
+        uid: updatedByUid,
+        nama: updatedByNama,
+      });
+    }
 
     if (totalBerhasil > 0) {
       const { id: _id, ...batchData } = batch as BatchProduksi;
@@ -721,6 +765,20 @@ export async function completeBatchProduksi(
         dicatat_oleh_uid: updatedByUid,
         dicatat_oleh_nama: updatedByNama,
         timestamp: serverTimestamp(),
+      });
+    }
+
+    if (riwayat.detail_reject && riwayat.detail_reject.length > 0) {
+      createRejectItemsInTransaction(transaction, {
+        batchId,
+        modelId: currentBatch.model_id,
+        namaModel: currentBatch.nama_model,
+        namaWarna: currentBatch.nama_warna,
+        kodeHexWarna: currentBatch.kode_hex_warna,
+        asalProses: currentBatch.status,
+        detailReject: riwayat.detail_reject,
+        uid: updatedByUid,
+        nama: updatedByNama,
       });
     }
   });

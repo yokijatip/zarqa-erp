@@ -195,6 +195,45 @@ export interface RiwayatProses {
   timestamp?: Timestamp;
 }
 
+// ─── REJECT ITEM ─────────────────────────────────────────────────
+// Satu dokumen per (batch, ukuran, event setoran) yang punya pcs reject.
+// Statusnya independen dari status batch produksi — reject bisa "menggantung"
+// (pending) walau batch induknya sudah COMPLETED, sampai admin memutuskan
+// nasibnya per pcs (diperbaiki masuk gudang, atau dibuang/tidak bisa diperbaiki).
+
+export type AksiResolusiReject = 'diperbaiki' | 'tidak_bisa_diperbaiki';
+
+export interface RejectItem {
+  id?: string;
+  batch_id: string;
+  model_id: string;
+  nama_model: string;
+  nama_warna?: string;
+  kode_hex_warna?: string;
+  ukuran: UkuranBaju;
+  jumlah: number; // total reject dicatat pada event ini
+  jumlah_diperbaiki: number; // akumulasi sudah diperbaiki & masuk stok barang jadi
+  jumlah_gagal: number; // akumulasi discrap / tidak bisa diperbaiki
+  status: 'pending' | 'selesai'; // selesai kalau diperbaiki + gagal >= jumlah
+  asal_proses: StatusBatch; // status batch saat reject ini dicatat (mis. JAHIT_IN_PROGRESS)
+  dicatat_oleh_uid: string;
+  dicatat_oleh_nama: string;
+  catatan?: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+// Log tiap kali reject item diresolusi (subkoleksi reject_items/{id}/riwayat_resolusi)
+export interface RiwayatResolusiReject {
+  id?: string;
+  aksi: AksiResolusiReject;
+  jumlah: number;
+  catatan?: string;
+  dicatat_oleh_uid: string;
+  dicatat_oleh_nama: string;
+  timestamp?: Timestamp;
+}
+
 // ─── STOK BARANG JADI ────────────────────────────────────────────
 
 export interface StokBarangJadi {
@@ -234,7 +273,8 @@ export type TipeRiwayatBarangJadi =
   | 'masuk_stok_awal'
   | 'kurangi_manual'
   | 'set_manual'
-  | 'batal_keluar';
+  | 'batal_keluar'
+  | 'reject_diperbaiki';
 
 export interface RiwayatBarangJadi {
   id?: string;
