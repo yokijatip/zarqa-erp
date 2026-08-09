@@ -5,7 +5,7 @@ import {
   query, orderBy, where, limit, Timestamp,
 } from 'firebase/firestore';
 import { db } from './config';
-import type { StokBarangJadi, BarangKeluar, BarangKeluarInput, RiwayatBarangJadi, TipeRiwayatBarangJadi } from '$lib/types';
+import type { StokBarangJadi, BarangKeluar, BarangKeluarInput, RiwayatBarangJadi, TipeRiwayatBarangJadi, SumberProduksi, BatchProduksi } from '$lib/types';
 
 const COL_RIWAYAT = 'riwayat_barang_jadi';
 
@@ -27,6 +27,50 @@ function warnaDocKey(namaWarna: string): string {
 function buildBarangJadiDocId(modelId: string, ukuran: string, namaWarna?: string): string {
   if (!namaWarna) return `${modelId}__${ukuran}`;
   return `${modelId}__${ukuran}__${warnaDocKey(namaWarna)}`;
+}
+
+// Tambahkan satu lot produksi ke akhir antrian sumber_produksi sebuah pool
+// stok_barang_jadi. Kalau lot terakhir berasal dari batch_id yang sama,
+// jumlah pcs-nya digabung (mis. batch yang disetor bertahap dari steam).
+export function appendSumberProduksiLot(
+  existing: SumberProduksi[] | undefined,
+  lot: SumberProduksi,
+): SumberProduksi[] {
+  const list = existing ? [...existing] : [];
+  const last = list[list.length - 1];
+  if (last && last.batch_id === lot.batch_id) {
+    list[list.length - 1] = { ...last, jumlah_pcs: (last.jumlah_pcs ?? 0) + (lot.jumlah_pcs ?? 0) };
+    return list;
+  }
+  list.push(lot);
+  return list;
+}
+
+// Ambil `qty` pcs dari antrian sumber_produksi secara FIFO (lot paling lama
+// duluan). Kalau antrian tidak cukup menutupi qty (stok lama dari sebelum
+// fitur ini ada, tanpa data lot), sisanya dianggap "data lama" — tidak
+// diwariskan sumber produksi apa pun, dan itu memang perilaku yang diinginkan.
+export function consumeSumberProduksiLots(
+  queue: SumberProduksi[] | undefined,
+  qty: number,
+): { consumed: SumberProduksi[]; remaining: SumberProduksi[] } {
+  const consumed: SumberProduksi[] = [];
+  const remaining: SumberProduksi[] = [];
+  let sisa = qty;
+  for (const lot of queue ?? []) {
+    const tersedia = lot.jumlah_pcs ?? 0;
+    if (sisa <= 0 || tersedia <= 0) {
+      remaining.push(lot);
+      continue;
+    }
+    const diambil = Math.min(sisa, tersedia);
+    consumed.push({ ...lot, jumlah_pcs: diambil });
+    sisa -= diambil;
+    if (tersedia > diambil) {
+      remaining.push({ ...lot, jumlah_pcs: tersedia - diambil });
+    }
+  }
+  return { consumed, remaining };
 }
 
 // ─── STOK BARANG JADI ───────────────────────────────────────────
@@ -156,9 +200,15 @@ export async function catatBarangKeluar(
       }
 
       const { ref: stokRef, data: stok } = stokSnapshot;
+      const { consumed, remaining } = consumeSumberProduksiLots(stok.sumber_produksi, item.jumlah_pcs);
+      // Simpan snapshot lot yang terkonsumsi ke detail_keluar item ini, supaya
+      // laporan barang keluar bisa menampilkan siapa cutting/jahit/steam-nya.
+      item.sumber = consumed;
+
       transaction.update(stokRef, {
         stok_tersedia: stok.stok_tersedia - item.jumlah_pcs,
         total_keluar: stok.total_keluar + item.jumlah_pcs,
+        sumber_produksi: remaining,
         updatedAt: serverTimestamp(),
       });
     }

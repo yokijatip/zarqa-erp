@@ -27,8 +27,10 @@
   import Trash2Icon from "@lucide/svelte/icons/trash-2";
   import ClipboardListIcon from "@lucide/svelte/icons/clipboard-list";
   import DownloadIcon from "@lucide/svelte/icons/download";
+  import EyeIcon from "@lucide/svelte/icons/eye";
   import { type DateRange, getPeriodRange } from "$lib/period";
   import PeriodSelector from "$lib/components/period-selector.svelte";
+  import BarangKeluarDetailDialog from "$lib/components/barang-keluar-detail-dialog.svelte";
 
   // ── State ──────────────────────────────────────────────────────────
   let stokList = $state<StokBarangJadi[]>([]);
@@ -44,6 +46,13 @@
 
   // Cancel dialog
   let batalTarget = $state<BarangKeluar | null>(null);
+  let detailDialogOpen = $state(false);
+  let detailTarget = $state<BarangKeluar | null>(null);
+
+  function bukaDetail(r: BarangKeluar) {
+    detailTarget = r;
+    detailDialogOpen = true;
+  }
   let batalOpen = $state(false);
   let batalSaving = $state(false);
   let batalError = $state<string | null>(null);
@@ -791,6 +800,7 @@
           <Table.Head>Detail Ukuran</Table.Head>
           <Table.Head class="text-center">Total PCS</Table.Head>
           <Table.Head>Tujuan</Table.Head>
+          <Table.Head class="w-12"></Table.Head>
           {#if canCatat}<Table.Head class="w-12"></Table.Head>{/if}
         </Table.Row>
       </Table.Header>
@@ -830,6 +840,15 @@
                   {r.keterangan}
                 </p>
               {/if}
+            </Table.Cell>
+            <Table.Cell>
+              <button
+                onclick={() => bukaDetail(r)}
+                title="Detail pekerja"
+                class="rounded p-1 text-gray-300 hover:bg-gray-100 hover:text-gray-600"
+              >
+                <EyeIcon class="h-4 w-4" />
+              </button>
             </Table.Cell>
             {#if canCatat}
               <Table.Cell>
@@ -1119,3 +1138,5 @@
     </Dialog.Content>
   </Dialog.Root>
 {/if}
+
+<BarangKeluarDetailDialog bind:open={detailDialogOpen} riwayat={detailTarget} />

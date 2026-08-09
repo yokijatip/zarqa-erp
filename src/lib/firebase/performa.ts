@@ -30,6 +30,21 @@ export async function getPerformaPerDivisi(): Promise<Record<DivisiKey, Performa
   // Map per (uid + divisi)
   const map = new Map<string, PerformaKaryawan>();
 
+  function getOrCreate(uid: string, nama: string, divisi: DivisiKey): PerformaKaryawan {
+    const key = `${uid}__${divisi}`;
+    const existing = map.get(key) ?? {
+      uid,
+      nama,
+      divisi,
+      total_pcs_berhasil: 0,
+      total_pcs_reject: 0,
+      jumlah_batch: 0,
+      reject_rate: 0,
+    };
+    map.set(key, existing);
+    return existing;
+  }
+
   snap.docs.forEach((doc) => {
     const d = doc.data() as RiwayatProses;
 
@@ -39,22 +54,23 @@ export async function getPerformaPerDivisi(): Promise<Record<DivisiKey, Performa
     const uid = d.updated_by_uid || d.updated_by_nama;
     if (!uid) return;
 
-    const key = `${uid}__${divisi}`;
-    const existing = map.get(key) ?? {
-      uid: d.updated_by_uid,
-      nama: d.updated_by_nama,
-      divisi,
-      total_pcs_berhasil: 0,
-      total_pcs_reject: 0,
-      jumlah_batch: 0,
-      reject_rate: 0,
-    };
+    const entry = getOrCreate(uid, d.updated_by_nama, divisi);
+    entry.total_pcs_berhasil += d.pcs_berhasil ?? 0;
+    entry.jumlah_batch += 1;
 
-    existing.total_pcs_berhasil += d.pcs_berhasil ?? 0;
-    existing.total_pcs_reject  += d.pcs_reject ?? 0;
-    existing.jumlah_batch      += 1;
-
-    map.set(key, existing);
+    // Reject biasanya jadi tanggung jawab tahap yang mencatatnya. Tapi kalau
+    // ada `reject_attribusi` (mis. reject ditemukan saat Steam tapi
+    // penyebabnya cacat jahitan), reject itu dialihkan ke divisi & orang yang
+    // dituju, bukan ke tahap yang menemukannya.
+    const pcsReject = d.pcs_reject ?? 0;
+    if (pcsReject > 0) {
+      if (d.reject_attribusi) {
+        const target = getOrCreate(d.reject_attribusi.uid, d.reject_attribusi.nama, d.reject_attribusi.divisi as DivisiKey);
+        target.total_pcs_reject += pcsReject;
+      } else {
+        entry.total_pcs_reject += pcsReject;
+      }
+    }
   });
 
   const result: Record<DivisiKey, PerformaKaryawan[]> = {
