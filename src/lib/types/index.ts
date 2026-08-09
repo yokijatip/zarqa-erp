@@ -180,6 +180,17 @@ export type BatchProduksiInput = Omit<
 
 // ─── RIWAYAT PROSES ──────────────────────────────────────────────
 
+// Menandai bahwa pcs reject pada event ini sebenarnya bukan tanggung jawab
+// tahap yang mencatatnya, melainkan tahap sebelumnya. Contoh: reject yang
+// ditemukan saat Steam (menyetrika) sebenarnya cacat jahitan dari Jahit —
+// jadi reject-nya "dikembalikan" ke penjahit & divisi Jahit untuk keperluan
+// performa karyawan, bukan ke orang yang sedang menyetrika.
+export interface RejectAttribusi {
+  divisi: 'Cutting' | 'Jahit' | 'Steam';
+  uid: string;
+  nama: string;
+}
+
 export interface RiwayatProses {
   id?: string;
   tipe?: 'status_update' | 'edit_kuantitas' | 'setor_proses';
@@ -191,6 +202,7 @@ export interface RiwayatProses {
   pcs_reject: number;
   detail_ukuran?: DetailUkuran[];
   detail_reject?: DetailUkuran[];
+  reject_attribusi?: RejectAttribusi;
   catatan?: string;
   timestamp?: Timestamp;
 }
@@ -216,6 +228,7 @@ export interface RejectItem {
   jumlah_gagal: number; // akumulasi discrap / tidak bisa diperbaiki
   status: 'pending' | 'selesai'; // selesai kalau diperbaiki + gagal >= jumlah
   asal_proses: StatusBatch; // status batch saat reject ini dicatat (mis. JAHIT_IN_PROGRESS)
+  attribusi_penyebab?: RejectAttribusi; // lihat RejectAttribusi — siapa yang sebenarnya bertanggung jawab
   dicatat_oleh_uid: string;
   dicatat_oleh_nama: string;
   catatan?: string;
@@ -234,6 +247,19 @@ export interface RiwayatResolusiReject {
   timestamp?: Timestamp;
 }
 
+// Satu lot kontribusi batch produksi ke pool stok_barang_jadi — dipakai FIFO
+// (mirip sumber_cutting di stok_potongan) supaya saat barang keluar, kita
+// tahu pcs itu berasal dari batch mana & siapa cutting/jahit/steam-nya.
+export interface SumberProduksi {
+  batch_id: string;
+  jumlah_pcs: number;
+  penugasan?: {
+    cutting?: PenugasanWorker;
+    jahit?: PenugasanWorker;
+    steam?: PenugasanWorker;
+  };
+}
+
 // ─── STOK BARANG JADI ────────────────────────────────────────────
 
 export interface StokBarangJadi {
@@ -246,6 +272,7 @@ export interface StokBarangJadi {
   stok_tersedia: number;
   total_masuk: number;
   total_keluar: number;
+  sumber_produksi?: SumberProduksi[];
   updatedAt?: Timestamp;
 }
 
@@ -297,6 +324,11 @@ export interface RiwayatBarangJadi {
 export interface DetailKeluar {
   ukuran: UkuranBaju;
   jumlah_pcs: number;
+  // Snapshot lot produksi yang terkonsumsi (FIFO) untuk ukuran ini pada
+  // pengiriman ini — dipakai untuk menampilkan siapa cutting/jahit/steam-nya
+  // di laporan. Kalau kosong/tidak menutupi jumlah_pcs, sisanya adalah stok
+  // lama dari sebelum fitur ini ada (tidak ada datanya, dan itu tidak apa-apa).
+  sumber?: SumberProduksi[];
 }
 
 // Daftar tujuan pengiriman baku — dipakai di dropdown form & rekap,

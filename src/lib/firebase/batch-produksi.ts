@@ -8,10 +8,33 @@ import {
 } from 'firebase/firestore';
 import { db } from './config';
 import { createRejectItemsInTransaction } from './reject-items';
+import { appendSumberProduksiLot } from './barang-jadi';
 import { getModelBajuById } from './model-baju';
-import type { BatchProduksi, BatchProduksiInput, StatusBatch, RiwayatProses, PenugasanWorker, DetailUkuran, KainDigunakan, ModelBaju, SumberCutting } from '$lib/types';
+import type { BatchProduksi, BatchProduksiInput, StatusBatch, RiwayatProses, PenugasanWorker, DetailUkuran, KainDigunakan, ModelBaju, SumberCutting, RejectAttribusi, SumberProduksi } from '$lib/types';
 
 const COL = 'batch_produksi';
+
+// Reject yang ditemukan saat Steam sebenarnya cacat hasil Jahit — tukang steam
+// cuma menyetrika, tidak menjahit. Jadi kalau reject dicatat selagi batch masih
+// di tahap steam (baik in-progress, sudah steam-done, maupun saat langsung
+// diselesaikan dari steam), tanggung jawabnya dikembalikan ke penjahit batch
+// tsb (dari `batch.penugasan.jahit`), bukan ke siapa pun yang sedang mencatat.
+// Kalau batch tidak punya data penjahit (data lama/belum diisi), fallback ke
+// perilaku lama: reject tetap tercatat di tahap saat itu.
+function resolveRejectAttribusi(
+  batch: BatchProduksi,
+  asalProses: StatusBatch,
+): RejectAttribusi | undefined {
+  const asalDariSteam = asalProses === 'STEAM_IN_PROGRESS' || asalProses === 'STEAM_DONE';
+  if (asalDariSteam && batch.penugasan?.jahit) {
+    return {
+      divisi: 'Jahit',
+      uid: batch.penugasan.jahit.uid,
+      nama: batch.penugasan.jahit.nama,
+    };
+  }
+  return undefined;
+}
 
 function warnaDocKey(namaWarna: string): string {
   return namaWarna.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
@@ -309,6 +332,10 @@ export async function updateStatusBatch(
       updatePayload['detail_ukuran'] = newDetailUkuran;
     }
 
+    const rejectAttribusi = riwayat.detail_reject && riwayat.detail_reject.length > 0
+      ? resolveRejectAttribusi(batch, batch.status)
+      : undefined;
+
     transaction.update(batchRef, updatePayload);
     transaction.set(riwayatRef, {
       ...riwayat,
@@ -317,6 +344,7 @@ export async function updateStatusBatch(
       status_ke: statusBaru,
       updated_by_uid: updatedByUid,
       updated_by_nama: updatedByNama,
+      ...(rejectAttribusi ? { reject_attribusi: rejectAttribusi } : {}),
       timestamp: serverTimestamp(),
     });
 
@@ -331,6 +359,7 @@ export async function updateStatusBatch(
         detailReject: riwayat.detail_reject,
         uid: updatedByUid,
         nama: updatedByNama,
+        attribusi: rejectAttribusi,
       });
     }
 
@@ -379,12 +408,17 @@ export async function recordBatchProgress(
       updatedAt: serverTimestamp(),
     });
 
+    const rejectAttribusi = riwayat.detail_reject && riwayat.detail_reject.length > 0
+      ? resolveRejectAttribusi(batch, batch.status)
+      : undefined;
+
     transaction.set(riwayatRef, {
       ...riwayat,
       tipe: 'setor_proses',
       status_ke: batch.status,
       updated_by_uid: updatedByUid,
       updated_by_nama: updatedByNama,
+      ...(rejectAttribusi ? { reject_attribusi: rejectAttribusi } : {}),
       timestamp: serverTimestamp(),
     });
 
@@ -399,6 +433,7 @@ export async function recordBatchProgress(
         detailReject: riwayat.detail_reject,
         uid: updatedByUid,
         nama: updatedByNama,
+        attribusi: rejectAttribusi,
       });
     }
   });
@@ -708,6 +743,10 @@ export async function completeBatchProduksi(
       updatedAt: serverTimestamp(),
     });
 
+    const rejectAttribusi = riwayat.detail_reject && riwayat.detail_reject.length > 0
+      ? resolveRejectAttribusi(currentBatch, currentBatch.status)
+      : undefined;
+
     transaction.set(riwayatRef, {
       ...riwayat,
       tipe: 'status_update',
@@ -715,6 +754,7 @@ export async function completeBatchProduksi(
       status_ke: 'COMPLETED' as StatusBatch,
       updated_by_uid: updatedByUid,
       updated_by_nama: updatedByNama,
+      ...(rejectAttribusi ? { reject_attribusi: rejectAttribusi } : {}),
       timestamp: serverTimestamp(),
     });
 
@@ -727,6 +767,14 @@ export async function completeBatchProduksi(
         : 0;
       const stokSesudah = stokSebelum + item.jumlah_pcs;
 
+      // Lot produksi untuk ukuran ini — dipakai FIFO nanti saat barang keluar
+      // supaya laporan bisa menampilkan siapa cutting/jahit/steam-nya.
+      const lot: SumberProduksi = {
+        batch_id: currentBatch.id,
+        jumlah_pcs: item.jumlah_pcs,
+        ...(currentBatch.penugasan ? { penugasan: currentBatch.penugasan } : {}),
+      };
+
       if (!stokSnap.exists()) {
         transaction.set(stokRef, {
           model_id: currentBatch.model_id,
@@ -737,13 +785,15 @@ export async function completeBatchProduksi(
           stok_tersedia: stokSesudah,
           total_masuk: item.jumlah_pcs,
           total_keluar: 0,
+          sumber_produksi: [lot],
           updatedAt: serverTimestamp(),
         });
       } else {
-        const stok = stokSnap.data() as { stok_tersedia: number; total_masuk: number };
+        const stok = stokSnap.data() as { stok_tersedia: number; total_masuk: number; sumber_produksi?: SumberProduksi[] };
         transaction.update(stokRef, {
           stok_tersedia: stokSesudah,
           total_masuk: stok.total_masuk + item.jumlah_pcs,
+          sumber_produksi: appendSumberProduksiLot(stok.sumber_produksi, lot),
           ...(currentBatch.nama_warna ? { nama_warna: currentBatch.nama_warna } : {}),
           ...(currentBatch.kode_hex_warna ? { kode_hex_warna: currentBatch.kode_hex_warna } : {}),
           updatedAt: serverTimestamp(),
@@ -779,6 +829,7 @@ export async function completeBatchProduksi(
         detailReject: riwayat.detail_reject,
         uid: updatedByUid,
         nama: updatedByNama,
+        attribusi: rejectAttribusi,
       });
     }
   });

@@ -8,7 +8,7 @@ import {
 import { db } from './config';
 import type {
   RejectItem, RiwayatResolusiReject, AksiResolusiReject,
-  DetailUkuran, StatusBatch, StokBarangJadi,
+  DetailUkuran, StatusBatch, StokBarangJadi, RejectAttribusi,
 } from '$lib/types';
 
 const COL_REJECT = 'reject_items';
@@ -43,9 +43,10 @@ export function createRejectItemsInTransaction(
     uid: string;
     nama: string;
     catatan?: string;
+    attribusi?: RejectAttribusi;
   },
 ): void {
-  const { batchId, modelId, namaModel, namaWarna, kodeHexWarna, asalProses, detailReject, uid, nama, catatan } = params;
+  const { batchId, modelId, namaModel, namaWarna, kodeHexWarna, asalProses, detailReject, uid, nama, catatan, attribusi } = params;
 
   for (const item of detailReject) {
     if (item.jumlah_pcs <= 0) continue;
@@ -62,6 +63,7 @@ export function createRejectItemsInTransaction(
       jumlah_gagal: 0,
       status: 'pending',
       asal_proses: asalProses,
+      ...(attribusi ? { attribusi_penyebab: attribusi } : {}),
       dicatat_oleh_uid: uid,
       dicatat_oleh_nama: nama,
       ...(catatan ? { catatan } : {}),

@@ -125,6 +125,12 @@
                 Sisa {sisaOf(item)} / {item.jumlah} pcs
               </p>
             </div>
+            {#if item.attribusi_penyebab}
+              <p class="mt-1 text-xs text-amber-700">
+                Penyebab: {item.attribusi_penyebab.divisi} — {item
+                  .attribusi_penyebab.nama}
+              </p>
+            {/if}
             <div class="mt-2 flex items-center gap-2">
               <Input
                 type="number"
