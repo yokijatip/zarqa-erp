@@ -21,6 +21,10 @@ export interface UserProfile {
   photoURL?: string;
   tipe_akun?: 'permanent' | 'temporary';
   tanggal_expired?: Timestamp;
+  // Tarif upah per pcs (Rp) untuk karyawan divisi produksi (Cutting/Jahit/Steam).
+  // Dipakai untuk menghitung Penggajian mingguan — hanya relevan untuk role
+  // kepala_cutting / kepala_jahit / kepala_steam.
+  tarif_per_pcs?: number;
   createdAt?: Timestamp;
 }
 
@@ -362,6 +366,45 @@ export interface BarangKeluar {
 }
 
 export type BarangKeluarInput = Omit<BarangKeluar, 'id' | 'total_pcs' | 'dicatat_oleh' | 'tanggal_keluar'>;
+
+// ─── PENGGAJIAN ──────────────────────────────────────────────────
+// Gaji karyawan produksi (Cutting/Jahit/Steam) dihitung per pcs baju yang
+// berhasil diselesaikan dalam satu minggu, dari data riwayat_proses batch
+// produksi yang sudah ada (bukan koleksi baru). Lihat src/lib/firebase/penggajian.ts
+
+export type DivisiProduksi = 'Cutting' | 'Jahit' | 'Steam';
+
+// Rincian sumber satu lot: dari batch cutting/jahit mana, model+warna+ukuran apa.
+export interface PenggajianSumberLot {
+  batch_id: string;
+  nama_model: string;
+  nama_warna?: string;
+  ukuran: string;
+  jumlah_pcs: number;
+  nama_pekerja?: string; // nama karyawan cutting/jahit sumber lot ini
+}
+
+// Breakdown per (model, warna, ukuran) untuk satu karyawan pada satu divisi.
+export interface PenggajianBreakdownItem {
+  nama_model: string;
+  nama_warna?: string;
+  ukuran: string;
+  jumlah_pcs: number;
+  // Untuk Jahit: dari cutting mana. Untuk Steam: dari jahit (dan cutting) mana.
+  sumber_cutting?: PenggajianSumberLot[];
+  sumber_jahit?: PenggajianSumberLot[];
+}
+
+export interface PenggajianKaryawan {
+  uid: string;
+  nama: string;
+  divisi: DivisiProduksi;
+  tarif_per_pcs: number;
+  total_pcs: number;
+  total_gaji: number;
+  jumlah_batch: number;
+  breakdown: PenggajianBreakdownItem[];
+}
 
 // ─── HELPER ──────────────────────────────────────────────────────
 

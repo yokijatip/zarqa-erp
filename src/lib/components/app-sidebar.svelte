@@ -73,7 +73,7 @@
       items: [
         { title: "Data Karyawan", url: "/karyawan/data" },
         { title: "Absensi", url: "#", comingSoon: true },
-        { title: "Penggajian", url: "#", comingSoon: true },
+        { title: "Penggajian", url: "/karyawan/penggajian" },
       ],
     },
     {

@@ -76,7 +76,7 @@ function appendSumberCuttingLot(existing: SumberCutting[] | undefined, lot: Sumb
 // batch baru sebagai sumber_cutting-nya) beserta sisa antrian setelah pengambilan.
 // Ini yang memastikan batch baru hanya "mewarisi" sumber cutting sebanyak yang memang
 // diambil dari pool — bukan seluruh histori kontributor pool tersebut.
-function consumeSumberCuttingLots(
+export function consumeSumberCuttingLots(
   queue: SumberCutting[] | undefined,
   qty: number,
 ): { consumed: SumberCutting[]; remaining: SumberCutting[] } {

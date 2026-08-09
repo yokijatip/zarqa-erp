@@ -33,6 +33,9 @@ export const ROLE_KARYAWAN: UserRole[] = [
   'owner',
 ];
 
+// Role yang tarif per pcs-nya relevan (dipakai untuk hitung Penggajian)
+export const ROLE_DIVISI_PRODUKSI: UserRole[] = ['kepala_cutting', 'kepala_jahit', 'kepala_steam'];
+
 export interface CreateAkunInput {
   email: string;
   password: string;
@@ -40,6 +43,7 @@ export interface CreateAkunInput {
   role: UserRole;
   tipe_akun: 'permanent' | 'temporary';
   tanggal_expired?: Date | null;
+  tarif_per_pcs?: number;
 }
 
 // Buat akun Firebase Auth + profil Firestore
@@ -85,6 +89,10 @@ export async function createAkunKaryawan(data: CreateAkunInput): Promise<string>
     profileData.tanggal_expired = Timestamp.fromDate(data.tanggal_expired);
   }
 
+  if (data.tarif_per_pcs != null) {
+    profileData.tarif_per_pcs = data.tarif_per_pcs;
+  }
+
   await setDoc(doc(db, COL, uid), profileData);
 
   return uid;
@@ -104,6 +112,7 @@ export interface UpdateKaryawanInput {
   role?: UserRole;
   tipe_akun?: 'permanent' | 'temporary';
   tanggal_expired?: Date | null;
+  tarif_per_pcs?: number;
 }
 
 export async function updateKaryawan(uid: string, data: UpdateKaryawanInput): Promise<void> {
@@ -111,6 +120,7 @@ export async function updateKaryawan(uid: string, data: UpdateKaryawanInput): Pr
     ...(data.name !== undefined ? { name: data.name } : {}),
     ...(data.role !== undefined ? { role: data.role } : {}),
     ...(data.tipe_akun !== undefined ? { tipe_akun: data.tipe_akun } : {}),
+    ...(data.tarif_per_pcs !== undefined ? { tarif_per_pcs: data.tarif_per_pcs } : {}),
     updatedAt: serverTimestamp(),
   };
 
