@@ -13,6 +13,9 @@ export type UserRole =
   | 'developer'
   | 'owner';
 
+// Tipe penggajian: harian (borongan/hari), mingguan (per pcs/minggu), bulanan (gaji tetap)
+export type TipePenggajian = 'harian' | 'mingguan' | 'bulanan';
+
 export interface UserProfile {
   uid: string;
   name: string;
@@ -21,6 +24,8 @@ export interface UserProfile {
   photoURL?: string;
   tipe_akun?: 'permanent' | 'temporary';
   tanggal_expired?: Timestamp;
+  // Tipe penggajian: harian (borongan/hari), mingguan (per pcs/minggu), bulanan (gaji tetap)
+  tipe_penggajian?: TipePenggajian;
   // Tarif upah per pcs (Rp) untuk karyawan divisi produksi (Cutting/Jahit/Steam).
   // Dipakai untuk menghitung Penggajian mingguan — hanya relevan untuk role
   // kepala_cutting / kepala_jahit / kepala_steam.
@@ -51,6 +56,16 @@ export interface RiwayatStokKain {
   stok_sebelum: number;
   stok_sesudah: number;
   catatan?: string;
+  // Info untuk pemakaian_produksi
+  batch_id?: string;
+  model_id?: string;
+  nama_model?: string;
+  nama_warna?: string;
+  detail_ukuran?: Array<{ ukuran: string; pcs: number; yard?: number }>;
+  // Info untuk restock (tanggal pembelian)
+  tanggal_beli?: string;
+  supplier?: string;
+  harga_per_unit?: number;
   timestamp?: Timestamp;
 }
 
@@ -78,26 +93,21 @@ export type UkuranBaju = 'XS' | 'S' | 'M' | 'L' | 'XL' | 'XXL';
 
 export const UKURAN_ORDER: UkuranBaju[] = ['XS', 'S', 'M', 'L', 'XL', 'XXL'];
 
-export interface KebutuhanKain {
-  kain_id: string;
-  nama_kain: string;
-  satuan: 'yard' | 'kg';
-  jumlah_per_ukuran: Partial<Record<UkuranBaju, number>>;
-}
-
 export interface WarnaTersedia {
   warna_id: string;
   nama_warna: string;
   kode_hex: string;
 }
 
+// Kebutuhan kain dihapus dari model baju.
+// Input yard kain sekarang dilakukan saat proses cutting,
+// karena tiap order bisa beda jumlah yard nya.
 export interface ModelBaju {
   id: string;
   nama_model: string;
   deskripsi?: string;
   ukuran_tersedia: UkuranBaju[];
   warna_tersedia?: WarnaTersedia[];
-  kebutuhan_kain: KebutuhanKain[];
   aktif: boolean;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
@@ -399,9 +409,7 @@ export interface PenggajianKaryawan {
   uid: string;
   nama: string;
   divisi: DivisiProduksi;
-  tarif_per_pcs: number;
   total_pcs: number;
-  total_gaji: number;
   jumlah_batch: number;
   breakdown: PenggajianBreakdownItem[];
 }

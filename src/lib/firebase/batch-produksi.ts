@@ -9,7 +9,6 @@ import {
 import { db } from './config';
 import { createRejectItemsInTransaction } from './reject-items';
 import { appendSumberProduksiLot } from './barang-jadi';
-import { getModelBajuById } from './model-baju';
 import type { BatchProduksi, BatchProduksiInput, StatusBatch, RiwayatProses, PenugasanWorker, DetailUkuran, KainDigunakan, ModelBaju, SumberCutting, RejectAttribusi, SumberProduksi } from '$lib/types';
 
 const COL = 'batch_produksi';
@@ -101,13 +100,13 @@ export function consumeSumberCuttingLots(
 
 // Status yang menandakan kain sudah dipotong (stok kain sudah berkurang)
 const STATUSES_KAIN_SUDAH_DIPOTONG = new Set<StatusBatch>([
-  'CUTTING_DONE', 'JAHIT_IN_PROGRESS', 'JAHIT_DONE',
+  'CUTTING_IN_PROGRESS', 'CUTTING_DONE', 'JAHIT_IN_PROGRESS', 'JAHIT_DONE',
   'STEAM_IN_PROGRESS', 'STEAM_DONE',
   // COMPLETED tidak ada di sini karena batch COMPLETED tidak bisa dihapus
 ]);
 
 // Buat order produksi baru
-// Stok kain BELUM dikurangi di sini — pengurangan terjadi saat CUTTING_DONE
+// Stok kain BELUM dikurangi di sini — pengurangan terjadi saat CUTTING_IN_PROGRESS
 export async function createBatchProduksi(
   data: BatchProduksiInput,
   dibuatOlehUid: string
@@ -251,7 +250,7 @@ export async function updateStatusBatch(
       throw new Error('Status batch sudah diperbarui oleh pengguna lain');
     }
 
-    // Saat transisi ke CUTTING_DONE: baca & validasi stok kain, lalu potong
+    // Saat transisi ke CUTTING_IN_PROGRESS: validasi & potong stok kain (bukan saat selesai)
     type KainEntry = {
       kain: KainDigunakan;
       kRef: ReturnType<typeof doc>;
@@ -261,34 +260,13 @@ export async function updateStatusBatch(
     };
     const kainEntries: KainEntry[] = [];
 
-    if (statusBaru === 'CUTTING_DONE' && !batch.dari_potongan) {
-      // Gunakan kain_digunakan dari batch, atau hitung ulang dari model jika kosong/nol
+    if (statusBaru === 'CUTTING_IN_PROGRESS' && !batch.dari_potongan) {
       let kainList: KainDigunakan[] = (batch.kain_digunakan ?? []).filter(k => (k.jumlah_dipakai ?? 0) > 0);
 
-      if (kainList.length === 0 && batch.model_id) {
-        // Fallback: baca model sekarang dan hitung kebutuhan kain dari detail_ukuran aktual
-        const modelRef = doc(db, 'model_baju', batch.model_id);
-        const modelSnap = await transaction.get(modelRef);
-        if (modelSnap.exists()) {
-          const model = modelSnap.data() as ModelBaju;
-          const detailUkuran = (newDetailUkuran && newDetailUkuran.length > 0) ? newDetailUkuran : batch.detail_ukuran;
-          // Backward compat: kebutuhan_kain pernah disimpan di varian_warna[0].kebutuhan_kain
-          const kebutuhanKain = (model.kebutuhan_kain?.length ?? 0) > 0
-            ? model.kebutuhan_kain!
-            : ((model as any).varian_warna?.[0]?.kebutuhan_kain ?? []);
-          kainList = (kebutuhanKain as typeof model.kebutuhan_kain)
-            .map((k) => ({
-              kain_id: k.kain_id,
-              nama_kain: k.nama_kain,
-              satuan: k.satuan,
-              jumlah_dipakai: parseFloat(
-                detailUkuran
-                  .reduce((sum, du) => sum + ((k.jumlah_per_ukuran ?? {})[du.ukuran] ?? 0) * du.jumlah_pcs, 0)
-                  .toFixed(2)
-              ),
-            }))
-            .filter((k) => k.jumlah_dipakai > 0);
-        }
+      // Total pcs batch — kalau > 0 tapi tidak ada kain, berarti user belum input kain
+      const totalPcs = batch.detail_ukuran.reduce((s, du) => s + (du.jumlah_pcs ?? 0), 0);
+      if (totalPcs > 0 && kainList.length === 0) {
+        throw new Error('Kain belum diinput. Buka detail batch dan tambahkan kain sebelum mulai cutting.');
       }
 
       for (const kain of kainList) {
@@ -313,11 +291,6 @@ export async function updateStatusBatch(
       status: statusBaru,
       updatedAt: serverTimestamp(),
     };
-
-    // Jika kain_digunakan batch kosong/nol tapi kita bisa hitung dari model, simpan hasil hitung
-    if (statusBaru === 'CUTTING_DONE' && !batch.dari_potongan && kainEntries.length > 0 && (batch.kain_digunakan ?? []).filter(k => (k.jumlah_dipakai ?? 0) > 0).length === 0) {
-      updatePayload['kain_digunakan'] = kainEntries.map(e => e.kain);
-    }
 
     const penugasanKey = PENUGASAN_KEY[statusBaru];
     if (penugasan && penugasanKey) {
@@ -363,7 +336,7 @@ export async function updateStatusBatch(
       });
     }
 
-    // Kurangi stok kain + tulis riwayat saat cutting selesai
+    // Kurangi stok kain + tulis riwayat saat cutting dimulai (CUTTING_IN_PROGRESS)
     for (const { kain, kRef, riwayatRef, stok_tersedia, stok_terpakai } of kainEntries) {
       const stokBaru = stok_tersedia - kain.jumlah_dipakai;
       transaction.update(kRef, {
@@ -376,6 +349,14 @@ export async function updateStatusBatch(
         jumlah: kain.jumlah_dipakai,
         stok_sebelum: stok_tersedia,
         stok_sesudah: stokBaru,
+        batch_id: batch.id,
+        model_id: batch.model_id,
+        nama_model: batch.nama_model,
+        nama_warna: batch.nama_warna,
+        detail_ukuran: batch.detail_ukuran.map(du => ({
+          ukuran: du.ukuran,
+          pcs: du.jumlah_pcs,
+        })),
         catatan: `Batch produksi: ${batch.nama_model}`,
         timestamp: serverTimestamp(),
       });
@@ -906,19 +887,9 @@ export async function editKuantitasBatch(
   const newTotal = newDetailUkuran.reduce((s, du) => s + du.jumlah_pcs, 0);
   if (newTotal <= 0) throw new Error('Total pcs harus lebih dari 0');
 
-  const model = await getModelBajuById(batch.model_id);
-
   const newKainDigunakan = batch.kain_digunakan.map(kd => {
-    let jumlahBaru: number;
-    const kebutuhan = (model?.kebutuhan_kain ?? []).find(k => k.kain_id === kd.kain_id);
-    if (kebutuhan?.jumlah_per_ukuran) {
-      jumlahBaru = newDetailUkuran.reduce((s, du) =>
-        s + (kebutuhan.jumlah_per_ukuran[du.ukuran] ?? 0) * du.jumlah_pcs, 0);
-      jumlahBaru = parseFloat(jumlahBaru.toFixed(2));
-    } else {
-      // fallback proporsional jika data model tidak tersedia
-      jumlahBaru = parseFloat((kd.jumlah_dipakai * (newTotal / oldTotal)).toFixed(2));
-    }
+    // Proporsionalkan jumlah kain berdasarkan perubahan jumlah pcs
+    const jumlahBaru = parseFloat((kd.jumlah_dipakai * (newTotal / oldTotal)).toFixed(2));
     return { ...kd, jumlah_dipakai: jumlahBaru };
   });
 

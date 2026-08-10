@@ -8,9 +8,9 @@
     aktifkanModel,
     deleteModelBaju,
   } from "$lib/firebase/model-baju";
-  import { modelBajuCache, stokKainCache, warnaCache } from "$lib/stores/data-cache.svelte";
+  import { modelBajuCache, warnaCache } from "$lib/stores/data-cache.svelte";
   import { isAdmin } from "$lib/stores/auth.store";
-  import { UKURAN_ORDER, type ModelBaju, type StokKain, type UkuranBaju, type Warna, type WarnaTersedia } from "$lib/types";
+  import { UKURAN_ORDER, type ModelBaju, type UkuranBaju, type Warna, type WarnaTersedia } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
   import * as Popover from "$lib/components/ui/popover";
   import StatCard from "$lib/components/StatCard.svelte";
@@ -22,7 +22,6 @@
 
   // ── State ──────────────────────────────────────────────────────────
   let modelList = $state<ModelBaju[]>([]);
-  let stokKainList = $state<StokKain[]>([]);
   let warnaList = $state<Warna[]>([]);
   let loading = $state(true);
   let saving = $state(false);
@@ -36,19 +35,11 @@
   let openHapus = $state(false);
   let selectedModelHapus = $state<ModelBaju | null>(null);
 
-  type FormKain = {
-    kain_id: string;
-    nama_kain: string;
-    satuan: 'yard' | 'kg';
-    jumlah_per_ukuran: Partial<Record<UkuranBaju, number | "">>;
-  };
-
   // Form fields
   let fNama = $state("");
   let fDeskripsi = $state("");
   let fUkuran = $state<UkuranBaju[]>([]);
   let fWarna = $state<WarnaTersedia[]>([]);
-  let fKainList = $state<FormKain[]>([]);
 
   // ── Derived ────────────────────────────────────────────────────────
   let filteredList = $derived.by(() => {
@@ -67,12 +58,7 @@
 
   let canSubmit = $derived(
     fNama.trim() !== "" &&
-    fUkuran.length > 0 &&
-    fKainList.every(
-      (k) =>
-        k.kain_id !== "" &&
-        fUkuran.every((u) => Number(k.jumlah_per_ukuran[u] ?? 0) > 0),
-    ),
+    fUkuran.length > 0
   );
 
   // ── Helpers ────────────────────────────────────────────────────────
@@ -80,23 +66,8 @@
     if (fUkuran.includes(u)) {
       fUkuran = fUkuran.filter((x) => x !== u);
     } else {
-      fUkuran = UKURAN_ORDER.filter((x) => [...fUkuran, u].includes(x));
+      fUkuran = UKURAN_ORDER.filter((x) => [...fUkuran, x].includes(x));
     }
-  }
-
-  function getKainById(kainId: string): StokKain | null {
-    return stokKainList.find((k) => k.id === kainId) ?? null;
-  }
-
-  function formatKainLabel(kain: Pick<StokKain, "nama_kain" | "nama_warna">): string {
-    return kain.nama_warna ? `${kain.nama_kain} · ${kain.nama_warna}` : kain.nama_kain;
-  }
-
-  function availableKain(kainIdx: number): StokKain[] {
-    const otherIds = fKainList
-      .filter((_, idx) => idx !== kainIdx && _.kain_id !== "")
-      .map((k) => k.kain_id);
-    return stokKainList.filter((k) => !otherIds.includes(k.id));
   }
 
   function toggleWarna(w: Warna) {
@@ -112,27 +83,11 @@
     return fWarna.some((w) => w.warna_id === warnaId);
   }
 
-  function tambahKain() {
-    fKainList = [...fKainList, { kain_id: "", nama_kain: "", satuan: "yard", jumlah_per_ukuran: {} }];
-  }
-
-  function hapusKain(ki: number) {
-    fKainList = fKainList.filter((_, idx) => idx !== ki);
-  }
-
-  function onKainSelect(ki: number, kainId: string) {
-    const kain = stokKainList.find((k) => k.id === kainId);
-    fKainList[ki].kain_id = kainId;
-    fKainList[ki].nama_kain = kain?.nama_kain ?? "";
-    fKainList[ki].satuan = kain?.satuan ?? "yard";
-  }
-
   function resetForm() {
     fNama = "";
     fDeskripsi = "";
     fUkuran = [];
     fWarna = [];
-    fKainList = [];
     editingId = null;
   }
 
@@ -147,15 +102,6 @@
     fDeskripsi = model.deskripsi ?? "";
     fUkuran = [...model.ukuran_tersedia];
     fWarna = [...(model.warna_tersedia ?? [])];
-    const kebutuhanKainEdit = (model.kebutuhan_kain?.length ?? 0) > 0
-      ? model.kebutuhan_kain!
-      : ((model as any).varian_warna?.[0]?.kebutuhan_kain ?? []);
-    fKainList = kebutuhanKainEdit.map((k: typeof model.kebutuhan_kain[0]) => ({
-      kain_id: k.kain_id,
-      nama_kain: getKainById(k.kain_id)?.nama_kain ?? k.nama_kain,
-      satuan: k.satuan ?? "yard",
-      jumlah_per_ukuran: { ...k.jumlah_per_ukuran } as Partial<Record<UkuranBaju, number | "">>,
-    }));
     openForm = true;
   }
 
@@ -188,13 +134,11 @@
   async function load(force = false) {
     loading = true;
     try {
-      const [models, stokKain, warna] = await Promise.all([
+      const [models, warna] = await Promise.all([
         modelBajuCache.get(force),
-        stokKainCache.get(force),
         warnaCache.get(force),
       ]);
       modelList = models;
-      stokKainList = stokKain;
       warnaList = warna;
     } catch {
       showError("Gagal memuat data. Periksa koneksi Firebase.");
@@ -213,14 +157,6 @@
         ...(fDeskripsi.trim() ? { deskripsi: fDeskripsi.trim() } : {}),
         ukuran_tersedia: fUkuran,
         warna_tersedia: fWarna.length > 0 ? fWarna : [],
-        kebutuhan_kain: fKainList.map((k) => ({
-          kain_id: k.kain_id,
-          nama_kain: k.nama_kain,
-          satuan: k.satuan,
-          jumlah_per_ukuran: Object.fromEntries(
-            fUkuran.map((u) => [u, Number(k.jumlah_per_ukuran[u] ?? 0)])
-          ) as Partial<Record<UkuranBaju, number>>,
-        })),
       };
 
       if (isEditing) {
@@ -341,7 +277,7 @@
   <div>
     <h1 class="text-xl font-semibold text-gray-900">Model Baju</h1>
     <p class="mt-0.5 text-sm text-gray-500">
-      Kelola katalog model dan kebutuhan kain produksi
+      Kelola katalog model produksi
     </p>
   </div>
   {#if $isAdmin}
@@ -604,42 +540,6 @@
               </div>
             </div>
           {/if}
-
-          <!-- Kebutuhan Kain -->
-          <div>
-            <p class="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
-              Kebutuhan Kain
-            </p>
-            {#if (model.kebutuhan_kain ?? []).length > 0}
-              <div class="space-y-1">
-                {#each model.kebutuhan_kain as kain}
-                  {@const ukuranAda = UKURAN_ORDER.filter((u) => (kain.jumlah_per_ukuran ?? {})[u])}
-                  {@const kainStok = getKainById(kain.kain_id)}
-                  <div class="rounded-md border border-gray-100 bg-gray-50 px-2.5 py-1.5 text-xs">
-                    <div class="flex items-center justify-between">
-                      <div class="flex items-center gap-1">
-                        <span class="h-1 w-1 shrink-0 rounded-full bg-amber-400"></span>
-                        <span class="font-medium text-gray-700">{kainStok ? formatKainLabel(kainStok) : kain.nama_kain}</span>
-                      </div>
-                      <span class="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">{kain.satuan}</span>
-                    </div>
-                    {#if ukuranAda.length > 0}
-                      <div class="mt-0.5 grid text-center" style="grid-template-columns: repeat({ukuranAda.length}, 1fr)">
-                        {#each ukuranAda as u}
-                          <span class="text-[10px] font-semibold text-gray-400">{u}</span>
-                        {/each}
-                        {#each ukuranAda as u}
-                          <span class="font-bold text-gray-700">{(kain.jumlah_per_ukuran ?? {})[u]}</span>
-                        {/each}
-                      </div>
-                    {/if}
-                  </div>
-                {/each}
-              </div>
-            {:else}
-              <p class="text-xs italic text-gray-300">Belum ada kebutuhan kain</p>
-            {/if}
-          </div>
         </div>
 
         <!-- Card Footer -->
@@ -947,112 +847,6 @@
               </Popover.Content>
             </Popover.Root>
           {/if}
-        </div>
-
-        <!-- Kebutuhan Kain -->
-        <div>
-          <div class="mb-2 flex items-center justify-between">
-            <p class="text-sm font-medium text-gray-700">
-              Kebutuhan Kain
-              <span class="text-xs font-normal text-gray-400">(opsional)</span>
-            </p>
-            <Button
-              variant="outline"
-              size="sm"
-              onclick={tambahKain}
-              disabled={stokKainList.length === 0 || fUkuran.length === 0}
-              class="border-blue-200 bg-blue-50 text-blue-600 hover:bg-blue-100 hover:text-blue-700"
-            >
-              <svg class="h-3 w-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-              </svg>
-              Tambah Kain
-            </Button>
-          </div>
-
-          {#if fKainList.length === 0}
-            <div class="rounded-lg border border-dashed border-gray-200 bg-gray-50 py-5 text-center">
-              <p class="text-xs text-gray-400">Belum ada kebutuhan kain</p>
-              <button type="button" onclick={tambahKain} disabled={fUkuran.length === 0} class="mt-1 text-xs font-medium text-blue-500 hover:underline disabled:text-gray-300">
-                + Tambah kain
-              </button>
-            </div>
-          {:else}
-            <div class="space-y-2">
-              {#each fKainList as entry, ki}
-                <div class="rounded border border-gray-200 bg-gray-50 p-2">
-                  <div class="mb-1.5 flex items-center justify-between">
-                    <p class="text-[10px] font-semibold text-gray-400">Kain #{ki + 1}</p>
-                    <button onclick={() => hapusKain(ki)} class="text-gray-300 hover:text-red-400">
-                      <svg class="h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
-                      </svg>
-                    </button>
-                  </div>
-                  <Select.Root
-                    type="single"
-                    value={entry.kain_id || undefined}
-                    onValueChange={(val) => onKainSelect(ki, val ?? "")}
-                  >
-                    <Select.Trigger class="w-full">
-                      <span class={entry.kain_id ? "text-foreground" : "text-muted-foreground"}>
-                        {entry.kain_id ? formatKainLabel({ nama_kain: entry.nama_kain, nama_warna: getKainById(entry.kain_id)?.nama_warna }) : "— Pilih kain —"}
-                      </span>
-                    </Select.Trigger>
-                    <Select.Content preventScroll={false}>
-                      {#each availableKain(ki) as kain}
-                        <Select.Item value={kain.id}>{formatKainLabel(kain)}</Select.Item>
-                      {/each}
-                      {#if entry.kain_id && !availableKain(ki).find((k) => k.id === entry.kain_id)}
-                        <Select.Item value={entry.kain_id}>{entry.nama_kain}</Select.Item>
-                      {/if}
-                    </Select.Content>
-                  </Select.Root>
-                  {#if fUkuran.length > 0 && entry.kain_id}
-                    <div class="mt-1.5 grid gap-1" style="grid-template-columns: repeat({fUkuran.length}, 1fr)">
-                      {#each fUkuran as u}
-                        <div class="text-center">
-                          <p class="mb-0.5 text-[9px] font-semibold text-gray-400">{u}</p>
-                          <Input
-                            type="number"
-                            min="0.1"
-                            step="0.1"
-                            placeholder="0"
-                            bind:value={fKainList[ki].jumlah_per_ukuran[u]}
-                            class="h-7 px-1 text-center text-xs"
-                          />
-                        </div>
-                      {/each}
-                    </div>
-                    <p class="mt-0.5 text-[10px] text-gray-400">{entry.satuan}/pcs per ukuran</p>
-                  {/if}
-                </div>
-              {/each}
-            </div>
-
-            {#if fKainList.some((k) => k.kain_id && fUkuran.some((u) => Number(k.jumlah_per_ukuran[u] ?? 0) > 0))}
-              <div class="mt-2.5 rounded-lg border border-blue-100 bg-blue-50 p-2.5">
-                <p class="mb-1 text-[10px] font-semibold uppercase tracking-wider text-blue-500">Ringkasan</p>
-                <div class="mb-0.5 grid text-[10px] font-semibold text-blue-400" style="grid-template-columns: 1fr {fUkuran.map(() => '2rem').join(' ')} 1.5rem">
-                  <span>Kain</span>
-                  {#each fUkuran as u}<span class="text-right">{u}</span>{/each}
-                  <span class="text-right">Sat</span>
-                </div>
-                {#each fKainList.filter((k) => k.kain_id) as k}
-                  <div class="grid text-[11px]" style="grid-template-columns: 1fr {fUkuran.map(() => '2rem').join(' ')} 1.5rem">
-                    <span class="truncate text-blue-700">{k.nama_kain}</span>
-                    {#each fUkuran as u}
-                      <span class="text-right font-semibold text-blue-800">
-                        {Number(k.jumlah_per_ukuran[u] ?? 0) > 0 ? k.jumlah_per_ukuran[u] : "—"}
-                      </span>
-                    {/each}
-                    <span class="text-right text-blue-400">{k.satuan}</span>
-                  </div>
-                {/each}
-              </div>
-            {/if}
-          {/if}
-        </div>
       </div>
     </div>
 

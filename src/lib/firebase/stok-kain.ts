@@ -52,9 +52,22 @@ function buildWarnaFields(warna?: Pick<Warna, 'id' | 'nama_warna' | 'kode_hex'> 
 }
 
 // Restock: tambah jumlah ke stok yang ada + catat riwayat
-export async function restockKain(id: string, tambahJumlah: number, catatan?: string): Promise<void> {
+export async function restockKain(
+  id: string,
+  tambahJumlah: number,
+  options?: {
+    catatan?: string;
+    tanggal_beli?: string;
+    supplier?: string;
+    harga_per_unit?: number;
+  },
+): Promise<void> {
   const ref = doc(db, COL, id);
   const riwayatRef = doc(collection(db, COL, id, 'riwayat'));
+  const catatan = options?.catatan;
+  const tanggalBeli = options?.tanggal_beli;
+  const supplier = options?.supplier;
+  const hargaPerUnit = options?.harga_per_unit;
   await runTransaction(db, async (transaction) => {
     const snap = await transaction.get(ref);
     if (!snap.exists()) throw new Error('Kain tidak ditemukan');
@@ -74,6 +87,9 @@ export async function restockKain(id: string, tambahJumlah: number, catatan?: st
       stok_sebelum: kain.stok_tersedia,
       stok_sesudah: stokBaru,
       ...(catatan?.trim() ? { catatan: catatan.trim() } : {}),
+      ...(tanggalBeli ? { tanggal_beli: tanggalBeli } : {}),
+      ...(supplier?.trim() ? { supplier: supplier.trim() } : {}),
+      ...(hargaPerUnit != null && hargaPerUnit > 0 ? { harga_per_unit: hargaPerUnit } : {}),
       timestamp: serverTimestamp(),
     });
   });

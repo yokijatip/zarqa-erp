@@ -1,12 +1,15 @@
 <script lang="ts">
-  import { getPenggajianPeriode } from "$lib/firebase/penggajian";
+  import { onMount } from "svelte";
+  import { getPenggajianPeriode, hitungGajiKaryawan, type TarifCetakInput } from "$lib/firebase/penggajian";
+  import { getKaryawanList } from "$lib/firebase/karyawan";
   import { isKaryawanManager } from "$lib/stores/auth.store";
   import { type DateRange, getPeriodRange } from "$lib/period";
-  import type { PenggajianKaryawan, DivisiProduksi } from "$lib/types";
+  import type { UserProfile, DivisiProduksi, TipePenggajian } from "$lib/types";
   import PeriodSelector from "$lib/components/period-selector.svelte";
   import * as Dialog from "$lib/components/ui/dialog";
   import * as Table from "$lib/components/ui/table";
   import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
   import StatCard from "$lib/components/StatCard.svelte";
   import BanknoteIcon from "@lucide/svelte/icons/banknote";
   import ScissorsIcon from "@lucide/svelte/icons/scissors";
@@ -14,37 +17,59 @@
   import FlameIcon from "@lucide/svelte/icons/flame";
   import PackageIcon from "@lucide/svelte/icons/package";
   import DownloadIcon from "@lucide/svelte/icons/download";
-  import EyeIcon from "@lucide/svelte/icons/eye";
+  import CheckIcon from "@lucide/svelte/icons/check";
   import AlertTriangleIcon from "@lucide/svelte/icons/triangle-alert";
+  import CalendarIcon from "@lucide/svelte/icons/calendar";
 
   // ── State ──────────────────────────────────────────────────────────
   let dateRange = $state<DateRange>(getPeriodRange("minggu_ini"));
-  let data = $state<PenggajianKaryawan[]>([]);
+  let data = $state<Awaited<ReturnType<typeof getPenggajianPeriode>>>([]);
+  let karyawanList = $state<UserProfile[]>([]);
   let loading = $state(true);
   let errorMsg = $state<string | null>(null);
   let exportingPdf = $state(false);
 
-  let detailOpen = $state(false);
-  let detailTarget = $state<PenggajianKaryawan | null>(null);
+  // Filter tabs
+  let activeTab = $state<TipePenggajian | "all">("all");
+
+  // Dialog cetak
+  let cetakDialogOpen = $state(false);
+  let selectedKaryawan = $state<(typeof data)[0] | null>(null);
+  let tarifInputs = $state<Array<{ nama_model: string; tarif: string }>>([]);
+  let calculatedSalary = $state<ReturnType<typeof hitungGajiKaryawan> | null>(null);
+
+  // Status daftar gaji (sudah dicetak / belum)
+  let printedSet = $state<Set<string>>(new Set());
 
   const DIVISI_CONFIG: Record<DivisiProduksi, { label: string; icon: typeof ScissorsIcon; color: string }> = {
     Cutting: { label: "Cutting", icon: ScissorsIcon, color: "blue" },
     Jahit: { label: "Jahit", icon: ShirtIcon, color: "purple" },
     Steam: { label: "Steam", icon: FlameIcon, color: "orange" },
   };
-  const DIVISI_ORDER: DivisiProduksi[] = ["Cutting", "Jahit", "Steam"];
+
+  const TIPE_LABEL: Record<TipePenggajian, string> = {
+    harian: "Harian",
+    mingguan: "Mingguan",
+    bulanan: "Bulanan",
+  };
 
   // ── Derived ────────────────────────────────────────────────────────
-  let byDivisi = $derived.by(() => {
-    const result: Record<DivisiProduksi, PenggajianKaryawan[]> = { Cutting: [], Jahit: [], Steam: [] };
-    for (const d of data) result[d.divisi].push(d);
-    return result;
+  let karyawanMap = $derived(new Map(karyawanList.map(k => [k.uid, k])));
+
+  let filteredData = $derived.by(() => {
+    if (activeTab === "all") return data;
+    return data.filter(d => {
+      const k = karyawanMap.get(d.uid);
+      return k?.tipe_penggajian === activeTab;
+    });
   });
 
-  let totalGajiSemua = $derived(data.reduce((s, d) => s + d.total_gaji, 0));
-  let totalPcsSemua = $derived(data.reduce((s, d) => s + d.total_pcs, 0));
-  let totalKaryawanDibayar = $derived(new Set(data.map((d) => d.uid)).size);
-  let karyawanTanpaTarif = $derived(data.filter((d) => d.tarif_per_pcs <= 0 && d.total_pcs > 0));
+  let stats = $derived.by(() => {
+    const totalPcs = data.reduce((s, d) => s + d.total_pcs, 0);
+    const totalKaryawan = new Set(data.map(d => d.uid)).size;
+    const belumDicetak = data.filter(d => !printedSet.has(d.uid)).length;
+    return { totalPcs, totalKaryawan, belumDicetak };
+  });
 
   let periodeLabel = $derived.by(() => {
     if (!dateRange) return "Semua Data";
@@ -57,16 +82,21 @@
     return `Rp${Math.round(n).toLocaleString("id-ID")}`;
   }
 
-  function bukaDetail(k: PenggajianKaryawan) {
-    detailTarget = k;
-    detailOpen = true;
+  function formatDate(dateStr: string): string {
+    // Convert "09 Agt 2026 14:30" format to display
+    return dateStr;
   }
 
   async function load() {
     loading = true;
     errorMsg = null;
     try {
-      data = await getPenggajianPeriode(dateRange);
+      const [penggajian, karyawan] = await Promise.all([
+        getPenggajianPeriode(dateRange),
+        getKaryawanList(),
+      ]);
+      data = penggajian;
+      karyawanList = karyawan;
     } catch (e) {
       console.error(e);
       errorMsg = "Gagal memuat data penggajian.";
@@ -76,13 +106,44 @@
   }
 
   $effect(() => {
-    // Reload setiap kali periode berubah (juga jalan sekali saat mount)
     dateRange;
     load();
   });
 
+  // ── Dialog Cetak ──────────────────────────────────────────────────
+  function bukaDialogCetak(k: (typeof data)[0]) {
+    selectedKaryawan = k;
+    // Inisialisasi tarif inputs dari breakdown (unique per model)
+    const uniqueModels = [...new Set(k.breakdown.map(b => b.nama_model))];
+    tarifInputs = uniqueModels.map(model => ({
+      nama_model: model,
+      tarif: "",
+    }));
+    calculatedSalary = null;
+    cetakDialogOpen = true;
+  }
+
+  function hitungTotal() {
+    if (!selectedKaryawan) return;
+    const tarifList: TarifCetakInput[] = tarifInputs.map(t => ({
+      nama_model: t.nama_model,
+      tarif_per_pcs: Number(t.tarif) || 0,
+    }));
+    calculatedSalary = hitungGajiKaryawan(selectedKaryawan, tarifList);
+  }
+
+  $effect(() => {
+    // Recalculate whenever tarif changes
+    tarifInputs;
+    if (cetakDialogOpen) {
+      hitungTotal();
+    }
+  });
+
   // ── Export PDF ─────────────────────────────────────────────────────
   async function exportPdf() {
+    if (!selectedKaryawan || !calculatedSalary) return;
+
     exportingPdf = true;
     try {
       const { jsPDF } = await import("jspdf");
@@ -92,10 +153,11 @@
       const pageWidth = doc.internal.pageSize.getWidth();
       const marginX = 14;
 
+      // Header
       doc.setFont("helvetica", "bold");
       doc.setFontSize(14);
       doc.setTextColor(20, 20, 20);
-      doc.text("Zarqa — Laporan Penggajian Produksi", marginX, 18);
+      doc.text("Zarqa — Laporan Gaji Karyawan", marginX, 18);
 
       doc.setFont("helvetica", "normal");
       doc.setFontSize(10);
@@ -111,96 +173,82 @@
       doc.setDrawColor(230, 230, 230);
       doc.line(marginX, 34, pageWidth - marginX, 34);
 
+      // Info Karyawan
       doc.setFont("helvetica", "bold");
-      doc.setFontSize(9);
-      doc.setTextColor(60, 60, 60);
-      doc.text(`Total Pcs: ${totalPcsSemua}`, marginX, 41);
-      doc.text(`Total Gaji: ${rupiah(totalGajiSemua)}`, marginX + 60, 41);
-      doc.text(`Karyawan Dibayar: ${totalKaryawanDibayar}`, marginX + 130, 41);
+      doc.setFontSize(11);
+      doc.setTextColor(20, 20, 20);
+      doc.text(selectedKaryawan.nama, marginX, 42);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      doc.setTextColor(90, 90, 90);
+      doc.text(`Divisi: ${selectedKaryawan.divisi}`, marginX, 48);
 
-      let cursorY = 47;
+      let cursorY = 54;
 
-      for (const divisi of ["Cutting", "Jahit", "Steam"] as DivisiProduksi[]) {
-        const list = byDivisi[divisi];
-        if (list.length === 0) continue;
+      // Tabel breakdown detail
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.setTextColor(40, 40, 40);
+      doc.text("Rincian Per Model Baju", marginX, cursorY);
 
-        doc.setFont("helvetica", "bold");
-        doc.setFontSize(10.5);
-        doc.setTextColor(20, 20, 20);
-        doc.text(`Divisi ${divisi}`, marginX, cursorY);
+      const body = calculatedSalary.detail_per_model.flatMap(d =>
+        d.detail_warna_ukuran.map(w => [
+          d.nama_model,
+          w.nama_warna ?? "—",
+          w.ukuran,
+          String(w.pcs),
+          rupiah(d.tarif),
+          rupiah(w.pcs * d.tarif),
+        ])
+      );
 
-        const totalDivisi = list.reduce((s, k) => s + k.total_gaji, 0);
-        const body = list.map((k) => [
-          k.nama,
-          String(k.total_pcs),
-          rupiah(k.tarif_per_pcs),
-          rupiah(k.total_gaji),
-        ]);
+      // Add totals per model
+      const modelTotals = calculatedSalary.detail_per_model.map(d => [
+        d.nama_model,
+        "", "", "",
+        "Subtotal:",
+        rupiah(d.subtotal),
+      ]);
 
-        autoTable(doc, {
-          startY: cursorY + 4,
-          head: [["Nama Karyawan", "Total Pcs", "Tarif/Pcs", "Total Gaji"]],
-          body,
-          foot: [["Total", String(list.reduce((s, k) => s + k.total_pcs, 0)), "", rupiah(totalDivisi)]],
-          theme: "grid",
-          margin: { left: marginX, right: marginX },
-          styles: { font: "helvetica", fontSize: 9, cellPadding: 3, lineColor: [230, 230, 230], lineWidth: 0.1 },
-          headStyles: { fillColor: [17, 24, 39], textColor: [255, 255, 255], fontStyle: "bold", halign: "left" },
-          footStyles: { fillColor: [243, 244, 246], textColor: [17, 24, 39], fontStyle: "bold" },
-          columnStyles: { 1: { halign: "center" }, 2: { halign: "right" }, 3: { halign: "right" } },
-          alternateRowStyles: { fillColor: [250, 250, 250] },
-        });
-
-        cursorY = ((doc as any).lastAutoTable?.finalY ?? cursorY) + 10;
-
-        // ── Detail breakdown per karyawan (model/warna/ukuran + sumber) ──
-        for (const k of list) {
-          if (k.breakdown.length === 0) continue;
-          if (cursorY > 260) {
-            doc.addPage();
-            cursorY = 18;
+      autoTable(doc, {
+        startY: cursorY + 4,
+        head: [["Model", "Warna", "Ukuran", "Pcs", "Tarif/Pcs", "Subtotal"]],
+        body: [...body, ...modelTotals],
+        foot: [
+          ["", "", "", String(selectedKaryawan.total_pcs), "TOTAL GAJI:", rupiah(calculatedSalary.total_gaji)],
+        ],
+        theme: "grid",
+        margin: { left: marginX, right: marginX },
+        styles: { font: "helvetica", fontSize: 8, cellPadding: 2, lineColor: [230, 230, 230], lineWidth: 0.1 },
+        headStyles: { fillColor: [17, 24, 39], textColor: [255, 255, 255], fontStyle: "bold" },
+        footStyles: { fillColor: [243, 244, 246], textColor: [17, 24, 39], fontStyle: "bold" },
+        columnStyles: { 0: { cellWidth: 35 }, 1: { cellWidth: 25 }, 2: { cellWidth: 20 }, 3: { halign: "center", cellWidth: 15 }, 4: { halign: "right", cellWidth: 30 }, 5: { halign: "right", cellWidth: 35 } },
+        alternateRowStyles: { fillColor: [250, 250, 250] },
+        didParseCell: function(data: any) {
+          // Style subtotal rows
+          if (data.row.index >= body.length && data.row.index < body.length + modelTotals.length) {
+            data.cell.styles.fillColor = [240, 240, 245];
+            data.cell.styles.fontStyle = "bold";
           }
-          doc.setFont("helvetica", "bold");
-          doc.setFontSize(9);
-          doc.setTextColor(40, 40, 40);
-          doc.text(`${k.nama} — rincian per model/warna/ukuran`, marginX, cursorY);
+        },
+      });
 
-          const detailBody = k.breakdown.map((b) => {
-            const sumberCutting = (b.sumber_cutting ?? [])
-              .map((s) => `${s.nama_pekerja ?? "?"} (${s.jumlah_pcs})`)
-              .join(", ");
-            const sumberJahit = (b.sumber_jahit ?? [])
-              .map((s) => `${s.nama_pekerja ?? "?"} (${s.jumlah_pcs})`)
-              .join(", ");
-            const sumberParts = [
-              sumberJahit ? `Jahit: ${sumberJahit}` : "",
-              sumberCutting ? `Cutting: ${sumberCutting}` : "",
-            ].filter(Boolean);
-            return [
-              b.nama_model,
-              b.nama_warna ?? "—",
-              b.ukuran,
-              String(b.jumlah_pcs),
-              sumberParts.join(" | ") || "—",
-            ];
-          });
+      cursorY = ((doc as any).lastAutoTable?.finalY ?? cursorY) + 10;
 
-          autoTable(doc, {
-            startY: cursorY + 3,
-            head: [["Model", "Warna", "Ukuran", "Pcs", "Sumber"]],
-            body: detailBody,
-            theme: "grid",
-            margin: { left: marginX, right: marginX },
-            styles: { font: "helvetica", fontSize: 7.5, cellPadding: 2, lineColor: [235, 235, 235], lineWidth: 0.1 },
-            headStyles: { fillColor: [55, 65, 81], textColor: [255, 255, 255], fontStyle: "bold", halign: "left" },
-            columnStyles: { 3: { halign: "center" } },
-            alternateRowStyles: { fillColor: [250, 250, 250] },
-          });
-
-          cursorY = ((doc as any).lastAutoTable?.finalY ?? cursorY) + 8;
-        }
+      // Tanda tangan
+      if (cursorY > 230) {
+        doc.addPage();
+        cursorY = 18;
       }
 
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      doc.setTextColor(90, 90, 90);
+      doc.text("Hormat kami,", pageWidth - marginX - 50, cursorY + 20);
+      doc.text("(....................)", pageWidth - marginX - 50, cursorY + 35);
+      doc.text("Penerima", pageWidth - marginX - 50, cursorY + 42);
+
+      // Footer
       const pageCount = doc.getNumberOfPages();
       for (let i = 1; i <= pageCount; i++) {
         doc.setPage(i);
@@ -212,10 +260,15 @@
       }
 
       const tanggal = new Date().toISOString().slice(0, 10);
-      doc.save(`laporan-penggajian-${tanggal}.pdf`);
+      doc.save(`gaji-${selectedKaryawan.nama.replace(/\s+/g, '-')}-${tanggal}.pdf`);
+
+      // Tandai sudah dicetak
+      printedSet.add(selectedKaryawan.uid);
+      printedSet = new Set(printedSet);
+      cetakDialogOpen = false;
     } catch (e) {
-      console.error("Gagal membuat PDF penggajian:", e);
-      errorMsg = "Gagal membuat PDF laporan.";
+      console.error("Gagal membuat PDF:", e);
+      errorMsg = "Gagal membuat PDF.";
     } finally {
       exportingPdf = false;
     }
@@ -239,7 +292,7 @@
   <div>
     <h1 class="text-xl font-semibold text-gray-900">Penggajian Produksi</h1>
     <p class="mt-0.5 text-sm text-gray-500">
-      Gaji dihitung dari jumlah pcs baju yang selesai per divisi (Cutting, Jahit, Steam) — periode: {periodeLabel}
+      Daftar karyawan yang menyelesaikan pcs pada periode: {periodeLabel}
     </p>
   </div>
   <div class="flex items-center gap-2">
@@ -250,10 +303,6 @@
       </svg>
       Refresh
     </Button>
-    <Button onclick={exportPdf} disabled={exportingPdf || data.length === 0}>
-      <DownloadIcon class="h-4 w-4" />
-      {exportingPdf ? "Membuat PDF..." : "Cetak Laporan"}
-    </Button>
   </div>
 </div>
 
@@ -262,181 +311,265 @@
 {/if}
 
 <!-- ── Stats ──────────────────────────────────────────────────────── -->
-<div class="mb-5 grid grid-cols-2 gap-4 sm:grid-cols-4">
-  <StatCard title="Total Gaji" value={rupiah(totalGajiSemua)} icon={BanknoteIcon} {loading} footerSubtext="periode berjalan" class="border-green-100 bg-green-50" valueClass="text-green-700" />
-  <StatCard title="Total Pcs" value={totalPcsSemua} icon={PackageIcon} {loading} footerSubtext="pcs berhasil diselesaikan" />
-  <StatCard title="Karyawan Dibayar" value={totalKaryawanDibayar} icon={BanknoteIcon} {loading} footerSubtext="karyawan produksi aktif" />
+<div class="mb-5 grid grid-cols-2 gap-4 sm:grid-cols-3">
+  <StatCard title="Total Pcs" value={stats.totalPcs} icon={PackageIcon} {loading} footerSubtext="pcs diselesaikan" />
+  <StatCard title="Karyawan Aktif" value={stats.totalKaryawan} icon={BanknoteIcon} {loading} footerSubtext="dalam periode ini" />
   <StatCard
-    title="Belum Ada Tarif"
-    value={karyawanTanpaTarif.length}
+    title="Belum Dibayar"
+    value={stats.belumDicetak}
     icon={AlertTriangleIcon}
     {loading}
-    footerSubtext={karyawanTanpaTarif.length > 0 ? "atur tarif per pcs dulu" : "semua sudah punya tarif"}
-    class={karyawanTanpaTarif.length > 0 ? "border-red-100 bg-red-50" : ""}
-    valueClass={karyawanTanpaTarif.length > 0 ? "text-red-600" : ""}
+    footerSubtext={stats.belumDicetak > 0 ? "klik cetak untuk bayar" : "semua sudah dibayar"}
+    class={stats.belumDicetak > 0 ? "border-amber-100 bg-amber-50" : "border-green-100 bg-green-50"}
+    valueClass={stats.belumDicetak > 0 ? "text-amber-600" : "text-green-700"}
   />
 </div>
 
-{#if !loading && karyawanTanpaTarif.length > 0}
-  <div class="mb-5 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
-    <AlertTriangleIcon class="mt-0.5 h-5 w-5 shrink-0 text-amber-500" />
-    <div class="flex-1">
-      <p class="text-sm font-semibold text-amber-800">
-        {karyawanTanpaTarif.length} karyawan belum punya tarif per pcs
-      </p>
-      <p class="mt-0.5 text-xs text-amber-700">
-        {karyawanTanpaTarif.map((k) => k.nama).join(", ")} — gajinya masih Rp0. Atur tarif per pcs di halaman Data Karyawan.
-      </p>
+<!-- ── Filter Tabs ─────────────────────────────────────────────────── -->
+<div class="mb-4 flex items-center gap-2 border-b border-gray-200">
+  <button
+    onclick={() => (activeTab = "all")}
+    class="px-4 py-2 text-sm font-medium transition {activeTab === 'all' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500 hover:text-gray-700'}"
+  >
+    Semua ({data.length})
+  </button>
+  {#each (["harian", "mingguan", "bulanan"] as const) as tipe}
+    {@const count = data.filter(d => karyawanMap.get(d.uid)?.tipe_penggajian === tipe).length}
+    <button
+      onclick={() => (activeTab = tipe)}
+      class="px-4 py-2 text-sm font-medium transition {activeTab === tipe ? 'border-b-2 border-purple-600 text-purple-600' : 'text-gray-500 hover:text-gray-700'}"
+    >
+      {TIPE_LABEL[tipe]} ({count})
+    </button>
+  {/each}
+</div>
+
+<!-- ── Tabel Karyawan ─────────────────────────────────────────────── -->
+{#if loading}
+  <div class="rounded-xl border border-gray-100 bg-white p-8">
+    <div class="space-y-3">
+      {#each Array(3) as _}
+        <div class="h-12 w-full animate-pulse rounded bg-gray-100"></div>
+      {/each}
     </div>
-    <a href="/karyawan/data" class="shrink-0 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-amber-700">
-      Atur Tarif →
-    </a>
   </div>
-{/if}
-
-<!-- ── Tabel per Divisi ───────────────────────────────────────────── -->
-{#each DIVISI_ORDER as divisi}
-  {@const list = byDivisi[divisi]}
-  {@const cfg = DIVISI_CONFIG[divisi]}
-  {@const DivisiIcon = cfg.icon}
-  <div class="mb-5 overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
-    <div class="flex items-center justify-between border-b border-gray-50 px-5 py-4">
-      <div class="flex items-center gap-2">
-        <DivisiIcon class="h-4 w-4 text-gray-400" />
-        <h2 class="text-sm font-semibold text-gray-800">Divisi {cfg.label}</h2>
-        <span class="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500">{list.length} karyawan</span>
-      </div>
-      <span class="text-sm font-semibold text-gray-700">
-        {rupiah(list.reduce((s, k) => s + k.total_gaji, 0))}
-      </span>
+{:else if filteredData.length === 0}
+  <div class="flex flex-col items-center justify-center gap-3 rounded-xl border border-gray-100 bg-white py-16">
+    <div class="flex h-14 w-14 items-center justify-center rounded-full bg-gray-100">
+      <BanknoteIcon class="h-7 w-7 text-gray-300" />
     </div>
-
-    {#if loading}
-      <div class="space-y-3 p-5">
-        {#each Array(2) as _}
-          <div class="h-4 w-full animate-pulse rounded bg-gray-100"></div>
-        {/each}
-      </div>
-    {:else if list.length === 0}
-      <div class="px-5 py-8 text-center text-sm text-gray-400">
-        Belum ada pcs {cfg.label.toLowerCase()} yang selesai pada periode ini.
-      </div>
-    {:else}
-      <Table.Root>
-        <Table.Header>
-          <Table.Row class="bg-gray-50 hover:bg-gray-50">
-            <Table.Head>Nama Karyawan</Table.Head>
-            <Table.Head class="text-center">Jumlah Batch</Table.Head>
-            <Table.Head class="text-center">Total Pcs</Table.Head>
-            <Table.Head class="text-right">Tarif/Pcs</Table.Head>
-            <Table.Head class="text-right">Total Gaji</Table.Head>
-            <Table.Head></Table.Head>
-          </Table.Row>
-        </Table.Header>
-        <Table.Body>
-          {#each list as k}
-            <Table.Row>
-              <Table.Cell class="font-medium text-gray-800">{k.nama}</Table.Cell>
-              <Table.Cell class="text-center text-gray-600">{k.jumlah_batch}</Table.Cell>
-              <Table.Cell class="text-center font-semibold text-gray-800">{k.total_pcs}</Table.Cell>
-              <Table.Cell class="text-right text-gray-600">
-                {#if k.tarif_per_pcs > 0}
-                  {rupiah(k.tarif_per_pcs)}
-                {:else}
-                  <span class="text-red-500">Belum diatur</span>
+    <p class="text-sm font-medium text-gray-500">Belum ada karyawan yang menyelesaikan pcs</p>
+    <p class="text-xs text-gray-400">pada periode ini</p>
+  </div>
+{:else}
+  <div class="space-y-4">
+    {#each filteredData as k}
+      {@const karyawan = karyawanMap.get(k.uid)}
+      {@const cfg = DIVISI_CONFIG[k.divisi]}
+      {@const DivisiIcon = cfg.icon}
+      {@const sudahDicetak = printedSet.has(k.uid)}
+      <div class="rounded-xl border {sudahDicetak ? 'border-green-200 bg-green-50' : 'border-gray-100 bg-white'} p-4 shadow-sm">
+        <div class="flex items-start justify-between gap-4">
+          <div class="flex items-center gap-3">
+            <div class="flex h-10 w-10 items-center justify-center rounded-full {sudahDicetak ? 'bg-green-100' : 'bg-gray-100'}">
+              {#if sudahDicetak}
+                <CheckIcon class="h-5 w-5 text-green-600" />
+              {:else}
+                <DivisiIcon class="h-5 w-5 text-gray-500" />
+              {/if}
+            </div>
+            <div>
+              <p class="font-semibold text-gray-800">{k.nama}</p>
+              <div class="flex items-center gap-2 mt-0.5 flex-wrap">
+                <span class="rounded-full bg-{cfg.color}-50 px-2 py-0.5 text-xs font-medium text-{cfg.color}-700">
+                  {cfg.label}
+                </span>
+                {#if karyawan?.tipe_penggajian}
+                  <span class="rounded-full bg-purple-50 px-2 py-0.5 text-xs font-medium text-purple-700">
+                    {TIPE_LABEL[karyawan.tipe_penggajian]}
+                  </span>
                 {/if}
-              </Table.Cell>
-              <Table.Cell class="text-right font-semibold text-green-700">{rupiah(k.total_gaji)}</Table.Cell>
-              <Table.Cell class="text-right">
-                <Button variant="outline" size="sm" onclick={() => bukaDetail(k)}>
-                  <EyeIcon class="h-3.5 w-3.5" />
-                  Detail
-                </Button>
-              </Table.Cell>
-            </Table.Row>
-          {/each}
-        </Table.Body>
-      </Table.Root>
-    {/if}
+                {#if sudahDicetak}
+                  <span class="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">
+                    Sudah Dibayar
+                  </span>
+                {:else}
+                  <span class="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
+                    Belum Dibayar
+                  </span>
+                {/if}
+              </div>
+            </div>
+          </div>
+          <div class="text-right">
+            <p class="text-sm font-semibold text-gray-800">{k.total_pcs} pcs</p>
+            <p class="text-xs text-gray-500">{k.jumlah_batch} batch</p>
+          </div>
+        </div>
+
+        <!-- Breakdown detail per model, warna, ukuran, tanggal -->
+        {#if k.breakdown.length > 0}
+          <div class="mt-3 border-t border-gray-100 pt-3">
+            <p class="text-xs font-semibold text-gray-500 mb-2 uppercase tracking-wide">Detail pekerjaan:</p>
+            <div class="overflow-x-auto">
+              <Table.Root>
+                <Table.Header>
+                  <Table.Row class="bg-gray-50">
+                    <Table.Head>Model</Table.Head>
+                    <Table.Head>Warna</Table.Head>
+                    <Table.Head class="text-center">Ukuran</Table.Head>
+                    <Table.Head class="text-center">Pcs</Table.Head>
+                    <Table.Head>Tanggal</Table.Head>
+                  </Table.Row>
+                </Table.Header>
+                <Table.Body>
+                  {#each k.breakdown as b}
+                    <Table.Row>
+                      <Table.Cell class="font-medium">{b.nama_model}</Table.Cell>
+                      <Table.Cell class="text-gray-600">{b.nama_warna ?? "—"}</Table.Cell>
+                      <Table.Cell class="text-center text-gray-600">{b.ukuran}</Table.Cell>
+                      <Table.Cell class="text-center font-semibold">{b.pcs}</Table.Cell>
+                      <Table.Cell class="text-xs text-gray-500">{formatDate(b.tanggal)}</Table.Cell>
+                    </Table.Row>
+                  {/each}
+                </Table.Body>
+              </Table.Root>
+            </div>
+          </div>
+        {/if}
+
+        <!-- Action -->
+        <div class="mt-3 flex justify-end">
+          <Button onclick={() => bukaDialogCetak(k)} disabled={sudahDicetak}>
+            <DownloadIcon class="h-4 w-4" />
+            {sudahDicetak ? "Sudah Dibayar" : "Cetak Gaji"}
+          </Button>
+        </div>
+      </div>
+    {/each}
   </div>
-{/each}
+{/if}
 
 {/if}
 
-<!-- ── Dialog Detail Breakdown ────────────────────────────────────── -->
-<Dialog.Root bind:open={detailOpen}>
+<!-- ── Dialog: Cetak Gaji ─────────────────────────────────────────── -->
+<Dialog.Root bind:open={cetakDialogOpen}>
   <Dialog.Content class="max-w-2xl">
     <Dialog.Header>
       <Dialog.Title>
-        {detailTarget?.nama} — Divisi {detailTarget?.divisi}
+        Cetak Gaji: {selectedKaryawan?.nama}
       </Dialog.Title>
       <Dialog.Description>
-        {#if detailTarget}
-          Rincian {detailTarget.total_pcs} pcs pada periode {periodeLabel}, dipecah per model / warna / ukuran
-          {detailTarget.divisi !== "Cutting" ? ", lengkap dengan sumbernya" : ""}.
-        {/if}
+        Masukkan tarif per pcs untuk setiap model baju yang dikerjakan.
       </Dialog.Description>
     </Dialog.Header>
 
-    {#if detailTarget}
-      <div class="max-h-[65vh] space-y-3 overflow-y-auto">
-        {#each detailTarget.breakdown as b}
-          <div class="rounded-lg border border-gray-100 p-3">
-            <div class="flex items-center justify-between">
-              <div>
-                <p class="text-sm font-semibold text-gray-800">{b.nama_model}</p>
-                <p class="text-xs text-gray-500">
-                  {b.nama_warna ?? "Tanpa warna"} · Ukuran {b.ukuran}
-                </p>
-              </div>
-              <span class="rounded-full bg-blue-50 px-2.5 py-1 text-sm font-semibold text-blue-700">
-                {b.jumlah_pcs} pcs
-              </span>
+    {#if selectedKaryawan}
+      <div class="max-h-[65vh] space-y-4 overflow-y-auto pr-2">
+        <!-- Info Karyawan -->
+        <div class="rounded-lg bg-gray-50 p-3">
+          <div class="grid grid-cols-2 gap-2 text-sm">
+            <div class="flex justify-between">
+              <span class="text-gray-500">Divisi</span>
+              <span class="font-medium">{selectedKaryawan.divisi}</span>
             </div>
+            <div class="flex justify-between">
+              <span class="text-gray-500">Total Pcs</span>
+              <span class="font-medium">{selectedKaryawan.total_pcs} pcs</span>
+            </div>
+            <div class="flex justify-between col-span-2">
+              <span class="text-gray-500">Periode</span>
+              <span class="font-medium">{periodeLabel}</span>
+            </div>
+          </div>
+        </div>
 
-            {#if b.sumber_jahit && b.sumber_jahit.length > 0}
-              <div class="mt-2 border-t border-gray-50 pt-2">
-                <p class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400">Dari Jahit</p>
-                <div class="flex flex-wrap gap-1.5">
-                  {#each b.sumber_jahit as s}
-                    <span class="rounded-full bg-purple-50 px-2 py-0.5 text-xs text-purple-700">
-                      {s.nama_pekerja ?? "Tidak diketahui"} — {s.jumlah_pcs} pcs
-                    </span>
+        <!-- Detail Pekerjaan -->
+        {#if selectedKaryawan.breakdown.length > 0}
+          <div>
+            <p class="text-sm font-semibold text-gray-700 mb-2">Detail Pekerjaan:</p>
+            <div class="max-h-48 overflow-y-auto rounded-lg border border-gray-200">
+              <Table.Root>
+                <Table.Header>
+                  <Table.Row class="bg-gray-50">
+                    <Table.Head>Model</Table.Head>
+                    <Table.Head>Warna</Table.Head>
+                    <Table.Head class="text-center">Ukuran</Table.Head>
+                    <Table.Head class="text-center">Pcs</Table.Head>
+                  </Table.Row>
+                </Table.Header>
+                <Table.Body>
+                  {#each selectedKaryawan.breakdown as b}
+                    <Table.Row>
+                      <Table.Cell class="text-sm">{b.nama_model}</Table.Cell>
+                      <Table.Cell class="text-sm text-gray-600">{b.nama_warna ?? "—"}</Table.Cell>
+                      <Table.Cell class="text-center text-sm text-gray-600">{b.ukuran}</Table.Cell>
+                      <Table.Cell class="text-center text-sm font-semibold">{b.pcs}</Table.Cell>
+                    </Table.Row>
                   {/each}
+                </Table.Body>
+              </Table.Root>
+            </div>
+          </div>
+        {/if}
+
+        <!-- Input Tarif per Model -->
+        <div>
+          <p class="text-sm font-semibold text-gray-700 mb-2">Tarif per Model Baju</p>
+          <div class="space-y-3">
+            {#each tarifInputs as input, i}
+              {@const modelData = calculatedSalary?.detail_per_model.find(d => d.nama_model === input.nama_model)}
+              <div class="rounded-lg border border-gray-200 p-3">
+                <div class="flex justify-between items-center mb-2">
+                  <p class="font-medium text-gray-800">{input.nama_model}</p>
+                  {#if modelData}
+                    <span class="text-sm text-gray-500">{modelData.total_pcs} pcs</span>
+                  {/if}
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class="text-sm text-gray-500">Tarif/pcs:</span>
+                  <div class="relative flex-1">
+                    <span class="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400">Rp</span>
+                    <Input
+                      type="number"
+                      min="0"
+                      bind:value={tarifInputs[i].tarif}
+                      placeholder="0"
+                      class="pl-8"
+                    />
+                  </div>
+                  {#if modelData && Number(input.tarif) > 0}
+                    <span class="text-sm font-medium text-green-600 whitespace-nowrap">
+                      = {rupiah(Number(input.tarif) * modelData.total_pcs)}
+                    </span>
+                  {/if}
                 </div>
               </div>
-            {/if}
+            {/each}
+          </div>
+        </div>
 
-            {#if b.sumber_cutting && b.sumber_cutting.length > 0}
-              <div class="mt-2 border-t border-gray-50 pt-2">
-                <p class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-400">Dari Cutting</p>
-                <div class="flex flex-wrap gap-1.5">
-                  {#each b.sumber_cutting as s}
-                    <span class="rounded-full bg-blue-50 px-2 py-0.5 text-xs text-blue-700">
-                      {s.nama_pekerja ?? "Tidak diketahui"} — {s.nama_model}{s.nama_warna ? ` (${s.nama_warna})` : ""} — {s.jumlah_pcs} pcs
-                    </span>
-                  {/each}
-                </div>
-              </div>
-            {/if}
-
-            {#if (detailTarget.divisi === "Jahit" && (!b.sumber_cutting || b.sumber_cutting.length === 0)) || (detailTarget.divisi === "Steam" && (!b.sumber_jahit || b.sumber_jahit.length === 0) && (!b.sumber_cutting || b.sumber_cutting.length === 0))}
-              <p class="mt-2 border-t border-gray-50 pt-2 text-xs text-gray-400">
-                Data sumber tidak tersedia (kemungkinan data lama sebelum fitur penelusuran ini aktif).
-              </p>
+        <!-- Total -->
+        {#if calculatedSalary}
+          <div class="rounded-lg border-2 border-green-200 bg-green-50 p-4">
+            <div class="flex justify-between items-center">
+              <span class="text-lg font-semibold text-gray-800">Total Gaji</span>
+              <span class="text-2xl font-bold text-green-700">{rupiah(calculatedSalary.total_gaji)}</span>
+            </div>
+            {#if calculatedSalary.total_gaji === 0}
+              <p class="text-xs text-amber-600 mt-1">Belum ada tarif yang diisi</p>
             {/if}
           </div>
-        {/each}
-      </div>
-
-      <div class="flex items-center justify-between border-t border-gray-100 pt-3 text-sm">
-        <span class="text-gray-500">Total Gaji</span>
-        <span class="font-semibold text-green-700">{rupiah(detailTarget.total_gaji)}</span>
+        {/if}
       </div>
     {/if}
 
-    <Dialog.Footer>
-      <Button variant="outline" onclick={() => (detailOpen = false)}>Tutup</Button>
+    <Dialog.Footer class="gap-2">
+      <Button variant="outline" onclick={() => (cetakDialogOpen = false)}>Batal</Button>
+      <Button onclick={exportPdf} disabled={exportingPdf || !calculatedSalary || calculatedSalary.total_gaji === 0}>
+        <DownloadIcon class="h-4 w-4" />
+        {exportingPdf ? "Membuat PDF..." : "Cetak & Bayar"}
+      </Button>
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>

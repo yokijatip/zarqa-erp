@@ -85,6 +85,9 @@
   // Form: restock
   let rJumlah = $state<number | "">("");
   let rCatatan = $state("");
+  let rTanggalBeli = $state("");
+  let rSupplier = $state("");
+  let rHargaPerUnit = $state<number | "">("");
 
   // Form: kurangi stok
   let kJumlah = $state<number | "">("");
@@ -361,11 +364,12 @@
     if (!selectedKain || rJumlah === "" || Number(rJumlah) <= 0) return;
     saving = true;
     try {
-      await restockKain(
-        selectedKain.id,
-        Number(rJumlah),
-        rCatatan.trim() || undefined,
-      );
+      await restockKain(selectedKain.id, Number(rJumlah), {
+        catatan: rCatatan.trim() || undefined,
+        tanggal_beli: rTanggalBeli || undefined,
+        supplier: rSupplier.trim() || undefined,
+        harga_per_unit: rHargaPerUnit !== "" ? Number(rHargaPerUnit) : undefined,
+      });
       const nama = selectedKain.nama_kain;
       const satuan = selectedKain.satuan;
       const jumlah = Number(rJumlah);
@@ -374,6 +378,9 @@
       selectedKain = null;
       rJumlah = "";
       rCatatan = "";
+      rTanggalBeli = "";
+      rSupplier = "";
+      rHargaPerUnit = "";
       showSuccess(`Restock ${nama} sebesar ${jumlah} ${satuan} berhasil.`);
     } catch {
       showError("Gagal melakukan restock.");
@@ -395,6 +402,9 @@
     selectedKain = kain;
     rJumlah = "";
     rCatatan = "";
+    rTanggalBeli = new Date().toISOString().slice(0, 10);
+    rSupplier = "";
+    rHargaPerUnit = "";
     openRestock = true;
   }
 
@@ -1313,11 +1323,61 @@
         </label>
         <textarea
           id="catatan-restock"
-          rows="3"
+          rows="2"
           placeholder="Contoh: Pembelian dari supplier X..."
           bind:value={rCatatan}
           class="w-full resize-none rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none"
         ></textarea>
+      </div>
+
+      <div>
+        <label
+          class="mb-1.5 block text-sm font-medium text-gray-700"
+          for="restock-tanggal"
+        >
+          Tanggal Beli
+        </label>
+        <input
+          id="restock-tanggal"
+          type="date"
+          bind:value={rTanggalBeli}
+          class="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-800 focus:outline-none"
+        />
+      </div>
+
+      <div>
+        <label
+          class="mb-1.5 block text-sm font-medium text-gray-700"
+          for="restock-supplier"
+        >
+          Supplier
+          <span class="text-xs font-normal text-gray-400">(opsional)</span>
+        </label>
+        <input
+          id="restock-supplier"
+          type="text"
+          placeholder="Nama supplier / vendor"
+          bind:value={rSupplier}
+          class="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none"
+        />
+      </div>
+
+      <div>
+        <label
+          class="mb-1.5 block text-sm font-medium text-gray-700"
+          for="restock-harga"
+        >
+          Harga per {selectedKain?.satuan ?? "unit"}
+          <span class="text-xs font-normal text-gray-400">(opsional)</span>
+        </label>
+        <input
+          id="restock-harga"
+          type="number"
+          min="0"
+          placeholder="0"
+          bind:value={rHargaPerUnit}
+          class="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none"
+        />
       </div>
     </div>
 

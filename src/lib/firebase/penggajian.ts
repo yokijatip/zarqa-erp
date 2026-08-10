@@ -1,36 +1,24 @@
 // src/lib/firebase/penggajian.ts
 //
-// Gaji karyawan produksi (Cutting, Jahit, Steam) dihitung per pcs baju yang
-// berhasil diselesaikan dalam satu periode (biasanya per minggu), diambil
-// dari riwayat_proses yang sudah tercatat di setiap batch produksi — tidak
-// ada koleksi baru yang perlu ditulis manual, jadi datanya selalu sinkron
-// dengan proses cutting/jahit/steam yang sudah berjalan.
+// Sistem penggajian baru:
+// - Karyawan punya tipe penggajian: harian, mingguan, atau bulanan
+// - Penggajian mingguan dihitung per pcs dari riwayat_proses
+// - Tarif per pcs diinput saat akan cetak laporan
 //
-// Breakdown model/warna/ukuran per karyawan datang dari `detail_ukuran` pada
-// riwayat_proses (event saat batch itu berpindah status ke *_DONE), digabung
-// dengan data batch induknya (nama_model/nama_warna).
-//
-// Penelusuran "dapat dari mana" (jahit dari cutting siapa, steam dari jahit
-// & cutting siapa) memakai `batch.sumber_cutting` (antrian lot cutting yang
-// sudah ada di sistem — dipakai juga oleh fitur stok potongan) dan
-// `batch.penugasan` (worker yang ditugaskan di tiap tahap batch tsb).
+// Breakdown model per karyawan dikelompokkan per model dengan detail warna, ukuran, dan tanggal
 
 import { collectionGroup, getDocs, getDoc, doc } from 'firebase/firestore';
 import { db } from './config';
 import { consumeSumberCuttingLots } from './batch-produksi';
-import { getKaryawanList } from './karyawan';
 import type {
   RiwayatProses,
   StatusBatch,
   BatchProduksi,
   DivisiProduksi,
-  PenggajianKaryawan,
-  PenggajianBreakdownItem,
   PenggajianSumberLot,
-  DetailUkuran,
 } from '$lib/types';
 
-// Status yang menandakan pcs "diterima/selesai" pada masing-masing divisi.
+// Status yang menandai pcs "diterima/selesai" pada masing-masing divisi.
 const STATUS_DIVISI: Partial<Record<StatusBatch, DivisiProduksi>> = {
   CUTTING_DONE: 'Cutting',
   JAHIT_DONE: 'Jahit',
@@ -43,7 +31,7 @@ interface RiwayatEvent {
   uid: string;
   nama: string;
   pcsBerhasil: number;
-  detailUkuran: DetailUkuran[];
+  detailUkuran: Array<{ ukuran: string; jumlah_pcs: number }>;
   timestamp: Date | null;
 }
 
@@ -52,10 +40,7 @@ function tsToDate(ts: any): Date | null {
   return ts.toDate ? ts.toDate() : new Date(ts);
 }
 
-// Ambil semua event riwayat_proses yang relevan untuk penggajian (status_ke
-// salah satu dari CUTTING_DONE / JAHIT_DONE / STEAM_DONE), lengkap dengan
-// batch_id induknya (didapat dari path dokumen, karena RiwayatProses sendiri
-// tidak menyimpan batch_id).
+// Ambil semua event riwayat_proses yang relevan untuk penggajian
 async function getRiwayatEvents(range: { start: Date; end: Date } | null): Promise<RiwayatEvent[]> {
   const snap = await getDocs(collectionGroup(db, 'riwayat_proses'));
   const events: RiwayatEvent[] = [];
@@ -102,10 +87,7 @@ async function getBatchMap(batchIds: string[]): Promise<Map<string, BatchProduks
   return map;
 }
 
-// Cari lot-lot sumber cutting untuk sejumlah `qty` pcs pada `ukuran` tertentu,
-// dari antrian sumber_cutting sebuah batch. Kalau batch tidak punya
-// sumber_cutting (dijahit langsung dari kain, bukan dari pool stok potongan),
-// fallback ke satu-satunya cutting worker yang ditugaskan di batch tsb.
+// Cari lot-lot sumber cutting
 function cariSumberCutting(batch: BatchProduksi, ukuran: string, qty: number): PenggajianSumberLot[] {
   const lotUkuran = (batch.sumber_cutting ?? []).filter((l) => (l.ukuran ?? '') === ukuran);
   if (lotUkuran.length > 0) {
@@ -148,60 +130,70 @@ function sumberJahitDariBatch(batch: BatchProduksi, ukuran: string, qty: number)
   ];
 }
 
-function addBreakdown(
-  list: PenggajianBreakdownItem[],
-  item: Omit<PenggajianBreakdownItem, 'jumlah_pcs'> & { jumlah_pcs: number }
-) {
-  const existing = list.find(
-    (b) => b.nama_model === item.nama_model && (b.nama_warna ?? '') === (item.nama_warna ?? '') && b.ukuran === item.ukuran
-  );
-  if (existing) {
-    existing.jumlah_pcs += item.jumlah_pcs;
-    if (item.sumber_cutting) {
-      existing.sumber_cutting = [...(existing.sumber_cutting ?? []), ...item.sumber_cutting];
-    }
-    if (item.sumber_jahit) {
-      existing.sumber_jahit = [...(existing.sumber_jahit ?? []), ...item.sumber_jahit];
-    }
-  } else {
-    list.push({ ...item });
-  }
+/**
+ * Detail per (model + warna + ukuran) dengan tanggal
+ */
+export interface PenggajianBreakdownDetail {
+  nama_model: string;
+  nama_warna?: string;
+  ukuran: string;
+  pcs: number;
+  tanggal: string; // format: dd MMM yyyy HH:mm
+  batch_id: string;
+  sumber_cutting?: PenggajianSumberLot[];
+  sumber_jahit?: PenggajianSumberLot[];
 }
 
 /**
- * Hitung rekap penggajian untuk satu periode (mis. satu minggu), dikelompokkan
- * per karyawan + divisi, lengkap dengan breakdown model/warna/ukuran dan
- * (untuk Jahit & Steam) penelusuran sumber cutting/jahit-nya.
+ * Data penggajian per karyawan dengan breakdown detail
+ */
+export interface PenggajianData {
+  uid: string;
+  nama: string;
+  divisi: DivisiProduksi;
+  total_pcs: number;
+  jumlah_batch: number;
+  breakdown: PenggajianBreakdownDetail[];
+}
+
+/**
+ * Hitung penggajian untuk periode tertentu, dengan breakdown lengkap (model, warna, ukuran, tanggal)
  */
 export async function getPenggajianPeriode(
   range: { start: Date; end: Date } | null
-): Promise<PenggajianKaryawan[]> {
-  const [events, karyawanList] = await Promise.all([getRiwayatEvents(range), getKaryawanList()]);
+): Promise<PenggajianData[]> {
+  const events = await getRiwayatEvents(range);
   if (events.length === 0) return [];
 
   const batchMap = await getBatchMap(events.map((e) => e.batchId));
-  const tarifMap = new Map(karyawanList.map((k) => [k.uid, k.tarif_per_pcs ?? 0]));
-  const namaMap = new Map(karyawanList.map((k) => [k.uid, k.name]));
 
-  const map = new Map<string, PenggajianKaryawan>();
+  const map = new Map<string, PenggajianData>();
 
-  function getOrCreate(uid: string, nama: string, divisi: DivisiProduksi): PenggajianKaryawan {
-    const key = `${uid}__${divisi}`;
-    let entry = map.get(key);
+  function getOrCreate(uid: string, nama: string, divisi: DivisiProduksi): PenggajianData {
+    let entry = map.get(uid);
     if (!entry) {
       entry = {
         uid,
-        nama: namaMap.get(uid) ?? nama,
+        nama,
         divisi,
-        tarif_per_pcs: tarifMap.get(uid) ?? 0,
         total_pcs: 0,
-        total_gaji: 0,
         jumlah_batch: 0,
         breakdown: [],
       };
-      map.set(key, entry);
+      map.set(uid, entry);
     }
     return entry;
+  }
+
+  function formatTanggal(date: Date | null): string {
+    if (!date) return "—";
+    return date.toLocaleDateString("id-ID", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
   }
 
   for (const ev of events) {
@@ -213,8 +205,6 @@ export async function getPenggajianPeriode(
     entry.total_pcs += ev.pcsBerhasil;
     entry.jumlah_batch += 1;
 
-    // Pakai detail_ukuran event kalau ada (breakdown per-ukuran yang akurat).
-    // Kalau kosong (data lama), fallback: satu baris tanpa breakdown ukuran.
     const rincianUkuran: { ukuran: string; jumlah_pcs: number }[] =
       ev.detailUkuran.length > 0
         ? ev.detailUkuran
@@ -223,50 +213,121 @@ export async function getPenggajianPeriode(
     for (const du of rincianUkuran) {
       if (du.jumlah_pcs <= 0) continue;
 
-      if (ev.divisi === 'Cutting') {
-        addBreakdown(entry.breakdown, {
-          nama_model: batch.nama_model,
-          nama_warna: batch.nama_warna,
-          ukuran: du.ukuran,
-          jumlah_pcs: du.jumlah_pcs,
-        });
-      } else if (ev.divisi === 'Jahit') {
-        addBreakdown(entry.breakdown, {
-          nama_model: batch.nama_model,
-          nama_warna: batch.nama_warna,
-          ukuran: du.ukuran,
-          jumlah_pcs: du.jumlah_pcs,
-          sumber_cutting: cariSumberCutting(batch, du.ukuran, du.jumlah_pcs),
-        });
-      } else {
-        // Steam: dapat dari jahit mana, dan (turunan) dari cutting mana.
-        addBreakdown(entry.breakdown, {
-          nama_model: batch.nama_model,
-          nama_warna: batch.nama_warna,
-          ukuran: du.ukuran,
-          jumlah_pcs: du.jumlah_pcs,
-          sumber_jahit: sumberJahitDariBatch(batch, du.ukuran, du.jumlah_pcs),
-          sumber_cutting: cariSumberCutting(batch, du.ukuran, du.jumlah_pcs),
-        });
+      const detail: PenggajianBreakdownDetail = {
+        nama_model: batch.nama_model,
+        nama_warna: batch.nama_warna,
+        ukuran: du.ukuran,
+        pcs: du.jumlah_pcs,
+        tanggal: formatTanggal(ev.timestamp),
+        batch_id: ev.batchId,
+      };
+
+      if (ev.divisi === 'Jahit') {
+        detail.sumber_cutting = cariSumberCutting(batch, du.ukuran, du.jumlah_pcs);
+      } else if (ev.divisi === 'Steam') {
+        detail.sumber_jahit = sumberJahitDariBatch(batch, du.ukuran, du.jumlah_pcs);
+        detail.sumber_cutting = cariSumberCutting(batch, du.ukuran, du.jumlah_pcs);
       }
+
+      entry.breakdown.push(detail);
     }
   }
 
   const result = [...map.values()];
+  // Sort breakdown by date descending (newest first)
   for (const r of result) {
-    r.total_gaji = r.total_pcs * r.tarif_per_pcs;
-    r.breakdown.sort((a, b) => {
-      if (a.nama_model !== b.nama_model) return a.nama_model.localeCompare(b.nama_model);
-      if ((a.nama_warna ?? '') !== (b.nama_warna ?? '')) return (a.nama_warna ?? '').localeCompare(b.nama_warna ?? '');
-      return a.ukuran.localeCompare(b.ukuran);
+    r.breakdown.sort((a, b) => b.tanggal.localeCompare(a.tanggal));
+  }
+  result.sort((a, b) => b.total_pcs - a.total_pcs);
+
+  return result;
+}
+
+/**
+ * Input tarif saat cetak per model
+ */
+export interface TarifCetakInput {
+  nama_model: string;
+  tarif_per_pcs: number;
+}
+
+/**
+ * Hitung gaji karyawan dengan tarif yang diinput
+ */
+export function hitungGajiKaryawan(
+  data: PenggajianData,
+  tarifList: TarifCetakInput[]
+): {
+  total_gaji: number;
+  detail_per_model: Array<{
+    nama_model: string;
+    total_pcs: number;
+    tarif: number;
+    subtotal: number;
+    detail_warna_ukuran: Array<{
+      nama_warna?: string;
+      ukuran: string;
+      pcs: number;
+    }>;
+  }>;
+} {
+  const tarifMap = new Map(tarifList.map(t => [t.nama_model, t.tarif_per_pcs]));
+
+  let totalGaji = 0;
+
+  // Group by model
+  const byModel = new Map<string, {
+    nama_model: string;
+    total_pcs: number;
+    tarif: number;
+    detail_warna_ukuran: Array<{ nama_warna?: string; ukuran: string; pcs: number }>;
+  }>();
+
+  for (const b of data.breakdown) {
+    let modelEntry = byModel.get(b.nama_model);
+    if (!modelEntry) {
+      const tarif = tarifMap.get(b.nama_model) ?? 0;
+      modelEntry = {
+        nama_model: b.nama_model,
+        total_pcs: 0,
+        tarif,
+        detail_warna_ukuran: [],
+      };
+      byModel.set(b.nama_model, modelEntry);
+    }
+    modelEntry.total_pcs += b.pcs;
+
+    // Add warna+ukuran detail
+    const existingWarnaUkuran = modelEntry.detail_warna_ukuran.find(
+      w => (w.nama_warna ?? '') === (b.nama_warna ?? '') && w.ukuran === b.ukuran
+    );
+    if (existingWarnaUkuran) {
+      existingWarnaUkuran.pcs += b.pcs;
+    } else {
+      modelEntry.detail_warna_ukuran.push({
+        nama_warna: b.nama_warna,
+        ukuran: b.ukuran,
+        pcs: b.pcs,
+      });
+    }
+  }
+
+  const detailPerModel: Array<{
+    nama_model: string;
+    total_pcs: number;
+    tarif: number;
+    subtotal: number;
+    detail_warna_ukuran: Array<{ nama_warna?: string; ukuran: string; pcs: number }>;
+  }> = [];
+
+  for (const [_, modelEntry] of byModel) {
+    const subtotal = modelEntry.total_pcs * modelEntry.tarif;
+    totalGaji += subtotal;
+    detailPerModel.push({
+      ...modelEntry,
+      subtotal,
     });
   }
 
-  result.sort((a, b) => {
-    const order: Record<DivisiProduksi, number> = { Cutting: 0, Jahit: 1, Steam: 2 };
-    if (order[a.divisi] !== order[b.divisi]) return order[a.divisi] - order[b.divisi];
-    return b.total_pcs - a.total_pcs;
-  });
-
-  return result;
+  return { total_gaji: totalGaji, detail_per_model: detailPerModel };
 }

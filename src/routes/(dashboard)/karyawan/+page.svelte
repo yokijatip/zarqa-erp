@@ -5,7 +5,7 @@
   import { ROLE_LABEL } from "$lib/firebase/karyawan";
   import { getPenggajianPeriode } from "$lib/firebase/penggajian";
   import { getPeriodRange } from "$lib/period";
-  import type { UserProfile, PenggajianKaryawan } from "$lib/types";
+  import type { UserProfile } from "$lib/types";
   import StatCard from "$lib/components/StatCard.svelte";
   import { Button } from "$lib/components/ui/button";
   import UsersIcon from "@lucide/svelte/icons/users";
@@ -19,7 +19,7 @@
   // ── State ──────────────────────────────────────────────────────────
   let karyawanList = $state<UserProfile[]>([]);
   let loading = $state(true);
-  let penggajianMingguIni = $state<PenggajianKaryawan[]>([]);
+  let penggajianMingguIni = $state<Awaited<ReturnType<typeof getPenggajianPeriode>>>([]);
   let loadingGaji = $state(true);
 
   const bulanIni = new Date().toLocaleDateString("id-ID", {
@@ -40,10 +40,10 @@
     ).length,
   );
 
-  let totalGajiMingguIni = $derived(
-    penggajianMingguIni.reduce((s, d) => s + d.total_gaji, 0),
+  let totalPcsMingguIni = $derived(
+    penggajianMingguIni.reduce((s, d) => s + d.total_pcs, 0),
   );
-  let karyawanDibayarMingguIni = $derived(
+  let karyawanAktifMingguIni = $derived(
     new Set(penggajianMingguIni.map((d) => d.uid)).size,
   );
 
@@ -293,22 +293,16 @@
       {:else}
         <div class="divide-y divide-gray-50">
           <div class="flex items-center justify-between px-5 py-3.5">
-            <span class="text-sm text-gray-500">Total Estimasi Gaji</span>
-            <span class="text-sm font-semibold text-gray-800"
-              >{rupiah(totalGajiMingguIni)}</span
-            >
-          </div>
-          <div class="flex items-center justify-between px-5 py-3.5">
-            <span class="text-sm text-gray-500">Karyawan Produksi Dibayar</span>
-            <span class="text-sm font-semibold text-gray-800"
-              >{karyawanDibayarMingguIni} orang</span
-            >
-          </div>
-          <div class="flex items-center justify-between px-5 py-3.5">
             <span class="text-sm text-gray-500">Total Pcs Selesai</span>
-            <span class="text-sm font-semibold text-gray-800">
-              {penggajianMingguIni.reduce((s, d) => s + d.total_pcs, 0)} pcs
-            </span>
+            <span class="text-sm font-semibold text-gray-800"
+              >{totalPcsMingguIni} pcs</span
+            >
+          </div>
+          <div class="flex items-center justify-between px-5 py-3.5">
+            <span class="text-sm text-gray-500">Karyawan Produksi Aktif</span>
+            <span class="text-sm font-semibold text-gray-800"
+              >{karyawanAktifMingguIni} orang</span
+            >
           </div>
           {#if penggajianMingguIni.length === 0}
             <div class="px-5 py-6 text-center">

@@ -20,6 +20,7 @@
     collection: string;
     label: string;
     subcollection?: string;
+    warning?: string; // Warning khusus untuk koleksi sensitif
   };
 
   const FLUSH_TARGETS: FlushTarget[] = [
@@ -27,6 +28,7 @@
       collection: "batch_produksi",
       label: "Batch Produksi",
       subcollection: "riwayat_proses",
+      warning: "Semua riwayat produksi & kinerja karyawan akan dihapus.",
     },
     { collection: "stok_kain", label: "Stok Kain" },
     { collection: "model_baju", label: "Model Baju" },
@@ -37,8 +39,8 @@
 
   // Koleksi yang dilindungi — tidak pernah dihapus
   const PROTECTED = [
-    { label: "Akun Pengguna", description: "Data login & profil karyawan" },
     { label: "Warna", description: "Master data warna produk" },
+    { label: "Akun Karyawan (Users)", description: "Akun login & profil karyawan tetap aman" },
   ];
 
   const CORRECT_PASSWORD = "Yokijatiperkasa30!";
@@ -164,8 +166,7 @@
     <div>
       <h1 class="text-lg font-semibold text-gray-900">Flushing Database</h1>
       <p class="mt-0.5 text-sm text-gray-500">
-        Hapus permanen seluruh data operasional. Akun pengguna dan warna tetap
-        aman.
+        Hapus permanen data operasional. Akun karyawan & Warna tetap aman.
       </p>
     </div>
   </div>
@@ -202,7 +203,7 @@
         {#each FLUSH_TARGETS as t}
           {@const checked = selected.has(t.collection)}
           <label
-            class="flex items-center gap-2.5 rounded-lg border px-3.5 py-2.5 cursor-pointer transition-colors {checked
+            class="flex items-start gap-2.5 rounded-lg border px-3.5 py-2.5 cursor-pointer transition-colors {checked
               ? 'border-red-100 bg-red-50'
               : 'border-gray-100 bg-gray-50/50'}"
           >
@@ -210,18 +211,25 @@
               type="checkbox"
               {checked}
               onchange={() => toggleTarget(t.collection)}
-              class="h-4 w-4 shrink-0 rounded border-gray-300 text-red-500 focus:ring-red-400"
+              class="h-4 w-4 shrink-0 mt-0.5 rounded border-gray-300 text-red-500 focus:ring-red-400"
             />
-            <TrashIcon
-              class="h-3.5 w-3.5 shrink-0 {checked
-                ? 'text-red-400'
-                : 'text-gray-300'}"
-            />
-            <span
-              class="text-sm font-medium {checked
-                ? 'text-red-700'
-                : 'text-gray-400'}">{t.label}</span
-            >
+            <div class="flex-1">
+              <div class="flex items-center gap-2">
+                <TrashIcon
+                  class="h-3.5 w-3.5 shrink-0 {checked
+                    ? 'text-red-400'
+                    : 'text-gray-300'}"
+                />
+                <span
+                  class="text-sm font-medium {checked
+                    ? 'text-red-700'
+                    : 'text-gray-400'}">{t.label}</span
+                >
+              </div>
+              {#if t.warning && checked}
+                <p class="mt-1 text-xs text-red-600 font-medium">{t.warning}</p>
+              {/if}
+            </div>
           </label>
         {/each}
       </div>
@@ -305,21 +313,33 @@
         {#each selectedTargets as t}
           {@const done = deleted.includes(t.label)}
           <div
-            class="flex items-center gap-2.5 rounded-lg border {done
+            class="flex items-start gap-2.5 rounded-lg border {done
               ? 'border-green-100 bg-green-50'
               : 'border-red-100 bg-red-50'} px-3.5 py-2"
           >
             {#if done}
-              <CheckIcon class="h-3.5 w-3.5 shrink-0 text-green-500" />
-              <span class="text-sm text-green-700 line-through">{t.label}</span>
+              <CheckIcon class="h-3.5 w-3.5 shrink-0 text-green-500 mt-0.5" />
+              <div>
+                <span class="text-sm text-green-700 line-through">{t.label}</span>
+              </div>
             {:else if flushing && progress.includes(t.label)}
               <LoaderIcon
-                class="h-3.5 w-3.5 shrink-0 animate-spin text-red-400"
+                class="h-3.5 w-3.5 shrink-0 animate-spin text-red-400 mt-0.5"
               />
-              <span class="text-sm font-medium text-red-700">{t.label}</span>
+              <div>
+                <span class="text-sm font-medium text-red-700">{t.label}</span>
+                {#if t.warning}
+                  <p class="text-xs text-red-500">{t.warning}</p>
+                {/if}
+              </div>
             {:else}
-              <TrashIcon class="h-3.5 w-3.5 shrink-0 text-red-400" />
-              <span class="text-sm text-red-700">{t.label}</span>
+              <TrashIcon class="h-3.5 w-3.5 shrink-0 text-red-400 mt-0.5" />
+              <div>
+                <span class="text-sm text-red-700">{t.label}</span>
+                {#if t.warning}
+                  <p class="text-xs text-red-500">{t.warning}</p>
+                {/if}
+              </div>
             {/if}
           </div>
         {/each}
@@ -382,7 +402,7 @@
       <div
         class="rounded-lg border border-green-200 bg-white px-4 py-3 text-sm text-green-700"
       >
-        <span class="font-medium">Tetap tersimpan:</span> Akun pengguna &amp; warna
+        <span class="font-medium">Tetap tersimpan:</span> Master data warna & Akun Karyawan
       </div>
 
       <Button variant="outline" onclick={reset} class="mt-4">Kembali</Button>

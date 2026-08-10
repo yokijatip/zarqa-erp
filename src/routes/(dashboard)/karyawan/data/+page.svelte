@@ -7,10 +7,9 @@
     hapusAkunKaryawan,
     ROLE_LABEL,
     ROLE_KARYAWAN,
-    ROLE_DIVISI_PRODUKSI,
   } from "$lib/firebase/karyawan";
   import { isKaryawanManager } from "$lib/stores/auth.store";
-  import type { UserProfile, UserRole } from "$lib/types";
+  import type { UserProfile, UserRole, TipePenggajian } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
   import * as Table from "$lib/components/ui/table";
   import * as Select from "$lib/components/ui/select/index.js";
@@ -39,17 +38,14 @@
   let fRole = $state<UserRole>("kepala_jahit");
   let fTipe = $state<"permanent" | "temporary">("permanent");
   let fExpired = $state("");
-  let fTarif = $state("");
+  let fTipePenggajian = $state<TipePenggajian>("bulanan");
 
   // Form: edit
   let eNama = $state("");
   let eRole = $state<UserRole>("kepala_jahit");
   let eTipe = $state<"permanent" | "temporary">("permanent");
   let eExpired = $state("");
-  let eTarif = $state("");
-
-  let fIsDivisiProduksi = $derived(ROLE_DIVISI_PRODUKSI.includes(fRole));
-  let eIsDivisiProduksi = $derived(ROLE_DIVISI_PRODUKSI.includes(eRole));
+  let eTipePenggajian = $state<TipePenggajian>("bulanan");
 
   // ── Derived ────────────────────────────────────────────────────────
   let filteredList = $derived.by(() => {
@@ -75,6 +71,12 @@
   let canSubmitEdit = $derived(
     eNama.trim() !== "" && (eTipe === "permanent" || eExpired !== ""),
   );
+
+  const TIPE_PENGGAJIAN_LABEL: Record<TipePenggajian, string> = {
+    harian: "Harian",
+    mingguan: "Mingguan",
+    bulanan: "Bulanan",
+  };
 
   // ── Helpers ────────────────────────────────────────────────────────
   function showSuccess(msg: string) {
@@ -125,7 +127,7 @@
     fRole = "kepala_jahit";
     fTipe = "permanent";
     fExpired = "";
-    fTarif = "";
+    fTipePenggajian = "bulanan";
     openTambah = true;
   }
   function bukaEdit(k: UserProfile) {
@@ -134,7 +136,7 @@
     eRole = k.role;
     eTipe = k.tipe_akun ?? "permanent";
     eExpired = tsToInputDate(k.tanggal_expired);
-    eTarif = k.tarif_per_pcs != null ? String(k.tarif_per_pcs) : "";
+    eTipePenggajian = k.tipe_penggajian ?? "bulanan";
     openEdit = true;
   }
   function bukaHapus(k: UserProfile) {
@@ -155,7 +157,7 @@
         tipe_akun: fTipe,
         tanggal_expired:
           fTipe === "temporary" && fExpired ? new Date(fExpired) : null,
-        tarif_per_pcs: fIsDivisiProduksi && fTarif ? Number(fTarif) : undefined,
+        tipe_penggajian: fTipePenggajian,
       });
       openTambah = false;
       showSuccess(`Akun "${fNama.trim()}" berhasil dibuat.`);
@@ -177,7 +179,7 @@
         tipe_akun: eTipe,
         tanggal_expired:
           eTipe === "temporary" && eExpired ? new Date(eExpired) : null,
-        tarif_per_pcs: eIsDivisiProduksi ? Number(eTarif || 0) : 0,
+        tipe_penggajian: eTipePenggajian,
       });
       openEdit = false;
       showSuccess("Data karyawan berhasil diperbarui.");
@@ -294,7 +296,7 @@
       </div>
       <h1 class="mt-1 text-xl font-semibold text-gray-900">Data Karyawan</h1>
       <p class="mt-0.5 text-sm text-gray-500">
-        Kelola akun dan kontrak karyawan
+        Kelola akun, kontrak, dan tipe penggajian karyawan
       </p>
     </div>
     <Button onclick={bukaTambah}>
@@ -441,8 +443,8 @@
             <Table.Head>Email</Table.Head>
             <Table.Head>Role</Table.Head>
             <Table.Head class="text-center">Tipe</Table.Head>
+            <Table.Head class="text-center">Penggajian</Table.Head>
             <Table.Head>Expired</Table.Head>
-            <Table.Head class="text-right">Tarif/Pcs</Table.Head>
             <Table.Head></Table.Head>
           </Table.Row>
         </Table.Header>
@@ -478,6 +480,13 @@
                   </span>
                 {/if}
               </Table.Cell>
+              <Table.Cell class="text-center">
+                <span
+                  class="inline-block rounded-full bg-purple-50 px-2.5 py-0.5 text-xs font-semibold text-purple-700"
+                >
+                  {TIPE_PENGGAJIAN_LABEL[k.tipe_penggajian ?? "bulanan"]}
+                </span>
+              </Table.Cell>
               <Table.Cell>
                 {#if k.tipe_akun === "temporary" && k.tanggal_expired}
                   <span
@@ -487,15 +496,6 @@
                   >
                     {expired ? "⚠ " : ""}{formatDate(k.tanggal_expired)}
                   </span>
-                {:else}
-                  <span class="text-xs text-gray-300">—</span>
-                {/if}
-              </Table.Cell>
-              <Table.Cell class="text-right">
-                {#if ROLE_DIVISI_PRODUKSI.includes(k.role) && k.tarif_per_pcs}
-                  <span class="text-xs font-medium text-gray-700"
-                    >Rp{k.tarif_per_pcs.toLocaleString("id-ID")}</span
-                  >
                 {:else}
                   <span class="text-xs text-gray-300">—</span>
                 {/if}
@@ -672,26 +672,34 @@
           />
         </div>
       {/if}
-      {#if fIsDivisiProduksi}
-        <div class="space-y-1.5">
-          <label
-            class="mb-1.5 block text-sm font-medium text-gray-700"
-            for="t-tarif"
-          >
-            Tarif per Pcs (Rp)
-            <span class="text-xs font-normal text-gray-400"
-              >— untuk hitung gaji mingguan</span
+      <div class="space-y-1.5">
+        <label class="mb-1.5 block text-sm font-medium text-gray-700">
+          Tipe Penggajian <span class="text-red-500">*</span>
+        </label>
+        <div class="flex gap-2">
+          {#each (["harian", "mingguan", "bulanan"] as const) as tipe}
+            <button
+              type="button"
+              onclick={() => (fTipePenggajian = tipe)}
+              class="flex-1 rounded-lg border-2 px-3 py-2 text-sm font-medium transition
+                {fTipePenggajian === tipe
+                ? 'border-purple-500 bg-purple-50 text-purple-700'
+                : 'border-gray-200 bg-white text-gray-500 hover:border-gray-300'}"
             >
-          </label>
-          <Input
-            id="t-tarif"
-            type="number"
-            min="0"
-            placeholder="cth: 3000"
-            bind:value={fTarif}
-          />
+              {TIPE_PENGGAJIAN_LABEL[tipe]}
+            </button>
+          {/each}
         </div>
-      {/if}
+        <p class="text-xs text-gray-400">
+          {#if fTipePenggajian === "harian"}
+            Gaji dihitung per hari kerja (borongan)
+          {:else if fTipePenggajian === "mingguan"}
+            Gaji dihitung per pcs (untuk tukang steam, jahit, cutting)
+          {:else}
+            Gaji tetap per bulan
+          {/if}
+        </p>
+      </div>
     </div>
 
     <Dialog.Footer class="gap-2">
@@ -711,7 +719,7 @@
     <Dialog.Header>
       <Dialog.Title>Edit Data Karyawan</Dialog.Title>
       <Dialog.Description
-        >Perbarui nama, role, atau tipe kontrak. Email tidak dapat diubah.</Dialog.Description
+        >Perbarui nama, role, atau tipe kontrak.</Dialog.Description
       >
     </Dialog.Header>
 
@@ -792,26 +800,25 @@
             />
           </div>
         {/if}
-        {#if eIsDivisiProduksi}
-          <div class="space-y-1.5">
-            <label
-              class="mb-1.5 block text-sm font-medium text-gray-700"
-              for="e-tarif"
-            >
-              Tarif per Pcs (Rp)
-              <span class="text-xs font-normal text-gray-400"
-                >— untuk hitung gaji mingguan</span
+        <div class="space-y-1.5">
+          <label class="mb-1.5 block text-sm font-medium text-gray-700">
+            Tipe Penggajian <span class="text-red-500">*</span>
+          </label>
+          <div class="flex gap-2">
+            {#each (["harian", "mingguan", "bulanan"] as const) as tipe}
+              <button
+                type="button"
+                onclick={() => (eTipePenggajian = tipe)}
+                class="flex-1 rounded-lg border-2 px-3 py-2 text-sm font-medium transition
+                  {eTipePenggajian === tipe
+                  ? 'border-purple-500 bg-purple-50 text-purple-700'
+                  : 'border-gray-200 bg-white text-gray-500 hover:border-gray-300'}"
               >
-            </label>
-            <Input
-              id="e-tarif"
-              type="number"
-              min="0"
-              placeholder="cth: 3000"
-              bind:value={eTarif}
-            />
+                {TIPE_PENGGAJIAN_LABEL[tipe]}
+              </button>
+            {/each}
           </div>
-        {/if}
+        </div>
       </div>
     {/if}
 
