@@ -40,6 +40,9 @@
   let fDeskripsi = $state("");
   let fUkuran = $state<UkuranBaju[]>([]);
   let fWarna = $state<WarnaTersedia[]>([]);
+  let fTarifCutting = $state("");
+  let fTarifJahit = $state("");
+  let fTarifSteam = $state("");
 
   // ── Derived ────────────────────────────────────────────────────────
   let filteredList = $derived.by(() => {
@@ -88,6 +91,9 @@
     fDeskripsi = "";
     fUkuran = [];
     fWarna = [];
+    fTarifCutting = "";
+    fTarifJahit = "";
+    fTarifSteam = "";
     editingId = null;
   }
 
@@ -102,6 +108,9 @@
     fDeskripsi = model.deskripsi ?? "";
     fUkuran = [...model.ukuran_tersedia];
     fWarna = [...(model.warna_tersedia ?? [])];
+    fTarifCutting = model.tarif_cutting != null ? String(model.tarif_cutting) : "";
+    fTarifJahit = model.tarif_jahit != null ? String(model.tarif_jahit) : "";
+    fTarifSteam = model.tarif_steam != null ? String(model.tarif_steam) : "";
     openForm = true;
   }
 
@@ -157,6 +166,9 @@
         ...(fDeskripsi.trim() ? { deskripsi: fDeskripsi.trim() } : {}),
         ukuran_tersedia: fUkuran,
         warna_tersedia: fWarna.length > 0 ? fWarna : [],
+        tarif_cutting: Number(fTarifCutting) || 0,
+        tarif_jahit: Number(fTarifJahit) || 0,
+        tarif_steam: Number(fTarifSteam) || 0,
       };
 
       if (isEditing) {
@@ -540,6 +552,26 @@
               </div>
             </div>
           {/if}
+
+          <!-- Tarif Default -->
+          {#if (model.tarif_cutting || model.tarif_jahit || model.tarif_steam)}
+            <div>
+              <p class="mb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+                Tarif Default Produksi
+              </p>
+              <div class="flex flex-wrap gap-1.5 text-xs">
+                {#if model.tarif_cutting}
+                  <span class="rounded-md bg-blue-50 px-2 py-0.5 font-medium text-blue-700 border border-blue-100">Cut: Rp{model.tarif_cutting.toLocaleString("id-ID")}</span>
+                {/if}
+                {#if model.tarif_jahit}
+                  <span class="rounded-md bg-purple-50 px-2 py-0.5 font-medium text-purple-700 border border-purple-100">Jahit: Rp{model.tarif_jahit.toLocaleString("id-ID")}</span>
+                {/if}
+                {#if model.tarif_steam}
+                  <span class="rounded-md bg-orange-50 px-2 py-0.5 font-medium text-orange-700 border border-orange-100">Steam: Rp{model.tarif_steam.toLocaleString("id-ID")}</span>
+                {/if}
+              </div>
+            </div>
+          {/if}
         </div>
 
         <!-- Card Footer -->
@@ -847,6 +879,38 @@
               </Popover.Content>
             </Popover.Root>
           {/if}
+        </div>
+
+        <!-- Tarif Default Produksi (Opsional) -->
+        <div class="rounded-lg border border-gray-200 bg-gray-50/70 p-3.5 space-y-2.5">
+          <div>
+            <p class="text-xs font-semibold text-gray-800">Tarif Default Produksi (Opsional)</p>
+            <p class="text-[11px] text-gray-500">Tarif standar per pcs untuk mempermudah pengisian cetak gaji.</p>
+          </div>
+          <div class="grid grid-cols-3 gap-2.5">
+            <div>
+              <label class="block text-[11px] font-medium text-gray-700 mb-1">Cutting / Pcs</label>
+              <div class="relative">
+                <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-gray-400">Rp</span>
+                <Input type="number" min="0" placeholder="0" bind:value={fTarifCutting} class="pl-7 text-xs h-8" />
+              </div>
+            </div>
+            <div>
+              <label class="block text-[11px] font-medium text-gray-700 mb-1">Jahit / Pcs</label>
+              <div class="relative">
+                <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-gray-400">Rp</span>
+                <Input type="number" min="0" placeholder="0" bind:value={fTarifJahit} class="pl-7 text-xs h-8" />
+              </div>
+            </div>
+            <div>
+              <label class="block text-[11px] font-medium text-gray-700 mb-1">Steam / Pcs</label>
+              <div class="relative">
+                <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-gray-400">Rp</span>
+                <Input type="number" min="0" placeholder="0" bind:value={fTarifSteam} class="pl-7 text-xs h-8" />
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 

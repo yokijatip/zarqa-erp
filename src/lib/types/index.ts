@@ -108,6 +108,9 @@ export interface ModelBaju {
   deskripsi?: string;
   ukuran_tersedia: UkuranBaju[];
   warna_tersedia?: WarnaTersedia[];
+  tarif_cutting?: number;
+  tarif_jahit?: number;
+  tarif_steam?: number;
   aktif: boolean;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
