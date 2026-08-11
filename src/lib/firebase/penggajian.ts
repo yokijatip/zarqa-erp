@@ -7,7 +7,7 @@
 //
 // Breakdown model per karyawan dikelompokkan per model dengan detail warna, ukuran, dan tanggal
 
-import { collectionGroup, getDocs, getDoc, doc } from 'firebase/firestore';
+import { collectionGroup, getDocs, getDoc, doc, collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from './config';
 import { consumeSumberCuttingLots } from './batch-produksi';
 import type {
@@ -23,6 +23,7 @@ const STATUS_DIVISI: Partial<Record<StatusBatch, DivisiProduksi>> = {
   CUTTING_DONE: 'Cutting',
   JAHIT_DONE: 'Jahit',
   STEAM_DONE: 'Steam',
+  COMPLETED: 'Steam',
 };
 
 interface RiwayatEvent {
@@ -331,3 +332,68 @@ export function hitungGajiKaryawan(
 
   return { total_gaji: totalGaji, detail_per_model: detailPerModel };
 }
+
+/**
+ * Record pembayaran gaji yang disimpan di Firestore
+ */
+export interface PembayaranGajiRecord {
+  id?: string;
+  karyawan_uid: string;
+  karyawan_nama: string;
+  divisi: DivisiProduksi;
+  periode_start: string;
+  periode_end: string;
+  total_pcs: number;
+  total_gaji: number;
+  detail_per_model: Array<{
+    nama_model: string;
+    total_pcs: number;
+    tarif: number;
+    subtotal: number;
+  }>;
+  created_at?: any;
+  created_by_uid?: string;
+  created_by_nama?: string;
+}
+
+/**
+ * Simpan bukti pembayaran gaji ke Firestore
+ */
+export async function simpanPembayaranGaji(
+  data: Omit<PembayaranGajiRecord, 'id' | 'created_at'>
+): Promise<string> {
+  const colRef = collection(db, 'pembayaran_gaji');
+  const docRef = await addDoc(colRef, {
+    ...data,
+    created_at: serverTimestamp(),
+  });
+  return docRef.id;
+}
+
+/**
+ * Ambil daftar pembayaran gaji yang sudah diproses pada periode tertentu
+ */
+export async function getPembayaranGajiPeriode(
+  range: { start: Date; end: Date } | null
+): Promise<PembayaranGajiRecord[]> {
+  const colRef = collection(db, 'pembayaran_gaji');
+  const snap = await getDocs(colRef);
+  const result: PembayaranGajiRecord[] = [];
+
+  snap.docs.forEach((docSnap) => {
+    const d = docSnap.data() as PembayaranGajiRecord;
+    if (range) {
+      const pStart = d.periode_start ? new Date(d.periode_start) : null;
+      const pEnd = d.periode_end ? new Date(d.periode_end) : null;
+      if (pStart && pEnd) {
+        if (pEnd < range.start || pStart > range.end) {
+          return;
+        }
+      }
+    }
+    result.push({ id: docSnap.id, ...d });
+  });
+
+  return result;
+}
+

@@ -1,8 +1,14 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { getPenggajianPeriode, hitungGajiKaryawan, type TarifCetakInput } from "$lib/firebase/penggajian";
+  import {
+    getPenggajianPeriode,
+    hitungGajiKaryawan,
+    simpanPembayaranGaji,
+    getPembayaranGajiPeriode,
+    type TarifCetakInput
+  } from "$lib/firebase/penggajian";
   import { getKaryawanList } from "$lib/firebase/karyawan";
-  import { isKaryawanManager } from "$lib/stores/auth.store";
+  import { isKaryawanManager, currentUser } from "$lib/stores/auth.store";
   import { type DateRange, getPeriodRange } from "$lib/period";
   import type { UserProfile, DivisiProduksi, TipePenggajian } from "$lib/types";
   import PeriodSelector from "$lib/components/period-selector.svelte";
@@ -91,12 +97,21 @@
     loading = true;
     errorMsg = null;
     try {
-      const [penggajian, karyawan] = await Promise.all([
+      const [penggajian, karyawan, pembayaranList] = await Promise.all([
         getPenggajianPeriode(dateRange),
         getKaryawanList(),
+        getPembayaranGajiPeriode(dateRange),
       ]);
       data = penggajian;
       karyawanList = karyawan;
+
+      const paidSet = new Set<string>();
+      for (const p of pembayaranList) {
+        if (p.karyawan_uid) {
+          paidSet.add(p.karyawan_uid);
+        }
+      }
+      printedSet = paidSet;
     } catch (e) {
       console.error(e);
       errorMsg = "Gagal memuat data penggajian.";
@@ -261,6 +276,29 @@
 
       const tanggal = new Date().toISOString().slice(0, 10);
       doc.save(`gaji-${selectedKaryawan.nama.replace(/\s+/g, '-')}-${tanggal}.pdf`);
+
+      // Simpan status pembayaran ke Firestore agar persisten setelah refresh
+      let activeUser: any = null;
+      const unsub = currentUser.subscribe(u => (activeUser = u));
+      unsub();
+
+      await simpanPembayaranGaji({
+        karyawan_uid: selectedKaryawan.uid,
+        karyawan_nama: selectedKaryawan.nama,
+        divisi: selectedKaryawan.divisi,
+        periode_start: dateRange ? dateRange.start.toISOString() : new Date().toISOString(),
+        periode_end: dateRange ? dateRange.end.toISOString() : new Date().toISOString(),
+        total_pcs: selectedKaryawan.total_pcs,
+        total_gaji: calculatedSalary.total_gaji,
+        detail_per_model: calculatedSalary.detail_per_model.map(d => ({
+          nama_model: d.nama_model,
+          total_pcs: d.total_pcs,
+          tarif: d.tarif,
+          subtotal: d.subtotal,
+        })),
+        created_by_uid: activeUser?.uid,
+        created_by_nama: activeUser?.displayName || activeUser?.nama || activeUser?.email || "Admin",
+      });
 
       // Tandai sudah dicetak
       printedSet.add(selectedKaryawan.uid);
@@ -440,9 +478,9 @@
 
         <!-- Action -->
         <div class="mt-3 flex justify-end">
-          <Button onclick={() => bukaDialogCetak(k)} disabled={sudahDicetak}>
+          <Button onclick={() => bukaDialogCetak(k)} variant={sudahDicetak ? "outline" : "default"}>
             <DownloadIcon class="h-4 w-4" />
-            {sudahDicetak ? "Sudah Dibayar" : "Cetak Gaji"}
+            {sudahDicetak ? "Cetak Ulang PDF" : "Cetak & Bayar"}
           </Button>
         </div>
       </div>
