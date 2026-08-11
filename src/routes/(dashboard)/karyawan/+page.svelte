@@ -14,6 +14,7 @@
   import AlertTriangleIcon from "@lucide/svelte/icons/triangle-alert";
   import BanknoteIcon from "@lucide/svelte/icons/banknote";
   import PieChartIcon from "@lucide/svelte/icons/pie-chart";
+  import TrophyIcon from "@lucide/svelte/icons/trophy";
   import UsersRoundIcon from "@lucide/svelte/icons/users-round";
 
   // ── State ──────────────────────────────────────────────────────────
@@ -47,14 +48,16 @@
     new Set(penggajianMingguIni.map((d) => d.uid)).size,
   );
 
-  let distribusiRole = $derived.by(() => {
-    const map: Record<string, number> = {};
-    for (const k of karyawanList) {
-      const label = ROLE_LABEL[k.role] ?? k.role;
-      map[label] = (map[label] ?? 0) + 1;
-    }
-    return Object.entries(map).sort((a, b) => b[1] - a[1]);
+  let topKaryawanTerproduktif = $derived.by(() => {
+    if (penggajianMingguIni.length === 0) return [];
+    return [...penggajianMingguIni]
+      .sort((a, b) => b.total_pcs - a.total_pcs)
+      .slice(0, 5);
   });
+
+  let maxPcsMingguIni = $derived(
+    topKaryawanTerproduktif.length > 0 ? topKaryawanTerproduktif[0].total_pcs : 1
+  );
 
   // ── Helpers ────────────────────────────────────────────────────────
   function isExpired(ts: any): boolean {
@@ -207,58 +210,105 @@
 
   <!-- ── Distribusi + Penggajian ────────────────────────────────────── -->
   <div class="mb-5 grid grid-cols-1 gap-4 lg:grid-cols-2">
-    <!-- Distribusi Karyawan per Divisi (data real) -->
+    <!-- Top Karyawan Terproduktif (Minggu Ini) -->
     <div
       class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm"
     >
-      <div class="flex items-center gap-2 border-b border-gray-50 px-5 py-4">
-        <PieChartIcon class="h-4 w-4 text-gray-400" />
-        <h2 class="text-sm font-semibold text-gray-800">
-          Distribusi per Divisi
-        </h2>
+      <div
+        class="flex items-center justify-between border-b border-gray-50 px-5 py-4"
+      >
+        <div class="flex items-center gap-2">
+          <TrophyIcon class="h-4 w-4 text-amber-500" />
+          <h2 class="text-sm font-semibold text-gray-800">
+            Top Karyawan Terproduktif
+          </h2>
+          <span class="text-xs text-gray-400">Minggu Ini</span>
+        </div>
+        <a
+          href="/karyawan/penggajian"
+          class="text-xs font-medium text-blue-600 hover:underline"
+        >
+          Lihat semua →
+        </a>
       </div>
-      {#if loading}
+      {#if loadingGaji}
         <div class="space-y-3 p-5">
           {#each Array(4) as _}
             <div class="flex items-center gap-3">
-              <div class="h-3.5 w-28 animate-pulse rounded bg-gray-100"></div>
-              <div
-                class="h-2 flex-1 animate-pulse rounded-full bg-gray-100"
-              ></div>
-              <div class="h-3.5 w-6 animate-pulse rounded bg-gray-100"></div>
+              <div class="h-4 w-6 animate-pulse rounded bg-gray-100"></div>
+              <div class="h-4 flex-1 animate-pulse rounded bg-gray-100"></div>
+              <div class="h-4 w-12 animate-pulse rounded bg-gray-100"></div>
             </div>
           {/each}
         </div>
-      {:else if karyawanList.length === 0}
-        <div class="flex flex-col items-center gap-2 py-8 text-center">
-          <p class="text-sm text-gray-400">Belum ada data karyawan.</p>
-          <a
-            href="/karyawan/data"
-            class="text-xs font-medium text-blue-600 hover:underline"
-            >Tambah karyawan →</a
-          >
+      {:else if topKaryawanTerproduktif.length === 0}
+        <div
+          class="flex flex-col items-center justify-center gap-2 py-10 text-center"
+        >
+          <TrophyIcon class="h-8 w-8 text-gray-300" />
+          <p class="text-sm font-medium text-gray-500">
+            Belum Ada Data Produktivitas
+          </p>
+          <p class="max-w-xs text-xs text-gray-400">
+            Pcs yang diselesaikan karyawan minggu ini akan muncul sebagai peringkat di sini.
+          </p>
         </div>
       {:else}
         <div class="divide-y divide-gray-50 px-5 py-2">
-          {#each distribusiRole as [role, count]}
-            {@const pct = Math.round((count / karyawanList.length) * 100)}
+          {#each topKaryawanTerproduktif as k, index}
+            {@const pct = Math.round((k.total_pcs / maxPcsMingguIni) * 100)}
             <div class="flex items-center gap-3 py-2.5">
-              <span class="w-32 shrink-0 text-sm text-gray-700">{role}</span>
-              <div
-                class="relative h-2 flex-1 overflow-hidden rounded-full bg-gray-100"
-              >
-                <div
-                  class="absolute inset-y-0 left-0 rounded-full bg-blue-400 transition-all"
-                  style="width: {pct}%"
-                ></div>
-              </div>
+              <!-- Rank Badge -->
               <span
-                class="w-8 shrink-0 text-right text-sm font-semibold text-gray-800"
-                >{count}</span
+                class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold {index === 0
+                  ? 'bg-amber-100 text-amber-700'
+                  : index === 1
+                    ? 'bg-slate-200 text-slate-700'
+                    : index === 2
+                      ? 'bg-orange-100 text-orange-700'
+                      : 'bg-gray-100 text-gray-500'}"
               >
-              <span class="w-9 shrink-0 text-right text-xs text-gray-400"
-                >{pct}%</span
-              >
+                {index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : index + 1}
+              </span>
+
+              <!-- Name & Division -->
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-2">
+                  <span class="truncate text-sm font-medium text-gray-800"
+                    >{k.nama}</span
+                  >
+                  <span
+                    class="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider {k.divisi === 'Cutting'
+                      ? 'border border-blue-100 bg-blue-50 text-blue-700'
+                      : k.divisi === 'Jahit'
+                        ? 'border border-purple-100 bg-purple-50 text-purple-700'
+                        : 'border border-orange-100 bg-orange-50 text-orange-700'}"
+                  >
+                    {k.divisi}
+                  </span>
+                </div>
+                <!-- Micro Progress Bar -->
+                <div
+                  class="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-gray-100"
+                >
+                  <div
+                    class="h-1.5 rounded-full transition-all {index === 0
+                      ? 'bg-amber-400'
+                      : index === 1
+                        ? 'bg-blue-400'
+                        : 'bg-indigo-400'}"
+                    style="width: {pct}%"
+                  ></div>
+                </div>
+              </div>
+
+              <!-- Output Pcs -->
+              <div class="text-right">
+                <span class="text-sm font-bold text-gray-900"
+                  >{k.total_pcs.toLocaleString("id-ID")}</span
+                >
+                <span class="text-xs text-gray-400"> pcs</span>
+              </div>
             </div>
           {/each}
         </div>
