@@ -62,13 +62,20 @@ async function getRiwayatEvents(range: { start: Date; end: Date } | null): Promi
     const batchId = d.ref.parent.parent?.id;
     if (!batchId) return;
 
+    const rawDetailUkuran =
+      data.detail_ukuran ||
+      (data as any).ke_jahit_per_ukuran ||
+      (data as any).ke_steam_per_ukuran ||
+      (data as any).detail_berhasil ||
+      [];
+
     events.push({
       batchId,
       divisi,
       uid,
       nama: data.updated_by_nama,
       pcsBerhasil: data.pcs_berhasil ?? 0,
-      detailUkuran: data.detail_ukuran ?? [],
+      detailUkuran: Array.isArray(rawDetailUkuran) ? rawDetailUkuran : [],
       timestamp,
     });
   });
@@ -206,10 +213,35 @@ export async function getPenggajianPeriode(
     entry.total_pcs += ev.pcsBerhasil;
     entry.jumlah_batch += 1;
 
-    const rincianUkuran: { ukuran: string; jumlah_pcs: number }[] =
-      ev.detailUkuran.length > 0
-        ? ev.detailUkuran
-        : [{ ukuran: '—', jumlah_pcs: ev.pcsBerhasil }];
+    let rincianUkuran: { ukuran: string; jumlah_pcs: number }[] =
+      ev.detailUkuran.length > 0 ? ev.detailUkuran.filter((u) => (u.jumlah_pcs ?? 0) > 0) : [];
+
+    // Jika riwayat_proses tidak punya rincian ukuran, ambil dari batch.detail_ukuran
+    if (rincianUkuran.length === 0 && batch.detail_ukuran && batch.detail_ukuran.length > 0) {
+      const batchTotal = batch.detail_ukuran.reduce((s, du) => s + (du.jumlah_pcs ?? 0), 0);
+      if (batchTotal > 0 && ev.pcsBerhasil === batchTotal) {
+        rincianUkuran = batch.detail_ukuran.map((du) => ({
+          ukuran: du.ukuran,
+          jumlah_pcs: du.jumlah_pcs,
+        }));
+      } else if (batchTotal > 0) {
+        // Bagi proporsional jika pcsBerhasil beda dengan total_pcs batch
+        const ratio = ev.pcsBerhasil / batchTotal;
+        rincianUkuran = batch.detail_ukuran.map((du) => ({
+          ukuran: du.ukuran,
+          jumlah_pcs: Math.max(1, Math.round((du.jumlah_pcs ?? 0) * ratio)),
+        }));
+      } else {
+        rincianUkuran = batch.detail_ukuran.map((du) => ({
+          ukuran: du.ukuran,
+          jumlah_pcs: du.jumlah_pcs,
+        }));
+      }
+    }
+
+    if (rincianUkuran.length === 0) {
+      rincianUkuran = [{ ukuran: 'All Size', jumlah_pcs: ev.pcsBerhasil }];
+    }
 
     for (const du of rincianUkuran) {
       if (du.jumlah_pcs <= 0) continue;
