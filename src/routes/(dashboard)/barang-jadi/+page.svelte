@@ -33,9 +33,14 @@
   let loadingModels = $state(false);
   let savingTambah = $state(false);
   let fModelId = $state("");
+  let fWarnaId = $state("");
   let fJumlahPerUkuran = $state<Record<string, number>>({});
 
   let selectedModel = $derived(modelList.find((m) => m.id === fModelId) ?? null);
+  let selectedWarna = $derived(
+    (selectedModel?.warna_tersedia ?? []).find((w) => w.warna_id === fWarnaId) ?? null,
+  );
+  let modelHasWarna = $derived((selectedModel?.warna_tersedia ?? []).length > 0);
   let totalInputTambah = $derived(
     Object.values(fJumlahPerUkuran).reduce((s, v) => s + (v ?? 0), 0),
   );
@@ -234,6 +239,7 @@
   async function bukaTambah() {
     openTambah = true;
     fModelId = "";
+    fWarnaId = "";
     fJumlahPerUkuran = {};
     if (modelList.length === 0) {
       loadingModels = true;
@@ -245,20 +251,31 @@
     }
   }
 
+  function resetWarnaDanJumlah() {
+    fWarnaId = "";
+    fJumlahPerUkuran = {};
+  }
+
   async function submitTambah() {
     if (!selectedModel || savingTambah) return;
+    if (modelHasWarna && !selectedWarna) {
+      showError("Pilih warna terlebih dahulu.");
+      return;
+    }
     const items = selectedModel.ukuran_tersedia
       .map((u) => ({ ukuran: u, jumlah_pcs: fJumlahPerUkuran[u] ?? 0 }))
       .filter((i) => i.jumlah_pcs > 0);
     if (items.length === 0) { showError("Isi setidaknya satu ukuran."); return; }
     savingTambah = true;
     try {
-      const warnas = selectedModel.warna_tersedia ?? [];
+      const warnaPayload = selectedWarna
+        ? { nama_warna: selectedWarna.nama_warna, kode_hex_warna: selectedWarna.kode_hex }
+        : undefined;
       await tambahStokBarangJadi(
         selectedModel.id,
         selectedModel.nama_model,
         items,
-        warnas.length > 0 ? { nama_warna: warnas.map(w => w.nama_warna).join(', '), kode_hex_warna: warnas[0].kode_hex } : {},
+        warnaPayload,
         $currentUser ? {
           uid: $currentUser.uid,
           nama: $currentUser.name || $currentUser.email || $currentUser.uid,
@@ -268,7 +285,7 @@
       );
       openTambah = false;
       await load(true);
-      successToast = `Stok awal ${selectedModel.nama_model} berhasil ditambahkan.`;
+      successToast = `Stok awal ${selectedModel.nama_model}${selectedWarna ? ` (${selectedWarna.nama_warna})` : ''} berhasil ditambahkan.`;
       setTimeout(() => (successToast = null), 3500);
     } catch (e: any) {
       showError(e?.message ?? "Gagal menyimpan stok awal.");
@@ -718,13 +735,13 @@
             <Select.Trigger class="w-full">
               {#if selectedModel}
                 <span class="flex items-center gap-1.5 truncate">
-                  <span>{selectedModel.nama_model}</span>
-                  {#each selectedModel.warna_tersedia ?? [] as w, i}
-                    {#if i === 0}<span class="text-gray-300">·</span>{/if}
-                    <span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-black/10" style="background:{w.kode_hex}"></span>
-                    <span class="text-gray-500">{w.nama_warna}</span>
-                    {#if i < (selectedModel.warna_tersedia?.length ?? 0) - 1}<span class="text-gray-300">·</span>{/if}
-                  {/each}
+                  <span class="truncate">{selectedModel.nama_model}</span>
+                  {#if (selectedModel.warna_tersedia ?? []).length > 0}
+                    <span class="shrink-0 text-gray-300">·</span>
+                    <span class="shrink-0 text-xs text-gray-500">
+                      {(selectedModel.warna_tersedia ?? []).length} warna
+                    </span>
+                  {/if}
                 </span>
               {:else}
                 <span class="text-muted-foreground">— Pilih model —</span>
@@ -749,8 +766,43 @@
         {/if}
       </div>
 
+      <!-- Pilih warna (muncul hanya jika model punya warna_tersedia) -->
+      {#if selectedModel && modelHasWarna}
+        <div>
+          <label class="mb-1.5 block text-sm font-medium text-gray-700" for="tambah-warna">
+            Warna <span class="text-red-500">*</span>
+          </label>
+          <Select.Root
+            type="single"
+            value={fWarnaId || undefined}
+            onValueChange={(val) => { fWarnaId = val ?? ""; fJumlahPerUkuran = {}; }}
+          >
+            <Select.Trigger class="w-full">
+              {#if selectedWarna}
+                <span class="flex items-center gap-2 truncate">
+                  <span class="inline-block h-3 w-3 shrink-0 rounded-full ring-1 ring-black/10" style="background:{selectedWarna.kode_hex}"></span>
+                  <span class="truncate">{selectedWarna.nama_warna}</span>
+                </span>
+              {:else}
+                <span class="text-muted-foreground">— Pilih warna —</span>
+              {/if}
+            </Select.Trigger>
+            <Select.Content preventScroll={false}>
+              {#each selectedModel.warna_tersedia ?? [] as w}
+                <Select.Item value={w.warna_id}>
+                  <span class="flex items-center gap-2">
+                    <span class="inline-block h-3 w-3 shrink-0 rounded-full ring-1 ring-black/10" style="background:{w.kode_hex}"></span>
+                    <span>{w.nama_warna}</span>
+                  </span>
+                </Select.Item>
+              {/each}
+            </Select.Content>
+          </Select.Root>
+        </div>
+      {/if}
+
       <!-- Input per ukuran -->
-      {#if selectedModel}
+      {#if selectedModel && (!modelHasWarna || selectedWarna)}
         <div>
           <p class="mb-2 text-sm font-medium text-gray-700">Jumlah per Ukuran</p>
           <div class="grid grid-cols-3 gap-3 sm:grid-cols-5">
@@ -786,7 +838,10 @@
       <Button variant="outline" onclick={() => (openTambah = false)}>Batal</Button>
       <Button
         onclick={submitTambah}
-        disabled={savingTambah || !selectedModel || Object.values(fJumlahPerUkuran).every((v) => !v || v <= 0)}
+        disabled={savingTambah ||
+          !selectedModel ||
+          (modelHasWarna && !selectedWarna) ||
+          Object.values(fJumlahPerUkuran).every((v) => !v || v <= 0)}
       >
         {savingTambah ? "Menyimpan..." : "Simpan Stok Awal"}
       </Button>
