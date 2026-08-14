@@ -120,12 +120,16 @@
           isFinal: false,
         };
       case "CUTTING_IN_PROGRESS":
+        // Cutting selesai di sini juga (CUTTING_DONE), BUKAN final ke Barang Jadi.
+        // pcs berhasil boleh lebih kecil dari rencana awal (mis. kain kurang dari
+        // perkiraan) — batch tetap dituntaskan dengan jumlah pcs aktual, tanpa
+        // wajib mencapai jumlah rencana. Reject tidak relevan di tahap ini.
         return {
           label: "Selesaikan Cutting",
           nextStatus: "CUTTING_DONE",
           needsWorker: false,
           needsPcs: true,
-          isFinal: true,
+          isFinal: false,
         };
       case "CUTTING_DONE":
         // Hanya batch dari_potongan yang bisa dilanjut ke jahit
@@ -533,8 +537,11 @@
       ? actionTotalBerhasil + actionTotalReject >= actionTotalRemaining
       : true,
   );
+  // Hanya Jahit yang punya alur "setor parsial" (sebagian hasil lanjut ke Steam,
+  // sisanya tetap dikerjakan). Cutting selalu dituntaskan sekali jalan dengan pcs
+  // aktual yang didapat — tidak ada mekanisme lanjutan di backend untuk cutting.
   let actionCanPartial = $derived(
-    !currentAction?.isFinal && (batch?.status === "JAHIT_IN_PROGRESS" || batch?.status === "CUTTING_IN_PROGRESS")
+    !currentAction?.isFinal && batch?.status === "JAHIT_IN_PROGRESS",
   );
 
   let actionFormValid = $derived.by(() => {
@@ -561,7 +568,11 @@
       }
       if (actionUkuranBerhasil.some((jumlah) => (Number(jumlah) || 0) < 0))
         return false;
-      if (currentAction.isFinal && batch?.status === "STEAM_IN_PROGRESS" && actionUkuranReject.some((jumlah) => (Number(jumlah) || 0) < 0))
+      if (
+        currentAction.isFinal &&
+        batch?.status === "STEAM_IN_PROGRESS" &&
+        actionUkuranReject.some((jumlah) => (Number(jumlah) || 0) < 0)
+      )
         return false;
     }
     return true;
@@ -1598,10 +1609,10 @@
                     >Berhasil</th
                   >
                   {#if currentAction?.isFinal}
-                  <th
-                    class="px-3 py-2 text-center text-xs font-semibold text-gray-500"
-                    >Reject</th
-                  >
+                    <th
+                      class="px-3 py-2 text-center text-xs font-semibold text-gray-500"
+                      >Reject</th
+                    >
                   {/if}
                 </tr>
               </thead>
@@ -1613,7 +1624,9 @@
                     (actionSubmittedBySize.get(du.ukuran) ?? 0) +
                     (actionRejectedBySize.get(du.ukuran) ?? 0)}
                   {@const sisa = actionRemainingBySize[i] ?? 0}
-                  {@const overLimit = currentAction?.isFinal ? berhasil + reject > sisa : berhasil > sisa}
+                  {@const overLimit = currentAction?.isFinal
+                    ? berhasil + reject > sisa
+                    : berhasil > sisa}
                   <tr class="border-t border-gray-100">
                     <td class="px-3 py-2 font-semibold text-gray-700"
                       >{du.ukuran}</td
@@ -1637,17 +1650,17 @@
                       />
                     </td>
                     {#if currentAction?.isFinal}
-                    <td class="px-3 py-2 text-center">
-                      <Input
-                        type="number"
-                        min="0"
-                        max={sisa}
-                        class="h-8 text-center text-sm text-red-600 {overLimit
-                          ? 'border-red-400'
-                          : ''}"
-                        bind:value={actionUkuranReject[i]}
-                      />
-                    </td>
+                      <td class="px-3 py-2 text-center">
+                        <Input
+                          type="number"
+                          min="0"
+                          max={sisa}
+                          class="h-8 text-center text-sm text-red-600 {overLimit
+                            ? 'border-red-400'
+                            : ''}"
+                          bind:value={actionUkuranReject[i]}
+                        />
+                      </td>
                     {/if}
                   </tr>
                 {/each}
@@ -1675,10 +1688,10 @@
                     >{actionTotalBerhasil}</td
                   >
                   {#if currentAction?.isFinal}
-                  <td
-                    class="px-3 py-2 text-center text-xs font-semibold text-red-600"
-                    >{actionTotalReject}</td
-                  >
+                    <td
+                      class="px-3 py-2 text-center text-xs font-semibold text-red-600"
+                      >{actionTotalReject}</td
+                    >
                   {/if}
                 </tr>
               </tfoot>
@@ -1694,7 +1707,7 @@
             <p class="text-xs text-emerald-600">
               Batch akan langsung diselesaikan dan masuk ke stok barang jadi.
             </p>
-          {:else if currentAction?.needsPcs && currentAction?.isFinal}
+          {:else if currentAction?.needsPcs && !actionCanPartial}
             <p class="text-xs text-emerald-600">
               Batch akan diselesaikan dengan {actionTotalBerhasil} pcs.
             </p>
