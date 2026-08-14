@@ -50,15 +50,13 @@
   let fWarnaId = $state("");
   let fUkuran = $state<UkuranBaju | "">("");
   let fYardPerPcs = $state("");
-  let fTotalYard = $state("");
   let fCatatan = $state("");
   let fPenugasanUid = $state("");
-  let fKain = $state<{ kain_id: string; nama_kain: string; satuan: 'yard' | 'kg'; jumlah: string; yard_per_pcs: string }[]>([]);
+  let fKain = $state<{ kain_id: string; nama_kain: string; satuan: 'yard' | 'kg'; jumlah_dipakai: string }[]>([]);
   let stokPotonganModel = $state<StokPotongan[]>([]);
   let batchList = $state<BatchProduksi[]>([]);
   let workerList = $state<UserProfile[]>([]);
   let stokKainList = $state<Array<{ id: string; nama_kain: string; satuan: 'yard' | 'kg'; stok_tersedia: number; nama_warna?: string; kode_hex_warna?: string }>>([]);
-  let fKainSearch = $state("");
 
   let rolePenugasan = $derived<UserRole>(
     mode === "cutting" ? "kepala_cutting" : "kepala_jahit",
@@ -117,16 +115,12 @@
   let selectedNamaModel = $derived(
     mode === "jahit" ? selectedPotonganGroup?.nama_model : selectedModel?.nama_model,
   );
-  let warnaKey = $derived(
-    selectedWarna?.nama_warna ?? "",
-  );
-  let modelHasWarna = $derived((selectedModel?.warna_tersedia?.length ?? 0) > 0);
   // Stok potongan yang relevan untuk model+warna yang dipilih
   let stokPotonganFiltered = $derived(
     mode === "jahit"
       ? selectedPotonganGroup?.items ?? []
-      : warnaKey
-        ? stokPotonganModel.filter((s) => s.nama_warna === warnaKey)
+      : selectedWarna
+        ? stokPotonganModel.filter((s) => s.nama_warna === selectedWarna.nama_warna)
         : stokPotonganModel.filter((s) => !s.nama_warna)
   );
   let ukuranTersedia = $derived(
@@ -137,23 +131,22 @@
 
   // Kalkulasi jadi untuk mode cutting
   let jumlahJadi = $derived(() => {
-    const yard = parseFloat(fTotalYard) || 0;
+    const yard = totalYardDipakai;
     const ypp = parseFloat(fYardPerPcs) || 0;
     if (yard <= 0 || ypp <= 0) return 0;
     return Math.floor(yard / ypp);
   });
 
   let sisaYard = $derived(() => {
-    const yard = parseFloat(fTotalYard) || 0;
+    const yard = totalYardDipakai;
     const ypp = parseFloat(fYardPerPcs) || 0;
     return yard - (jumlahJadi() * ypp);
   });
 
-  // Total yard kain ke-2 (auto dari jumlah jadi × yard/pcs kain ke-2)
-  let kain2TotalYard = $derived(() => {
-    const ypp2 = parseFloat(fKain[1]?.yard_per_pcs) || 0;
-    return jumlahJadi() * ypp2;
-  });
+  // Total yard kain yang dipakai (sum dari semua kain entry)
+  let totalYardDipakai = $derived(
+    fKain.reduce((sum, k) => sum + (parseFloat(k.jumlah_dipakai) || 0), 0)
+  );
 
   // fJumlah needed for jahit mode (grid input per ukuran)
   let fJumlah = $state<Partial<Record<UkuranBaju, number>>>({});
@@ -175,29 +168,21 @@
   let totalPcs = $derived(detailUkuran.reduce((sum, item) => sum + item.jumlah_pcs, 0));
   let kainDibutuhkan = $derived(
     fKain
-      .map((k, idx) => ({
+      .map((k) => ({
         kain_id: k.kain_id,
         nama_kain: k.nama_kain,
         satuan: k.satuan,
-        jumlah_dipakai: idx === 0
-          ? parseFloat(fTotalYard) || 0
-          : kain2TotalYard(),
-        yard_per_pcs: idx === 0
-          ? parseFloat(fYardPerPcs) || 0
-          : parseFloat(k.yard_per_pcs) || 0,
+        jumlah_dipakai: parseFloat(k.jumlah_dipakai) || 0,
       }))
       .filter((k) => k.kain_id !== "" && k.jumlah_dipakai > 0),
   );
   let canSubmit = $derived(
     (mode === "jahit" ? !!selectedPotonganGroup : fModelId !== "") &&
-      (mode === "jahit" || !modelHasWarna || fWarnaId !== "") &&
       (mode === "jahit" || fUkuran !== "") &&
       (mode === "jahit" || parseFloat(fYardPerPcs) > 0) &&
-      (mode === "jahit" || parseFloat(fTotalYard) > 0) &&
       (mode === "jahit" ? totalPcs > 0 : jumlahJadi() > 0) &&
       kainDibutuhkan.length > 0 &&
       kainDibutuhkan.every((k) => k.kain_id !== "") &&
-      (mode !== "cutting" || fKain.length < 2 || parseFloat(fKain[1]?.yard_per_pcs) > 0) &&
       (mode !== "jahit" ||
         detailUkuran.every((item) => {
           const stok = stokPotonganFiltered.find((entry) => entry.ukuran === item.ukuran);
@@ -308,12 +293,10 @@
     fWarnaId = "";
     fUkuran = "";
     fYardPerPcs = "";
-    fTotalYard = "";
     fCatatan = "";
     fPenugasanUid = "";
     fJumlah = {};
     fKain = [];
-    fKainSearch = "";
     stokPotonganModel = [];
     batchList = [];
     errorMsg = null;
@@ -330,7 +313,6 @@
     fWarnaId = warnas.length === 1 ? warnas[0].warna_id : "";
     fUkuran = "";
     fYardPerPcs = "";
-    fTotalYard = "";
     fJumlah = {};
     errorMsg = null;
     stokPotonganModel = [];
@@ -343,7 +325,6 @@
     fWarnaId = group?.key ?? "";
     fUkuran = "";
     fYardPerPcs = "";
-    fTotalYard = "";
     fJumlah = {};
     errorMsg = null;
   }
@@ -537,7 +518,6 @@
                 fWarnaId = value ?? "";
                 fUkuran = "";
                 fYardPerPcs = "";
-                fTotalYard = "";
                 fJumlah = {};
                 errorMsg = null;
               }}
@@ -572,56 +552,35 @@
           </div>
         {/if}
 
+        {#if selectedNamaModel && mode === "cutting" && selectedWarna}
+          <!-- Dropdown Ukuran -->
+          <div>
+            <label class="mb-1.5 block text-sm font-medium text-gray-700">
+              Ukuran <span class="text-red-500">*</span>
+            </label>
+            <Select.Root
+              type="single"
+              value={fUkuran || undefined}
+              onValueChange={(val) => {
+                fUkuran = (val ?? "") as UkuranBaju | "";
+                fYardPerPcs = "";
+              }}
+            >
+              <Select.Trigger class="w-full">
+                {fUkuran || "— Pilih ukuran —"}
+              </Select.Trigger>
+              <Select.Content preventScroll={false}>
+                {#each selectedModel?.ukuran_tersedia ?? [] as ukuran}
+                  <Select.Item value={ukuran}>{ukuran}</Select.Item>
+                {/each}
+              </Select.Content>
+            </Select.Root>
+          </div>
+        {/if}
+
         {#if selectedNamaModel && mode === "cutting"}
-          <!-- Kalkulasi Jadi -->
-          {#if fUkuran !== ""}
-            <div class="rounded-lg border border-blue-200 bg-blue-50 p-4 space-y-3">
-              <p class="text-sm font-semibold text-gray-800">
-                Kalkulasi Jadi — Ukuran {fUkuran}
-              </p>
-
-              <div class="grid grid-cols-2 gap-3">
-                <div>
-                  <label class="mb-1 block text-xs font-medium text-gray-600">
-                    1 pcs ({fUkuran}) = ? yard
-                  </label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    min="0"
-                    bind:value={fYardPerPcs}
-                    placeholder="2.4"
-                    class="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 placeholder:text-gray-400"
-                  />
-                </div>
-                <div>
-                  <label class="mb-1 block text-xs font-medium text-gray-600">
-                    Total kain = ? yard
-                  </label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    min="0"
-                    bind:value={fTotalYard}
-                    placeholder="60"
-                    class="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 placeholder:text-gray-400"
-                  />
-                </div>
-              </div>
-
-              {#if parseFloat(fYardPerPcs) > 0 && parseFloat(fTotalYard) > 0}
-                <div class="rounded-lg bg-white border border-blue-200 p-3 text-center">
-                  <p class="text-3xl font-bold text-blue-700">{jumlahJadi()}</p>
-                  <p class="text-xs text-gray-500">perkiraan pcs jadi</p>
-                  <p class="mt-1 text-xs text-gray-400">
-                    Sisa: <span class="font-medium">{sisaYard().toFixed(2)} yard</span>
-                  </p>
-                </div>
-              {/if}
-            </div>
-          {/if}
-
           <!-- Kain yang Digunakan -->
+          {#if fUkuran !== ""}
           <div>
             <p class="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-600">
               Kain yang Digunakan
@@ -629,15 +588,10 @@
             <div class="space-y-2">
               {#each fKain as kainEntry, i}
                 {@const kainStok = stokKainList.find(k => k.id === kainEntry.kain_id)}
-                {@const isKainUtama = i === 0}
-                {@const availableKain = isKainUtama
-                  ? stokKainList.filter(k => !selectedWarna || !k.nama_warna || k.nama_warna === selectedWarna.nama_warna)
-                  : stokKainList.filter(k => !fKain.some((f, fi) => fi !== i && f.kain_id !== k.id))}
                 <div class="flex flex-col gap-1.5 rounded-lg border border-gray-200 bg-gray-50 p-3">
                   <div class="flex items-center justify-between">
                     <span class="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">
-                      {isKainUtama ? "Kain Utama" : "Kain ke-" + (i + 1)}
-                      {#if !isKainUtama}<span class="font-normal text-gray-400">(yard auto dari kalkulasi)</span>{/if}
+                      Kain #{i + 1}
                     </span>
                     {#if fKain.length > 1}
                       <button
@@ -675,13 +629,11 @@
                           {/if}
                         </span>
                       {:else}
-                        <span class="text-gray-400">
-                          {isKainUtama ? "— Pilih kain utama (warna harus sesuai) —" : "— Pilih kain tambahan —"}
-                        </span>
+                        <span class="text-gray-400">— Pilih kain —</span>
                       {/if}
                     </Select.Trigger>
                     <Select.Content preventScroll={false} class="text-xs z-[100]">
-                      {#each availableKain as kain}
+                      {#each stokKainList as kain}
                         <Select.Item value={kain.id} class="text-xs">
                           <span class="flex items-center gap-2">
                             {#if kain.kode_hex_warna}
@@ -717,42 +669,77 @@
                     </div>
                   {/if}
 
-                  {#if isKainUtama}
-                    <!-- Kain utama: info saja — input ada di kalkulasi box di atas -->
-                    <div class="flex items-center gap-2 rounded bg-blue-50 border border-blue-200 px-2.5 py-1.5">
-                      <span class="text-xs text-blue-600 font-medium">Kain Utama</span>
-                      <span class="text-xs text-gray-500">· Yard/pcs & total di kalkulasi di atas</span>
-                    </div>
-                  {:else}
-                    <!-- Kain ke-2: yard/pcs saja, total auto -->
-                    <div>
-                      <label class="mb-0.5 block text-[10px] text-gray-500">
-                        Yard/pcs kain ke-2
-                        <span class="font-normal text-gray-400">(total auto: {kain2TotalYard().toFixed(1)} yard)</span>
-                      </label>
-                      <input
-                        type="number"
-                        step="0.1"
-                        min="0"
-                        bind:value={kainEntry.yard_per_pcs}
-                        placeholder="0.5"
-                        class="h-8 w-full rounded-md border border-gray-200 bg-white px-3 text-xs text-gray-700 placeholder:text-gray-400"
-                      />
-                    </div>
-                  {/if}
+                  <!-- Input jumlah kain yang dipakai -->
+                  <div>
+                    <label class="mb-0.5 block text-[10px] text-gray-500">
+                      Jumlah dipakai (yard)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      min="0"
+                      bind:value={kainEntry.jumlah_dipakai}
+                      placeholder="0"
+                      class="h-8 w-full rounded-md border border-gray-200 bg-white px-3 text-xs text-gray-700 placeholder:text-gray-400"
+                    />
+                  </div>
                 </div>
               {/each}
               <button
                 type="button"
-                onclick={() => { fKain = [...fKain, { kain_id: '', nama_kain: '', satuan: 'yard' as const, jumlah: '', yard_per_pcs: '' }]; }}
+                onclick={() => { fKain = [...fKain, { kain_id: '', nama_kain: '', satuan: 'yard' as const, jumlah_dipakai: '' }]; }}
                 class="w-full rounded-lg border border-dashed border-gray-300 bg-white py-2 text-xs font-medium text-gray-500 hover:border-gray-400 hover:text-gray-700"
               >
-                + Tambah Kain Tambahan
+                + Tambah Kain
               </button>
             </div>
           </div>
+          {/if}
 
-          <!-- Petugas -->
+          <!-- Kalkulasi Jadi — di bawah kain -->
+          {#if fUkuran !== ""}
+            <div class="rounded-lg border border-blue-200 bg-blue-50 p-4 space-y-3">
+              <p class="text-sm font-semibold text-gray-800">
+                Kalkulasi Jadi — Ukuran {fUkuran}
+              </p>
+
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <label class="mb-1 block text-xs font-medium text-gray-600">
+                    1 pcs ({fUkuran}) = ? yard
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    bind:value={fYardPerPcs}
+                    placeholder="2.4"
+                    class="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 placeholder:text-gray-400"
+                  />
+                </div>
+                <div>
+                  <label class="mb-1 block text-xs font-medium text-gray-600">
+                    Total kain terpakai
+                  </label>
+                  <div class="flex h-[38px] items-center rounded-md border border-gray-200 bg-gray-100 px-3 text-sm text-gray-700">
+                    {totalYardDipakai.toFixed(2)} yard
+                  </div>
+                </div>
+              </div>
+
+              {#if parseFloat(fYardPerPcs) > 0 && totalYardDipakai > 0}
+                <div class="rounded-lg bg-white border border-blue-200 p-3 text-center">
+                  <p class="text-3xl font-bold text-blue-700">{jumlahJadi()}</p>
+                  <p class="text-xs text-gray-500">perkiraan pcs jadi</p>
+                  <p class="mt-1 text-xs text-gray-400">
+                    Sisa: <span class="font-medium">{sisaYard().toFixed(2)} yard</span>
+                  </p>
+                </div>
+              {/if}
+            </div>
+          {/if}
+
+          <!-- Petugas Cutting -->
           <div>
             <label class="mb-1.5 block text-sm font-medium text-gray-700">
               {penugasanLabel} <span class="text-red-500">*</span>

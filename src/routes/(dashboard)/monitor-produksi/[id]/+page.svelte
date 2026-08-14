@@ -125,7 +125,7 @@
           nextStatus: "CUTTING_DONE",
           needsWorker: false,
           needsPcs: true,
-          isFinal: false,
+          isFinal: true,
         };
       case "CUTTING_DONE":
         // Hanya batch dari_potongan yang bisa dilanjut ke jahit
@@ -533,30 +533,35 @@
       ? actionTotalBerhasil + actionTotalReject >= actionTotalRemaining
       : true,
   );
-  let actionCanPartial = $derived(batch?.status === "JAHIT_IN_PROGRESS");
+  let actionCanPartial = $derived(
+    !currentAction?.isFinal && (batch?.status === "JAHIT_IN_PROGRESS" || batch?.status === "CUTTING_IN_PROGRESS")
+  );
 
   let actionFormValid = $derived.by(() => {
     if (!currentAction) return false;
     if (currentAction.needsWorker && !actionWorkerUid && !currentAssignedWorker)
       return false;
     if (currentAction.needsPcs) {
-      if (actionTotalBerhasil + actionTotalReject > actionTotalRemaining)
-        return false;
+      if (currentAction.isFinal && batch?.status === "STEAM_IN_PROGRESS") {
+        // Steam: harus full completion
+        if (actionTotalBerhasil + actionTotalReject > actionTotalRemaining)
+          return false;
+        if (actionTotalBerhasil <= 0 && actionTotalReject <= 0) return false;
+        if (!actionCompletesStage) return false;
+      } else {
+        // Cutting dan Jahit: boleh partial, minimal 1 pcs
+        if (actionTotalBerhasil <= 0) return false;
+        if (
+          batch?.detail_ukuran.some((_, i) => {
+            const berhasil = Number(actionUkuranBerhasil[i]) || 0;
+            return berhasil > (actionRemainingBySize[i] ?? 0);
+          })
+        )
+          return false;
+      }
       if (actionUkuranBerhasil.some((jumlah) => (Number(jumlah) || 0) < 0))
         return false;
-      if (actionUkuranReject.some((jumlah) => (Number(jumlah) || 0) < 0))
-        return false;
-      if (
-        batch?.detail_ukuran.some((_, i) => {
-          const berhasil = Number(actionUkuranBerhasil[i]) || 0;
-          const reject = Number(actionUkuranReject[i]) || 0;
-          return berhasil + reject > (actionRemainingBySize[i] ?? 0);
-        })
-      )
-        return false;
-      if (actionTotalBerhasil <= 0 && actionTotalReject <= 0) return false;
-      if (currentAction.isFinal && !actionCompletesStage) return false;
-      if (!currentAction.isFinal && !actionCanPartial && !actionCompletesStage)
+      if (currentAction.isFinal && batch?.status === "STEAM_IN_PROGRESS" && actionUkuranReject.some((jumlah) => (Number(jumlah) || 0) < 0))
         return false;
     }
     return true;
@@ -1592,10 +1597,12 @@
                     class="px-3 py-2 text-center text-xs font-semibold text-gray-500"
                     >Berhasil</th
                   >
+                  {#if currentAction?.isFinal}
                   <th
                     class="px-3 py-2 text-center text-xs font-semibold text-gray-500"
                     >Reject</th
                   >
+                  {/if}
                 </tr>
               </thead>
               <tbody>
@@ -1606,7 +1613,7 @@
                     (actionSubmittedBySize.get(du.ukuran) ?? 0) +
                     (actionRejectedBySize.get(du.ukuran) ?? 0)}
                   {@const sisa = actionRemainingBySize[i] ?? 0}
-                  {@const overLimit = berhasil + reject > sisa}
+                  {@const overLimit = currentAction?.isFinal ? berhasil + reject > sisa : berhasil > sisa}
                   <tr class="border-t border-gray-100">
                     <td class="px-3 py-2 font-semibold text-gray-700"
                       >{du.ukuran}</td
@@ -1622,13 +1629,14 @@
                       <Input
                         type="number"
                         min="0"
-                        max={sisa}
+                        max={currentAction?.isFinal ? sisa : undefined}
                         class="h-8 text-center text-sm {overLimit
                           ? 'border-red-400'
                           : ''}"
                         bind:value={actionUkuranBerhasil[i]}
                       />
                     </td>
+                    {#if currentAction?.isFinal}
                     <td class="px-3 py-2 text-center">
                       <Input
                         type="number"
@@ -1640,6 +1648,7 @@
                         bind:value={actionUkuranReject[i]}
                       />
                     </td>
+                    {/if}
                   </tr>
                 {/each}
               </tbody>
@@ -1665,29 +1674,29 @@
                     class="px-3 py-2 text-center text-xs font-semibold text-gray-700"
                     >{actionTotalBerhasil}</td
                   >
+                  {#if currentAction?.isFinal}
                   <td
                     class="px-3 py-2 text-center text-xs font-semibold text-red-600"
                     >{actionTotalReject}</td
                   >
+                  {/if}
                 </tr>
               </tfoot>
             </table>
           </div>
-          {#if actionTotalBerhasil + actionTotalReject > actionTotalRemaining}
+          {#if batch?.status === "STEAM_IN_PROGRESS" && actionTotalBerhasil + actionTotalReject > actionTotalRemaining}
             <p class="text-xs text-red-500">
               Total berhasil + reject melebihi sisa pekerjaan ({actionTotalRemaining}
               pcs)
             </p>
           {/if}
-          {#if currentAction.isFinal}
+          {#if batch?.status === "STEAM_IN_PROGRESS"}
             <p class="text-xs text-emerald-600">
               Batch akan langsung diselesaikan dan masuk ke stok barang jadi.
             </p>
-          {:else if actionCanPartial && !actionCompletesStage}
-            <p class="text-xs text-blue-600">
-              Setoran ini dicatat sebagai parsial. Status batch tetap {STATUS_LABEL[
-                batch.status
-              ]}.
+          {:else if currentAction?.needsPcs && currentAction?.isFinal}
+            <p class="text-xs text-emerald-600">
+              Batch akan diselesaikan dengan {actionTotalBerhasil} pcs.
             </p>
           {/if}
         {/if}
