@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { afterNavigate, goto } from "$app/navigation";
+  import { goto } from "$app/navigation";
+  import { onMount } from "svelte";
   import {
     batchCache,
     stokPotonganCache,
@@ -357,7 +358,14 @@
     }
   }
 
-  afterNavigate(async () => {
+  // Muat data begitu halaman ini pertama kali dibuka (baik lewat navigasi SPA
+  // maupun hard refresh / buka URL langsung). Sebelumnya ini hanya bergantung
+  // pada afterNavigate, yang tidak selalu terpicu saat halaman dibuka langsung
+  // (bukan navigasi SPA), sehingga data baru muncul setelah klik Refresh manual.
+  // onMount selalu jalan begitu komponen halaman ini dibuat — dan karena setiap
+  // pindah antar Cutting/Jahit/Steam adalah route berbeda yang me-remount total
+  // komponen ini, onMount otomatis mencakup kasus navigasi juga.
+  onMount(() => {
     const tasks: Promise<unknown>[] = [load(), loadStock()];
     if (config.quickAction)
       tasks.push(
@@ -365,9 +373,10 @@
           karyawanList = list;
         }),
       );
-    await Promise.all(tasks);
-    await autoSyncPending();
-    await autoCompleteSteamDone();
+    Promise.all(tasks).then(async () => {
+      await autoSyncPending();
+      await autoCompleteSteamDone();
+    });
   });
 </script>
 

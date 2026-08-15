@@ -57,7 +57,6 @@
   let fPotonganKey = $state("");
   let fWarnaId = $state("");
   let fUkuran = $state<UkuranBaju | "">("");
-  let fYardPerPcs = $state("");
   let fCatatan = $state("");
   let fPenugasanUid = $state("");
   let fKain = $state<
@@ -66,6 +65,8 @@
       nama_kain: string;
       satuan: "yard" | "kg";
       jumlah_dipakai: string;
+      /** Kebutuhan kain ini sendiri untuk 1 pcs (yard/pcs) — tiap kain punya rasio masing-masing */
+      yard_per_pcs: string;
     }[]
   >([]);
   let stokPotonganModel = $state<StokPotongan[]>([]);
@@ -165,23 +166,51 @@
       : (selectedModel?.ukuran_tersedia ?? []),
   );
 
-  // Kalkulasi jadi untuk mode cutting
-  let jumlahJadi = $derived(() => {
-    const yard = totalYardDipakai;
-    const ypp = parseFloat(fYardPerPcs) || 0;
-    if (yard <= 0 || ypp <= 0) return 0;
-    return Math.floor(yard / ypp);
-  });
-
-  let sisaYard = $derived(() => {
-    const yard = totalYardDipakai;
-    const ypp = parseFloat(fYardPerPcs) || 0;
-    return yard - jumlahJadi() * ypp;
-  });
-
-  // Total yard kain yang dipakai (sum dari semua kain entry)
+  // Total yard kain yang dipakai (sum dari semua kain entry) — hanya info,
+  // tidak dipakai lagi untuk kalkulasi pcs jadi (lihat perKainEstimasi).
   let totalYardDipakai = $derived(
     fKain.reduce((sum, k) => sum + (parseFloat(k.jumlah_dipakai) || 0), 0),
+  );
+
+  // Estimasi pcs per kain — tiap kain punya rasio "1 pcs = ? yard" sendiri,
+  // TIDAK digabung dengan kain lain. Contoh: kain utama 120 yard @2.4/pcs = 50 pcs,
+  // kain kedua 240 yard @4.8/pcs = 50 pcs juga — bukan (120+240)/2.4.
+  type KainEstimasi = {
+    index: number;
+    nama: string;
+    pcs: number;
+    sisa: number;
+  };
+  let perKainEstimasi = $derived(
+    fKain.reduce<KainEstimasi[]>((acc, k, i) => {
+      const yard = parseFloat(k.jumlah_dipakai) || 0;
+      const rasio = parseFloat(k.yard_per_pcs) || 0;
+      if (yard > 0 && rasio > 0) {
+        const pcs = Math.floor(yard / rasio);
+        acc.push({
+          index: i,
+          nama: k.nama_kain || `Kain #${i + 1}`,
+          pcs,
+          sisa: yard - pcs * rasio,
+        });
+      }
+      return acc;
+    }, []),
+  );
+
+  // Pcs jadi ditentukan oleh kain yang paling cepat habis (bottleneck),
+  // bukan seluruh kain harus lengkap diisi untuk mulai menghitung.
+  let jumlahJadi = $derived(() =>
+    perKainEstimasi.length > 0
+      ? Math.min(...perKainEstimasi.map((e) => e.pcs))
+      : 0,
+  );
+
+  // Kain yang jadi pembatas (paling cepat habis) — dipakai untuk info "sisa"
+  let kainPembatas = $derived(() =>
+    perKainEstimasi.length > 0
+      ? perKainEstimasi.reduce((min, e) => (e.pcs < min.pcs ? e : min))
+      : null,
   );
 
   // fJumlah needed for jahit mode (grid input per ukuran)
@@ -221,7 +250,7 @@
   let canSubmit = $derived(
     (mode === "jahit" ? !!selectedPotonganGroup : fModelId !== "") &&
       (mode === "jahit" || fUkuran !== "") &&
-      (mode === "jahit" || parseFloat(fYardPerPcs) > 0) &&
+      (mode === "jahit" || perKainEstimasi.length > 0) &&
       (mode === "jahit" ? totalPcs > 0 : jumlahJadi() > 0) &&
       // Kain mentah hanya wajib diisi untuk mode cutting — jahit memakai stok
       // potongan (hasil cutting), bukan kain mentah, jadi tidak butuh input ini.
@@ -348,7 +377,6 @@
     fPotonganKey = "";
     fWarnaId = "";
     fUkuran = "";
-    fYardPerPcs = "";
     fCatatan = "";
     fPenugasanUid = "";
     fJumlah = {};
@@ -368,8 +396,9 @@
     const warnas = model?.warna_tersedia ?? [];
     fWarnaId = warnas.length === 1 ? warnas[0].warna_id : "";
     fUkuran = "";
-    fYardPerPcs = "";
     fJumlah = {};
+    // Rasio kebutuhan kain spesifik per ukuran/model — perlu diisi ulang
+    fKain = fKain.map((k) => ({ ...k, yard_per_pcs: "" }));
     errorMsg = null;
     stokPotonganModel = [];
   }
@@ -380,7 +409,6 @@
     fModelId = group?.model_id ?? "";
     fWarnaId = group?.key ?? "";
     fUkuran = "";
-    fYardPerPcs = "";
     fJumlah = {};
     errorMsg = null;
   }
@@ -609,8 +637,8 @@
               onValueChange={(value) => {
                 fWarnaId = value ?? "";
                 fUkuran = "";
-                fYardPerPcs = "";
                 fJumlah = {};
+                fKain = fKain.map((k) => ({ ...k, yard_per_pcs: "" }));
                 errorMsg = null;
               }}
             >
@@ -655,7 +683,8 @@
               value={fUkuran || undefined}
               onValueChange={(val) => {
                 fUkuran = (val ?? "") as UkuranBaju | "";
-                fYardPerPcs = "";
+                // Rasio "1 pcs = ? yard" spesifik per ukuran — reset supaya diisi ulang
+                fKain = fKain.map((k) => ({ ...k, yard_per_pcs: "" }));
               }}
             >
               <Select.Trigger class="w-full">
@@ -684,6 +713,7 @@
                   {@const kainStok = stokKainList.find(
                     (k) => k.id === kainEntry.kain_id,
                   )}
+                  {@const est = perKainEstimasi.find((e) => e.index === i)}
                   <div
                     class="flex flex-col gap-1.5 rounded-lg border border-gray-200 bg-gray-50 p-3"
                   >
@@ -712,7 +742,10 @@
                         if (val) {
                           kainEntry.kain_id = val;
                           const found = stokKainList.find((k) => k.id === val);
-                          if (found) kainEntry.satuan = found.satuan;
+                          if (found) {
+                            kainEntry.satuan = found.satuan;
+                            kainEntry.nama_kain = found.nama_kain;
+                          }
                         }
                       }}
                     >
@@ -788,20 +821,43 @@
                       </div>
                     {/if}
 
-                    <!-- Input jumlah kain yang dipakai -->
-                    <div>
-                      <label class="mb-0.5 block text-[10px] text-gray-500">
-                        Jumlah dipakai (yard)
-                      </label>
-                      <input
-                        type="number"
-                        step="0.1"
-                        min="0"
-                        bind:value={kainEntry.jumlah_dipakai}
-                        placeholder="0"
-                        class="h-8 w-full rounded-md border border-gray-200 bg-white px-3 text-xs text-gray-700 placeholder:text-gray-400"
-                      />
+                    <!-- Input jumlah kain yang dipakai + rasio kebutuhan per pcs -->
+                    <div class="grid grid-cols-2 gap-2">
+                      <div>
+                        <label class="mb-0.5 block text-[10px] text-gray-500">
+                          Jumlah dipakai (yard)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.1"
+                          min="0"
+                          bind:value={kainEntry.jumlah_dipakai}
+                          placeholder="0"
+                          class="h-8 w-full rounded-md border border-gray-200 bg-white px-3 text-xs text-gray-700 placeholder:text-gray-400"
+                        />
+                      </div>
+                      <div>
+                        <label class="mb-0.5 block text-[10px] text-gray-500">
+                          1 pcs ({fUkuran}) = ? yard
+                        </label>
+                        <input
+                          type="number"
+                          step="0.1"
+                          min="0"
+                          bind:value={kainEntry.yard_per_pcs}
+                          placeholder="2.4"
+                          class="h-8 w-full rounded-md border border-gray-200 bg-white px-3 text-xs text-gray-700 placeholder:text-gray-400"
+                        />
+                      </div>
                     </div>
+                    {#if est}
+                      <p class="text-[10px] text-gray-500">
+                        ≈ <span class="font-semibold text-gray-700"
+                          >{est.pcs} pcs</span
+                        >
+                        dari kain ini · sisa {est.sisa.toFixed(2)} yard
+                      </p>
+                    {/if}
                   </div>
                 {/each}
                 <button
@@ -814,6 +870,7 @@
                         nama_kain: "",
                         satuan: "yard" as const,
                         jumlah_dipakai: "",
+                        yard_per_pcs: "",
                       },
                     ];
                   }}
@@ -825,8 +882,9 @@
             </div>
           {/if}
 
-          <!-- Kalkulasi Jadi — di bawah kain -->
-          {#if fUkuran !== ""}
+          <!-- Kalkulasi Jadi — di bawah kain. Rasio "1 pcs = ? yard" sudah
+               diisi per kain di atas (tiap kain punya kebutuhannya sendiri). -->
+          {#if fUkuran !== "" && fKain.length > 0}
             <div
               class="rounded-lg border border-blue-200 bg-blue-50 p-4 space-y-3"
             >
@@ -834,44 +892,35 @@
                 Kalkulasi Jadi — Ukuran {fUkuran}
               </p>
 
-              <div class="grid grid-cols-2 gap-3">
-                <div>
-                  <label class="mb-1 block text-xs font-medium text-gray-600">
-                    1 pcs ({fUkuran}) = ? yard
-                  </label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    min="0"
-                    bind:value={fYardPerPcs}
-                    placeholder="2.4"
-                    class="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 placeholder:text-gray-400"
-                  />
-                </div>
-                <div>
-                  <label class="mb-1 block text-xs font-medium text-gray-600">
-                    Total kain terpakai
-                  </label>
-                  <div
-                    class="flex h-[38px] items-center rounded-md border border-gray-200 bg-gray-100 px-3 text-sm text-gray-700"
-                  >
-                    {totalYardDipakai.toFixed(2)} yard
-                  </div>
-                </div>
-              </div>
-
-              {#if parseFloat(fYardPerPcs) > 0 && totalYardDipakai > 0}
+              {#if perKainEstimasi.length > 0}
                 <div
                   class="rounded-lg bg-white border border-blue-200 p-3 text-center"
                 >
                   <p class="text-3xl font-bold text-blue-700">{jumlahJadi()}</p>
                   <p class="text-xs text-gray-500">perkiraan pcs jadi</p>
-                  <p class="mt-1 text-xs text-gray-400">
-                    Sisa: <span class="font-medium"
-                      >{sisaYard().toFixed(2)} yard</span
-                    >
-                  </p>
+                  {#if kainPembatas()}
+                    <p class="mt-1 text-xs text-gray-400">
+                      Dibatasi oleh <span class="font-medium"
+                        >{kainPembatas()?.nama}</span
+                      >
+                      · sisa
+                      <span class="font-medium"
+                        >{kainPembatas()?.sisa.toFixed(2)} yard</span
+                      >
+                    </p>
+                  {/if}
                 </div>
+                {#if perKainEstimasi.length < fKain.length}
+                  <p class="text-xs text-amber-600">
+                    Masih ada kain yang belum diisi jumlah/rasionya — belum ikut
+                    dihitung.
+                  </p>
+                {/if}
+              {:else}
+                <p class="text-xs text-gray-400">
+                  Isi jumlah dipakai dan rasio "1 pcs = ? yard" tiap kain di
+                  atas untuk melihat perkiraan pcs jadi.
+                </p>
               {/if}
             </div>
           {/if}
