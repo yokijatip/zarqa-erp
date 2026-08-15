@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from "svelte";
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
   import {
@@ -198,6 +197,7 @@
   let sourceCuttingRiwayat = $state<RiwayatProses[]>([]);
   let loading = $state(true);
   let notFound = $state(false);
+  let loadError = $state<string | null>(null);
   let karyawanList = $state<UserProfile[]>([]);
 
   // Action dialog
@@ -814,51 +814,83 @@
   }
 
   // ─── Load ─────────────────────────────────────────────────────────
-  async function load() {
-    loading = true;
-    const id = $page.params.id ?? "";
-    const [b, r, karyawan] = await Promise.all([
-      getBatchById(id),
-      getRiwayatBatch(id),
-      karyawanCache.get(),
-    ]);
-    if (!b) {
-      notFound = true;
-      loading = false;
-      return;
-    }
-    batch = b;
-    riwayat = r;
-    karyawanList = karyawan;
-    await loadSourceCuttingHistory(b);
-    loading = false;
+  // Id batch yang sedang dimuat/ditampilkan saat ini. Dipakai sebagai "token"
+  // untuk membuang hasil fetch yang basi (misalnya user sudah pindah ke batch
+  // lain sebelum fetch batch sebelumnya selesai), supaya riwayat proses batch
+  // yang lama tidak pernah ketimpa/tercampur ke batch yang baru dibuka.
+  let loadedForId = "";
 
-    // Auto-selesaikan batch yang stuck di STEAM_DONE dari alur lama
-    if (b.status === "STEAM_DONE" && $currentUser) {
-      try {
-        const operatorUid = $currentUser.uid;
-        const operatorNama =
-          $currentUser.name || $currentUser.email || operatorUid;
-        const steamWorker = assignedWorkerForStatus(b, "STEAM_DONE");
-        const uid = steamWorker?.uid ?? operatorUid;
-        const nama = steamWorker?.nama ?? operatorNama;
-        await completeBatchProduksi(b.id, uid, nama, {
-          status_dari: "STEAM_DONE",
-          pcs_berhasil: b.pcs_saat_ini ?? b.total_pcs,
-          pcs_reject: 0,
-        });
-        batchCache.invalidate();
-        const [b2, r2] = await Promise.all([
-          getBatchById(id),
-          getRiwayatBatch(id),
-        ]);
-        if (b2) {
-          batch = b2;
-          riwayat = r2;
-        }
-      } catch (e) {
-        console.error("[auto-complete-steam] Gagal complete batch", b.id, e);
+  async function load(id: string) {
+    if (!id) return;
+    loadedForId = id;
+    loading = true;
+    notFound = false;
+    loadError = null;
+    // Reset dulu supaya tidak sempat menampilkan riwayat batch sebelumnya
+    // sekilas sebelum data batch baru selesai dimuat.
+    batch = null;
+    riwayat = [];
+    sourceCuttingBatches = [];
+    sourceCuttingRiwayat = [];
+
+    try {
+      const [b, r, karyawan] = await Promise.all([
+        getBatchById(id),
+        getRiwayatBatch(id),
+        karyawanCache.get(),
+      ]);
+
+      // Kalau user sudah pindah ke batch lain selagi fetch ini berjalan,
+      // buang hasilnya — jangan timpa state batch yang sedang aktif sekarang.
+      if (loadedForId !== id) return;
+
+      if (!b) {
+        notFound = true;
+        return;
       }
+      batch = b;
+      riwayat = r;
+      karyawanList = karyawan;
+      await loadSourceCuttingHistory(b);
+      if (loadedForId !== id) return;
+
+      // Auto-selesaikan batch yang stuck di STEAM_DONE dari alur lama
+      if (b.status === "STEAM_DONE" && $currentUser) {
+        try {
+          const operatorUid = $currentUser.uid;
+          const operatorNama =
+            $currentUser.name || $currentUser.email || operatorUid;
+          const steamWorker = assignedWorkerForStatus(b, "STEAM_DONE");
+          const uid = steamWorker?.uid ?? operatorUid;
+          const nama = steamWorker?.nama ?? operatorNama;
+          await completeBatchProduksi(b.id, uid, nama, {
+            status_dari: "STEAM_DONE",
+            pcs_berhasil: b.pcs_saat_ini ?? b.total_pcs,
+            pcs_reject: 0,
+          });
+          batchCache.invalidate();
+          const [b2, r2] = await Promise.all([
+            getBatchById(id),
+            getRiwayatBatch(id),
+          ]);
+          if (loadedForId === id && b2) {
+            batch = b2;
+            riwayat = r2;
+          }
+        } catch (e) {
+          console.error("[auto-complete-steam] Gagal complete batch", b.id, e);
+        }
+      }
+    } catch (e) {
+      console.error("[monitor-produksi] Gagal memuat batch", id, e);
+      if (loadedForId === id) {
+        loadError = e instanceof Error ? e.message : "Gagal memuat data batch.";
+      }
+      return;
+    } finally {
+      // Selalu matikan loading walau terjadi error, supaya halaman tidak
+      // nyangkut di skeleton selamanya.
+      if (loadedForId === id) loading = false;
     }
   }
 
@@ -881,7 +913,7 @@
     if (sourceIds.length === 0) return;
 
     const sourceBatches = await Promise.all(
-      sourceIds.map((sourceId) => getBatchById(sourceId)),
+      sourceIds.map((sourceId) => getBatchById(sourceId).catch(() => null)),
     );
     sourceCuttingBatches = sourceBatches.filter(Boolean) as BatchProduksi[];
 
@@ -897,10 +929,20 @@
       );
   }
 
-  onMount(load);
+  // PENTING: pakai $effect (bukan onMount) supaya load() jalan ulang tiap kali
+  // param [id] di URL berubah. SvelteKit TIDAK remount komponen ini saat
+  // pindah antar batch di route yang sama (hanya param yang berubah), jadi
+  // kalau cuma pakai onMount, pindah dari halaman batch A ke batch B lewat
+  // link (tanpa reload) bisa membuat state lama (termasuk riwayat proses)
+  // ketinggalan dan malah tertimpa/tercampur ke batch B. $effect ini memastikan
+  // setiap batch selalu memuat & menampilkan riwayatnya masing-masing.
+  $effect(() => {
+    const id = $page.params.id ?? "";
+    load(id);
+  });
 </script>
 
-<!-- Back button -->
+\<!-- Back button -->
 <div class="mb-5">
   <button
     onclick={() => goto("/monitor-produksi")}
@@ -916,6 +958,19 @@
     <div class="h-8 w-48 animate-pulse rounded-lg bg-gray-100"></div>
     <div class="h-32 animate-pulse rounded-xl bg-gray-100"></div>
     <div class="h-48 animate-pulse rounded-xl bg-gray-100"></div>
+  </div>
+{:else if loadError}
+  <div
+    class="flex flex-col items-center justify-center gap-3 rounded-xl border border-red-100 bg-red-50 py-20"
+  >
+    <p class="text-sm font-medium text-red-600">Gagal memuat data batch</p>
+    <p class="text-xs text-red-500">{loadError}</p>
+    <button
+      onclick={() => load($page.params.id ?? "")}
+      class="text-xs text-blue-600 hover:underline"
+    >
+      Coba lagi
+    </button>
   </div>
 {:else if notFound}
   <div
@@ -982,7 +1037,7 @@
         </p>
         <p class="text-xs text-gray-400">pcs saat ini</p>
       </div>
-      <Button variant="outline" onclick={load}>
+      <Button variant="outline" onclick={() => load($page.params.id ?? "")}>
         <svg
           class="h-3.5 w-3.5 {loading ? 'animate-spin' : ''}"
           xmlns="http://www.w3.org/2000/svg"
