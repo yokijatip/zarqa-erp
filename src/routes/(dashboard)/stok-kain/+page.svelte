@@ -12,7 +12,6 @@
   import { stokKainCache, warnaCache } from "$lib/stores/data-cache.svelte";
   import type { StokKain, Warna, BatchProduksi, RiwayatStokKain } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
-  import * as Table from "$lib/components/ui/table";
   import { Button } from "$lib/components/ui/button";
   import * as Select from "$lib/components/ui/select/index.js";
   import StatCard from "$lib/components/StatCard.svelte";
@@ -42,6 +41,9 @@
   let selectedKain = $state<StokKain | null>(null);
   let kurangiKain = $state<StokKain | null>(null);
   let editingKain = $state<StokKain | null>(null);
+
+  // Collapse state: set of expanded jenis kain names
+  let expandedTypes = $state<Set<string>>(new Set());
 
   // History state
   let openRiwayat = $state(false);
@@ -240,6 +242,57 @@
     } finally {
       analyticsLoading = false;
     }
+  }
+
+  // ── Group kain by jenis ────────────────────────────────────────────
+  type GroupedKain = {
+    nama_kain: string;
+    items: StokKain[];
+    totalTersedia: number;
+    satuan: string;
+    worstStatus: "Kritis" | "Perhatian" | "Aman";
+  };
+
+  let groupedList = $derived.by((): GroupedKain[] => {
+    const map = new Map<string, GroupedKain>();
+    for (const kain of filteredList) {
+      const key = kain.nama_kain;
+      if (!map.has(key)) {
+        map.set(key, {
+          nama_kain: key,
+          items: [],
+          totalTersedia: 0,
+          satuan: kain.satuan,
+          worstStatus: "Aman",
+        });
+      }
+      const g = map.get(key)!;
+      g.items.push(kain);
+      g.totalTersedia += kain.stok_tersedia;
+      if (kain.stok_tersedia < 100) {
+        g.worstStatus = "Kritis";
+      } else if (kain.stok_tersedia < 250 && g.worstStatus !== "Kritis") {
+        g.worstStatus = "Perhatian";
+      }
+    }
+    return [...map.values()];
+  });
+
+  // Stats per group (for display)
+  function groupStatus(status: "Kritis" | "Perhatian" | "Aman") {
+    if (status === "Kritis") return { label: "Kritis", cls: "bg-red-100 text-red-700", bar: "bg-red-400" };
+    if (status === "Perhatian") return { label: "Perhatian", cls: "bg-amber-100 text-amber-700", bar: "bg-amber-400" };
+    return { label: "Aman", cls: "bg-green-100 text-green-700", bar: "bg-blue-400" };
+  }
+
+  function toggleGroup(namaKain: string) {
+    const next = new Set(expandedTypes);
+    if (next.has(namaKain)) {
+      next.delete(namaKain);
+    } else {
+      next.add(namaKain);
+    }
+    expandedTypes = next;
   }
 
   // ── Derived ────────────────────────────────────────────────────────
@@ -570,7 +623,7 @@
 <div class="mb-5 grid grid-cols-2 gap-4 lg:grid-cols-4">
   <StatCard
     title="Total Jenis"
-    value={totalJenis}
+    value={groupedList.length}
     icon={LayersIcon}
     footerSubtext="jenis kain terdaftar"
   />
@@ -826,7 +879,7 @@
   </Button>
 </div>
 
-<!-- ── Table ──────────────────────────────────────────────────── -->
+<!-- ── Kain List (Grouped by Jenis) ───────────────────────────── -->
 <div
   class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm"
 >
@@ -879,166 +932,166 @@
       {/if}
     </div>
   {:else}
-    <Table.Root>
-      <Table.Header>
-        <Table.Row class="bg-gray-50 hover:bg-gray-50">
-          <Table.Head>Nama Kain</Table.Head>
-          <Table.Head>Warna</Table.Head>
-          <Table.Head class="text-right">Tersedia</Table.Head>
-          <Table.Head class="text-center">Status</Table.Head>
-          <Table.Head>Catatan</Table.Head>
-          <Table.Head></Table.Head>
-        </Table.Row>
-      </Table.Header>
-      <Table.Body>
-        {#each filteredList as kain}
-          {@const st = statusKain(kain.stok_tersedia)}
-          <Table.Row>
-            <Table.Cell>
-              <p class="text-sm font-medium text-gray-800">{kain.nama_kain}</p>
-            </Table.Cell>
+    <div class="divide-y divide-gray-50">
+      {#each groupedList as group}
+        {@const gs = groupStatus(group.worstStatus)}
+        {@const isOpen = expandedTypes.has(group.nama_kain)}
+        <div>
+          <!-- Group Header (clickable to expand/collapse) -->
+          <button
+            type="button"
+            onclick={() => toggleGroup(group.nama_kain)}
+            class="flex w-full items-center gap-3 px-5 py-3.5 text-left transition-colors hover:bg-gray-50"
+          >
+            <!-- Expand/Collapse chevron -->
+            <svg
+              class="h-4 w-4 shrink-0 text-gray-400 transition-transform duration-200 {isOpen
+                ? 'rotate-90'
+                : ''}"
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke-width="2"
+              stroke="currentColor"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="m8.25 4.5 7.5 7.5-7.5 7.5"
+              />
+            </svg>
 
-            <Table.Cell>
-              {#if kain.nama_warna}
-                <span
-                  class="inline-flex items-center gap-2 rounded-full bg-gray-50 px-2.5 py-1 text-xs font-medium text-gray-700"
-                >
-                  {#if kain.kode_hex_warna}
-                    <span
-                      class="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-gray-200"
-                      style="background-color: {kain.kode_hex_warna}"
-                    ></span>
-                  {/if}
-                  {kain.nama_warna}
-                </span>
-              {:else}
-                <span class="text-xs text-gray-400">Tanpa warna</span>
-              {/if}
-            </Table.Cell>
-
-            <Table.Cell class="text-right">
-              <p
-                class="text-sm font-semibold tabular-nums {kain.stok_tersedia <
-                100
-                  ? 'text-red-600'
-                  : 'text-gray-800'}"
-              >
-                {kain.stok_tersedia.toLocaleString("id-ID")}
+            <!-- Nama kain -->
+            <div class="min-w-0 flex-1">
+              <p class="text-sm font-semibold text-gray-800">
+                {group.nama_kain}
               </p>
-              <p class="text-xs text-gray-400">{kain.satuan}</p>
-            </Table.Cell>
-
-            <Table.Cell class="text-center">
-              <span
-                class="inline-block rounded-full px-2.5 py-1 text-xs font-semibold {st.cls}"
-              >
-                {st.label}
-              </span>
-            </Table.Cell>
-
-            <Table.Cell class="max-w-45">
-              <p class="truncate text-xs text-gray-500">
-                {kain.catatan ?? "—"}
+              <p class="text-xs text-gray-400">
+                {group.items.length} warna
               </p>
-            </Table.Cell>
+            </div>
 
-            <Table.Cell class="text-right">
-              <div class="flex justify-end gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onclick={() => bukaEdit(kain)}
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke-width="2"
-                    stroke="currentColor"
-                  >
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125"
-                    />
-                  </svg>
-                  Edit
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onclick={() => bukaKurangi(kain)}
-                  class="border-orange-200 text-orange-600 hover:bg-orange-50 hover:text-orange-700"
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke-width="2.5"
-                    stroke="currentColor"
-                  >
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="M5 12h14"
-                    />
-                  </svg>
-                  Kurangi
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onclick={() => bukaRestock(kain)}
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke-width="2.5"
-                    stroke="currentColor"
-                  >
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="M12 4.5v15m7.5-7.5h-15"
-                    />
-                  </svg>
-                  Restock
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onclick={() => bukaRiwayat(kain)}
-                  class="border-gray-200 text-gray-500 hover:text-gray-700"
-                  title="Lihat riwayat"
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke-width="2"
-                    stroke="currentColor"
-                  >
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"
-                    />
-                  </svg>
-                  Riwayat
-                </Button>
+            <!-- Progress bar -->
+            <div class="hidden w-20 flex-col gap-1 sm:flex">
+              <div class="h-1.5 w-full overflow-hidden rounded-full bg-gray-100">
+                <div
+                  class="h-full rounded-full {gs.bar}"
+                  style="width: {Math.min(100, (group.totalTersedia / 500)) * 100}%"
+                ></div>
               </div>
-            </Table.Cell>
-          </Table.Row>
-        {/each}
-      </Table.Body>
-    </Table.Root>
+            </div>
+
+            <!-- Total available -->
+            <div class="text-right">
+              <p
+                class="text-sm font-bold tabular-nums text-gray-800 {group.worstStatus ===
+                'Kritis'
+                  ? 'text-red-600'
+                  : ''}"
+              >
+                {group.totalTersedia.toLocaleString("id-ID")}
+              </p>
+              <p class="text-xs text-gray-400">{group.satuan}</p>
+            </div>
+
+            <!-- Status badge -->
+            <span
+              class="inline-block shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold {gs.cls}"
+            >
+              {gs.label}
+            </span>
+          </button>
+
+          <!-- Expanded: individual kain rows -->
+          {#if isOpen}
+            <div class="border-t border-gray-100">
+              {#each group.items as kain}
+                {@const st = statusKain(kain.stok_tersedia)}
+                <div
+                  class="flex items-center gap-3 border-b border-gray-50 px-5 py-3 last:border-0 hover:bg-gray-50"
+                >
+                  <!-- Warna indicator + name -->
+                  <div class="ml-6 flex min-w-0 flex-1 items-center gap-2">
+                    {#if kain.nama_warna}
+                      <span
+                        class="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-gray-200"
+                        style="background-color: {kain.kode_hex_warna ?? '#ccc'}"
+                      ></span>
+                      <span class="text-sm text-gray-700">{kain.nama_warna}</span>
+                    {:else}
+                      <span class="text-xs text-gray-400">Tanpa warna</span>
+                    {/if}
+                  </div>
+
+                  <!-- Tersedia -->
+                  <div class="w-20 text-right">
+                    <p
+                      class="text-sm font-semibold tabular-nums {kain.stok_tersedia <
+                      100
+                        ? 'text-red-600'
+                        : 'text-gray-800'}"
+                    >
+                      {kain.stok_tersedia.toLocaleString("id-ID")}
+                    </p>
+                    <p class="text-xs text-gray-400">{kain.satuan}</p>
+                  </div>
+
+                  <!-- Status badge -->
+                  <span
+                    class="inline-block w-20 rounded-full px-2.5 py-1 text-center text-xs font-semibold {st.cls}"
+                  >
+                    {st.label}
+                  </span>
+
+                  <!-- Actions -->
+                  <div class="flex gap-1.5">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onclick={() => bukaEdit(kain)}
+                      class="h-7 px-2 text-xs"
+                    >
+                      Edit
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onclick={() => bukaKurangi(kain)}
+                      class="h-7 border-orange-200 px-2 text-xs text-orange-600 hover:bg-orange-50"
+                    >
+                      Kurangi
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onclick={() => bukaRestock(kain)}
+                      class="h-7 px-2 text-xs"
+                    >
+                      Restock
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onclick={() => bukaRiwayat(kain)}
+                      class="h-7 border-gray-200 px-2 text-xs text-gray-500 hover:text-gray-700"
+                      title="Lihat riwayat"
+                    >
+                      Riwayat
+                    </Button>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {/each}
+    </div>
 
     <div
       class="flex items-center justify-between border-t border-gray-100 bg-gray-50 px-5 py-3"
     >
       <p class="text-xs text-gray-400">
-        Menampilkan {filteredList.length} dari {totalJenis} jenis kain
+        Menampilkan {groupedList.length} jenis kain
       </p>
       <div class="flex flex-wrap gap-3 text-xs text-gray-400">
         {#if totalYard > 0}
@@ -1245,7 +1298,7 @@
       </Dialog.Description>
     </Dialog.Header>
 
-    <div class="space-y-4">
+    <div class="max-h-[calc(85vh-10rem)] overflow-y-auto space-y-4 pr-1">
       {#if selectedKain}
         <div class="rounded-xl border border-gray-100 bg-gray-50 p-4">
           <p class="text-xs font-medium uppercase tracking-wider text-gray-500">

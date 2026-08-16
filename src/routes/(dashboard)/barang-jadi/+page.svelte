@@ -27,6 +27,11 @@
   let filterStatus = $state<"semua" | "kritis" | "low" | "kosong">("semua");
   let lastLoaded = $state<Date | null>(null);
 
+  // Collapse state: set of expanded model names
+  let expandedModels = $state<Set<string>>(new Set());
+  // Collapse state: set of "modelId|warna" keys for color-level collapse
+  let expandedColors = $state<Set<string>>(new Set());
+
   // Tambah Stok Awal (migrasi)
   let openTambah = $state(false);
   let modelList = $state<ModelBaju[]>([]);
@@ -53,102 +58,140 @@
   let successToast = $state<string | null>(null);
 
   // ── Derived ────────────────────────────────────────────────────────
-  // Filter warna
-  let filterWarna = $state<string>("semua");
+  type ColorGroup = {
+    nama_warna?: string;
+    kode_hex_warna?: string;
+    items: StokBarangJadi[];
+  };
+  type ModelGroup = {
+    model_id: string;
+    nama_model: string;
+    colors: Map<string, ColorGroup>;
+  };
 
-  let grouped = $derived.by(() => {
-    // Group by model_id + nama_warna agar tiap kombinasi warna tampil terpisah
-    const map = new Map<
-      string,
-      { model_id: string; nama_model: string; nama_warna?: string; kode_hex_warna?: string; items: StokBarangJadi[] }
-    >();
+  let grouped = $derived.by((): ModelGroup[] => {
+    const modelMap = new Map<string, ModelGroup>();
     for (const item of stokList) {
-      const key = `${item.model_id}__${item.nama_warna ?? ''}`;
-      if (!map.has(key)) {
-        map.set(key, {
+      if (!modelMap.has(item.model_id)) {
+        modelMap.set(item.model_id, {
           model_id: item.model_id,
           nama_model: item.nama_model,
+          colors: new Map(),
+        });
+      }
+      const model = modelMap.get(item.model_id)!;
+      const colorKey = item.nama_warna ?? '';
+      if (!model.colors.has(colorKey)) {
+        model.colors.set(colorKey, {
           nama_warna: item.nama_warna,
           kode_hex_warna: item.kode_hex_warna,
           items: [],
         });
       }
-      map.get(key)!.items.push(item);
+      model.colors.get(colorKey)!.items.push(item);
     }
-    for (const g of map.values()) {
-      g.items.sort(
-        (a, b) =>
-          UKURAN_ORDER.indexOf(a.ukuran) - UKURAN_ORDER.indexOf(b.ukuran),
-      );
+    for (const model of modelMap.values()) {
+      for (const color of model.colors.values()) {
+        color.items.sort(
+          (a, b) => UKURAN_ORDER.indexOf(a.ukuran) - UKURAN_ORDER.indexOf(b.ukuran),
+        );
+      }
     }
-    return [...map.values()];
+    return [...modelMap.values()];
   });
 
-  // Daftar warna unik untuk filter chips
-  let warnaUnik = $derived.by(() => {
-    const set = new Set<string>();
-    for (const g of grouped) {
-      if (g.nama_warna) set.add(g.nama_warna);
-    }
-    return [...set].sort((a, b) => a.localeCompare(b, 'id'));
-  });
-
-  type GroupedModel = (typeof grouped)[number];
-
-  function getTotalTersedia(g: GroupedModel) {
-    return g.items.reduce((s, i) => s + i.stok_tersedia, 0);
+  function getColorTotal(color: ColorGroup) {
+    return color.items.reduce((s, i) => s + i.stok_tersedia, 0);
   }
-  function getStatusModel(
-    g: GroupedModel,
-  ): "kosong" | "kritis" | "low" | "aman" {
-    const total = getTotalTersedia(g);
+
+  function getModelTotal(model: ModelGroup) {
+    let total = 0;
+    for (const color of model.colors.values()) {
+      total += getColorTotal(color);
+    }
+    return total;
+  }
+
+  function getModelStatus(model: ModelGroup): "kosong" | "kritis" | "low" | "aman" {
+    const total = getModelTotal(model);
     if (total === 0) return "kosong";
-    const hasKritis = g.items.some(
+    const hasKritis = [...model.colors.values()].some((c) =>
+      c.items.some((i) => i.stok_tersedia > 0 && i.stok_tersedia <= KRITIS_THRESHOLD),
+    );
+    if (hasKritis) return "kritis";
+    const hasLow = [...model.colors.values()].some((c) =>
+      c.items.some((i) => i.stok_tersedia > 0 && i.stok_tersedia <= LOW_THRESHOLD),
+    );
+    if (hasLow) return "low";
+    return "aman";
+  }
+
+  function getColorStatus(color: ColorGroup): "kosong" | "kritis" | "low" | "aman" {
+    const total = getColorTotal(color);
+    if (total === 0) return "kosong";
+    const hasKritis = color.items.some(
       (i) => i.stok_tersedia > 0 && i.stok_tersedia <= KRITIS_THRESHOLD,
     );
     if (hasKritis) return "kritis";
-    const hasLow = g.items.some(
+    const hasLow = color.items.some(
       (i) => i.stok_tersedia > 0 && i.stok_tersedia <= LOW_THRESHOLD,
     );
     if (hasLow) return "low";
     return "aman";
   }
 
+  function toggleModel(modelId: string) {
+    const next = new Set(expandedModels);
+    if (next.has(modelId)) {
+      next.delete(modelId);
+    } else {
+      next.add(modelId);
+    }
+    expandedModels = next;
+  }
+
+  function colorKey(modelId: string, warna: string) {
+    return `${modelId}|${warna}`;
+  }
+
+  function toggleColor(modelId: string, warna: string) {
+    const key = colorKey(modelId, warna);
+    const next = new Set(expandedColors);
+    if (next.has(key)) {
+      next.delete(key);
+    } else {
+      next.add(key);
+    }
+    expandedColors = next;
+  }
+
   let filteredGrouped = $derived.by(() => {
     let list = grouped;
 
-    // Search
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
-      list = list.filter((g) => g.nama_model.toLowerCase().includes(q));
+      list = list.filter((m) => m.nama_model.toLowerCase().includes(q));
     }
 
-    // Filter warna
-    if (filterWarna !== "semua") {
-      list = list.filter((g) => g.nama_warna === filterWarna);
-    }
-
-    // Filter status
     if (filterStatus !== "semua") {
-      list = list.filter((g) => getStatusModel(g) === filterStatus);
+      list = list.filter((m) => getModelStatus(m) === filterStatus);
     }
 
-    // Sort
     const sorted = [...list];
     if (sortBy === "kritis") {
       const order = { kosong: 0, kritis: 1, low: 2, aman: 3 };
       sorted.sort(
-        (a, b) => order[getStatusModel(a)] - order[getStatusModel(b)],
+        (a, b) => order[getModelStatus(a)] - order[getModelStatus(b)],
       );
     } else if (sortBy === "terbanyak") {
-      sorted.sort((a, b) => getTotalTersedia(b) - getTotalTersedia(a));
+      sorted.sort((a, b) => getModelTotal(b) - getModelTotal(a));
     } else if (sortBy === "nama") {
       sorted.sort((a, b) => a.nama_model.localeCompare(b.nama_model));
     } else if (sortBy === "keluar") {
       sorted.sort(
         (a, b) =>
-          b.items.reduce((s, i) => s + i.total_keluar, 0) -
-          a.items.reduce((s, i) => s + i.total_keluar, 0),
+          [...b.colors.values()].reduce((s, c) => s + c.items.reduce((si, i) => si + i.total_keluar, 0), 0) -
+          [...a.colors.values()].reduce((s, c) => s + c.items.reduce((si, i) => si + i.total_keluar, 0), 0),
       );
     }
     return sorted;
@@ -160,10 +203,10 @@
   );
   let totalMasuk = $derived(stokList.reduce((s, i) => s + i.total_masuk, 0));
   let modelKosong = $derived(
-    grouped.filter((g) => g.items.every((i) => i.stok_tersedia === 0)).length,
+    grouped.filter((m) => getModelStatus(m) === "kosong").length,
   );
   let modelKritis = $derived(
-    grouped.filter((g) => getStatusModel(g) === "kritis").length,
+    grouped.filter((m) => getModelStatus(m) === "kritis").length,
   );
 
   // ── Helpers ────────────────────────────────────────────────────────
@@ -453,41 +496,12 @@
         {lbl}
         {#if val !== "semua"}
           <span class="ml-1 opacity-60">
-            ({grouped.filter((g) => getStatusModel(g) === val).length})
+            ({grouped.filter((m) => getModelStatus(m) === val).length})
           </span>
         {/if}
       </button>
     {/each}
   </div>
-
-  <!-- Filter Warna -->
-  {#if warnaUnik.length > 1}
-    <div class="flex items-center gap-1.5 flex-wrap">
-      <span class="text-xs text-gray-400">Warna:</span>
-      <button
-        onclick={() => (filterWarna = "semua")}
-        class="rounded-full border px-3 py-1 text-xs font-medium transition {filterWarna === 'semua'
-          ? 'border-gray-800 bg-gray-800 text-white'
-          : 'border-gray-200 bg-white text-gray-500 hover:border-gray-300 hover:text-gray-700'}"
-      >
-        Semua
-      </button>
-      {#each warnaUnik as warna}
-        {@const hexFirst = stokList.find((i) => i.nama_warna === warna)?.kode_hex_warna}
-        <button
-          onclick={() => (filterWarna = warna)}
-          class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition {filterWarna === warna
-            ? 'border-gray-800 bg-gray-800 text-white'
-            : 'border-gray-200 bg-white text-gray-500 hover:border-gray-300 hover:text-gray-700'}"
-        >
-          {#if hexFirst}
-            <span class="h-2 w-2 shrink-0 rounded-full" style="background:{hexFirst}"></span>
-          {/if}
-          {warna}
-        </button>
-      {/each}
-    </div>
-  {/if}
 
   <!-- Sort -->
   <div class="flex items-center gap-1.5 ml-auto">
@@ -580,96 +594,170 @@
     {/if}
   </div>
 {:else}
-  <div class="space-y-4">
-    {#each filteredGrouped as group}
-      {@const statusModel = getStatusModel(group)}
-      {@const st = STATUS_STYLE[statusModel]}
-      {@const totalGrup = getTotalTersedia(group)}
-<div class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
-        <!-- ── Model Header ── -->
-        <div class="border-b border-gray-100 bg-gray-50 px-5 py-3">
-          <div class="flex flex-wrap items-center justify-between gap-2">
-            <!-- Kiri: nama + badges -->
-            <div class="flex items-center gap-2.5">
-              <a
-                href="/barang-jadi/{group.model_id}"
-                class="text-sm font-semibold text-gray-800 hover:underline"
-              >
-                {group.nama_model}
-              </a>
-              {#if group.nama_warna}
-                <span class="inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-600">
-                  {#if group.kode_hex_warna}
-                    <span class="inline-block h-2.5 w-2.5 rounded-full shrink-0" style="background-color: {group.kode_hex_warna}"></span>
-                  {/if}
-                  {group.nama_warna}
-                </span>
-              {/if}
-            </div>
+  <div class="space-y-3">
+    {#each filteredGrouped as model}
+      {@const modelStatus = getModelStatus(model)}
+      {@const modelSt = STATUS_STYLE[modelStatus]}
+      {@const isOpen = expandedModels.has(model.model_id)}
+      {@const totalModelPcs = getModelTotal(model)}
+      {@const colorCount = model.colors.size}
+      <div class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
+        <!-- ── Model Header (clickable to expand/collapse) ── -->
+        <button
+          type="button"
+          onclick={() => toggleModel(model.model_id)}
+          class="flex w-full items-center gap-3 px-5 py-3.5 text-left transition-colors hover:bg-gray-50"
+        >
+          <!-- Chevron -->
+          <svg
+            class="h-4 w-4 shrink-0 text-gray-400 transition-transform duration-200 {isOpen ? 'rotate-90' : ''}"
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke-width="2"
+            stroke="currentColor"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+          </svg>
 
-            <!-- Kanan: total + tombol detail -->
-            <div class="flex items-center gap-3 text-xs text-gray-500">
-              <div class="text-right">
-                <p class="text-base font-semibold leading-tight text-gray-800">{totalGrup}</p>
-                <p>pcs tersedia</p>
-              </div>
-              <div class="h-8 w-px bg-gray-200"></div>
+          <!-- Model name + color count -->
+          <div class="min-w-0 flex-1">
+            <div class="flex items-center gap-2">
               <a
-                href="/barang-jadi/{group.model_id}"
-                class="shrink-0 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 transition"
+                href="/barang-jadi/{model.model_id}"
+                class="text-sm font-semibold text-gray-800 hover:underline"
+                onclick={(e) => e.stopPropagation()}
               >
-                Detail →
+                {model.nama_model}
               </a>
+              {#if colorCount > 1}
+                <span class="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-500">
+                  {colorCount} warna
+                </span>
+              {:else if colorCount === 1}
+                {#each [...model.colors.values()] as color}
+                  {#if color.nama_warna}
+                    <span class="inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-600">
+                      {#if color.kode_hex_warna}
+                        <span class="inline-block h-2 w-2 shrink-0 rounded-full" style="background-color: {color.kode_hex_warna}"></span>
+                      {/if}
+                      {color.nama_warna}
+                    </span>
+                  {/if}
+                {/each}
+              {/if}
             </div>
           </div>
 
-        </div>
+          <!-- Total pcs -->
+          <div class="text-right">
+            <p class="text-base font-bold tabular-nums text-gray-800 {modelStatus === 'kritis' ? 'text-red-600' : ''}">
+              {totalModelPcs.toLocaleString("id-ID")}
+            </p>
+            <p class="text-xs text-gray-400">pcs tersedia</p>
+          </div>
 
-        <!-- ── Ukuran Grid ── -->
-        <div
-          class="grid divide-x divide-gray-100 grid-cols-{Math.min(
-            group.items.length,
-            5,
-          )}"
-          style="grid-template-columns: repeat({group.items
-            .length}, minmax(0, 1fr))"
-        >
-          {#each group.items as item}
-            {@const uStatus = getUkuranStatus(item)}
-            {@const uSt = STATUS_STYLE[uStatus]}
+          <!-- Status badge -->
+          <span class="inline-block shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold {modelSt.badge}">
+            {modelSt.label}
+          </span>
+        </button>
 
-            <div class="p-4">
-              <!-- Ukuran badge + status -->
-              <div class="mb-2.5 flex items-center justify-between gap-1">
-                <span
-                  class="flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold {uSt.ukuran}"
+        <!-- ── Expanded: Colors ── -->
+        {#if isOpen}
+          <div class="border-t border-gray-100 divide-y divide-gray-50">
+            {#each [...model.colors.values()] as color}
+              {@const colorStatus = getColorStatus(color)}
+              {@const colorSt = STATUS_STYLE[colorStatus]}
+              {@const colorTotal = getColorTotal(color)}
+              {@const ck = colorKey(model.model_id, color.nama_warna ?? '')}
+              {@const colorOpen = expandedColors.has(ck)}
+              <div>
+                <!-- Color sub-header (clickable to expand/collapse) -->
+                <button
+                  type="button"
+                  onclick={() => toggleColor(model.model_id, color.nama_warna ?? '')}
+                  class="flex w-full items-center gap-2 px-5 py-2.5 bg-gray-50/50 hover:bg-gray-100 transition text-left"
                 >
-                  {item.ukuran}
-                </span>
-                {#if uStatus !== "aman"}
-                  <span
-                    class="rounded-full px-1.5 py-0.5 text-[10px] font-semibold {uSt.badge}"
+                  <!-- Chevron -->
+                  <svg
+                    class="h-3.5 w-3.5 shrink-0 text-gray-400 transition-transform duration-200 {colorOpen ? 'rotate-90' : ''}"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke-width="2"
+                    stroke="currentColor"
                   >
-                    {uSt.label}
+                    <path stroke-linecap="round" stroke-linejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+                  </svg>
+
+                  {#if color.nama_warna}
+                    <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-gray-700">
+                      {#if color.kode_hex_warna}
+                        <span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-gray-200" style="background-color: {color.kode_hex_warna}"></span>
+                      {/if}
+                      {color.nama_warna}
+                    </span>
+                  {:else}
+                    <span class="text-xs text-gray-400 font-medium">Tanpa warna</span>
+                  {/if}
+                  <span class="text-xs text-gray-400">·</span>
+                  <span class="text-xs text-gray-600 font-semibold">{colorTotal} pcs</span>
+                  <span class="inline-block rounded-full px-1.5 py-0.5 text-[10px] font-semibold {colorSt.badge}">
+                    {colorSt.label}
                   </span>
+                  {#if color.items.filter(i => i.stok_tersedia > 0 && i.stok_tersedia <= KRITIS_THRESHOLD).length > 0}
+                    <span class="text-[10px] text-red-400 font-medium">
+                      ({color.items.filter(i => i.stok_tersedia > 0 && i.stok_tersedia <= KRITIS_THRESHOLD).length} kritis)
+                    </span>
+                  {/if}
+                  <a
+                    href="/barang-jadi/{model.model_id}?warna={encodeURIComponent(color.nama_warna ?? '')}"
+                    class="ml-auto shrink-0 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-[11px] font-medium text-gray-500 transition hover:bg-gray-50"
+                    onclick={(e) => e.stopPropagation()}
+                  >
+                    Detail →
+                  </a>
+                </button>
+
+                <!-- Size grid -->
+                {#if colorOpen}
+                  <div
+                    class="grid divide-x divide-gray-100"
+                    style="grid-template-columns: repeat({color.items.length}, minmax(0, 1fr))"
+                  >
+                    {#each color.items as item}
+                      {@const uStatus = getUkuranStatus(item)}
+                      {@const uSt = STATUS_STYLE[uStatus]}
+
+                      <div class="p-4">
+                        <div class="mb-2.5 flex items-center justify-between gap-1">
+                          <span class="flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold {uSt.ukuran}">
+                            {item.ukuran}
+                          </span>
+                          {#if uStatus !== "aman"}
+                            <span class="rounded-full px-1.5 py-0.5 text-[10px] font-semibold {uSt.badge}">
+                              {uSt.label}
+                            </span>
+                          {/if}
+                        </div>
+                        <p class="text-2xl font-bold leading-none {uSt.num}">
+                          {item.stok_tersedia}
+                        </p>
+                        <p class="mt-0.5 text-[11px] text-gray-400">pcs tersedia</p>
+                        {#if item.updatedAt}
+                          <p class="mt-2 text-[10px] text-gray-300">
+                            {formatDate(item.updatedAt)}
+                          </p>
+                        {/if}
+                      </div>
+                    {/each}
+                  </div>
                 {/if}
               </div>
-
-              <!-- Stok besar -->
-              <p class="text-2xl font-bold leading-none {uSt.num}">
-                {item.stok_tersedia}
-              </p>
-              <p class="mt-0.5 text-[11px] text-gray-400">pcs tersedia</p>
-
-              <!-- Last update -->
-              {#if item.updatedAt}
-                <p class="mt-2 text-[10px] text-gray-300">
-                  {formatDate(item.updatedAt)}
-                </p>
-              {/if}
-            </div>
-          {/each}
-        </div>
+            {/each}
+          </div>
+        {/if}
       </div>
     {/each}
   </div>

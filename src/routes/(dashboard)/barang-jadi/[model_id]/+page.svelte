@@ -21,6 +21,7 @@
     type SumberCutting,
   } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
+  import * as Select from "$lib/components/ui/select/index.js";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import RejectResolveDialog from "$lib/components/reject-resolve-dialog.svelte";
@@ -69,28 +70,51 @@
   let openDialog = $state(false);
   let dialogMode = $state<DialogMode>("restock");
   let selectedItem = $state<StokBarangJadi | null>(null);
-  let fJumlah = $state(0);
+let fJumlah = $state(0);
+
+  // Selected color from URL query param
+  let selectedColor = $state<string | null>(null);
 
   // ── Derived ───────────────────────────────────────────────────────
-  let sorted = $derived(
-    [...stokList].sort(
+  let allColors = $derived.by(() => {
+    const map = new Map<string, { nama_warna?: string; kode_hex_warna?: string }>();
+    for (const item of stokList) {
+      const key = item.nama_warna ?? '';
+      if (!map.has(key)) {
+        map.set(key, { nama_warna: item.nama_warna, kode_hex_warna: item.kode_hex_warna });
+      }
+    }
+    return [...map.entries()].map(([key, val]) => ({ key, ...val }));
+  });
+
+  let filteredItems = $derived.by(() => {
+    let items = [...stokList];
+    if (selectedColor) {
+      items = items.filter((i) => (i.nama_warna ?? '') === selectedColor);
+    }
+    items.sort(
       (a, b) =>
         UKURAN_ORDER.indexOf(a.ukuran as UkuranBaju) -
         UKURAN_ORDER.indexOf(b.ukuran as UkuranBaju),
-    ),
-  );
+    );
+    return items;
+  });
+
+  let sorted = filteredItems;
 
   let namaModel = $derived(stokList[0]?.nama_model ?? "");
-  let namaWarna = $derived(stokList[0]?.nama_warna);
-  let kodeHexWarna = $derived(stokList[0]?.kode_hex_warna);
-  let totalTersedia = $derived(
-    stokList.reduce((s, i) => s + i.stok_tersedia, 0),
-  );
-  let totalMasuk = $derived(stokList.reduce((s, i) => s + i.total_masuk, 0));
-  let totalKeluar = $derived(stokList.reduce((s, i) => s + i.total_keluar, 0));
-  let jumlahKritis = $derived(
-    stokList.filter((i) => getStatus(i) === "kritis").length,
-  );
+  let activeColorEntry = $derived.by(() => {
+    if (selectedColor) {
+      return allColors.find((c) => c.key === selectedColor) ?? allColors[0] ?? null;
+    }
+    return allColors[0] ?? null;
+  });
+  let namaWarna = $derived(activeColorEntry?.nama_warna);
+  let kodeHexWarna = $derived(activeColorEntry?.kode_hex_warna);
+  let totalTersedia = $derived(filteredItems.reduce((s, i) => s + i.stok_tersedia, 0));
+  let totalMasuk = $derived(filteredItems.reduce((s, i) => s + i.total_masuk, 0));
+  let totalKeluar = $derived(filteredItems.reduce((s, i) => s + i.total_keluar, 0));
+  let jumlahKritis = $derived(filteredItems.filter((i) => getStatus(i) === "kritis").length);
 
   function getStatus(
     item: StokBarangJadi,
@@ -175,6 +199,11 @@
   }
 
   async function load() {
+    // Sync selectedColor from URL query param
+    const urlParams = new URLSearchParams(window.location.search);
+    const warnaParam = urlParams.get('warna');
+    selectedColor = warnaParam ?? null;
+
     loading = true;
     try {
       const modelId = $page.params.model_id!;
@@ -587,37 +616,75 @@
   </Button>
 
   {#if loading}
-    <div class="h-7 w-64 animate-pulse rounded bg-gray-100"></div>
+    <div class="flex flex-wrap items-center gap-2">
+      <div class="h-7 w-48 animate-pulse rounded bg-gray-100"></div>
+      <div class="h-7 w-32 animate-pulse rounded bg-gray-100"></div>
+    </div>
   {:else}
     <div class="flex flex-wrap items-center justify-between gap-3">
-      <div>
-        <div class="flex flex-wrap items-center gap-2">
-          <h1 class="text-xl font-semibold text-gray-900">
-            {namaModel || "Model tidak ditemukan"}
-          </h1>
-          {#if namaWarna}
-            <span
-              class="inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-2.5 py-0.5 text-xs font-medium text-gray-700 shadow-sm"
-            >
-              {#if kodeHexWarna}
-                <span
-                  class="inline-block h-3 w-3 shrink-0 rounded-full"
-                  style="background-color: {kodeHexWarna}"
-                ></span>
+      <div class="flex flex-wrap items-center gap-2">
+        <h1 class="text-xl font-semibold text-gray-900">
+          {namaModel || "Model tidak ditemukan"}
+        </h1>
+        {#if allColors.length > 1}
+          <Select.Root
+            type="single"
+            value={selectedColor ?? ""}
+            onValueChange={(val) => {
+              selectedColor = val || null;
+              const url = new URL(window.location.href);
+              if (val) {
+                url.searchParams.set('warna', val);
+              } else {
+                url.searchParams.delete('warna');
+              }
+              window.history.replaceState({}, '', url.toString());
+            }}
+          >
+            <Select.Trigger class="h-7 gap-1.5 rounded-full border border-gray-200 bg-white px-2.5 py-0 text-xs font-medium text-gray-600 hover:border-gray-300 hover:bg-gray-50">
+              {#if activeColorEntry?.kode_hex_warna}
+                <span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style="background-color: {activeColorEntry.kode_hex_warna}"></span>
               {/if}
-              {namaWarna}
-            </span>
-          {/if}
-          {#if jumlahKritis > 0}
-            <span
-              class="rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-600"
-            >
-              {jumlahKritis} ukuran kritis
-            </span>
-          {/if}
-        </div>
-        <p class="mt-0.5 text-sm text-gray-400">Stok barang jadi per ukuran</p>
+              {activeColorEntry?.nama_warna ?? 'Semua warna'}
+            </Select.Trigger>
+            <Select.Content>
+              <Select.Item value="">
+                Semua warna
+              </Select.Item>
+              {#each allColors as color}
+                <Select.Item value={color.key}>
+                  <span class="flex items-center gap-2">
+                    {#if color.kode_hex_warna}
+                      <span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style="background-color: {color.kode_hex_warna}"></span>
+                    {/if}
+                    {color.nama_warna ?? 'Tanpa warna'}
+                  </span>
+                </Select.Item>
+              {/each}
+            </Select.Content>
+          </Select.Root>
+        {:else if namaWarna}
+          <span
+            class="inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-2.5 py-0.5 text-xs font-medium text-gray-700 shadow-sm"
+          >
+            {#if kodeHexWarna}
+              <span
+                class="inline-block h-3 w-3 shrink-0 rounded-full"
+                style="background-color: {kodeHexWarna}"
+              ></span>
+            {/if}
+            {namaWarna}
+          </span>
+        {/if}
+        {#if jumlahKritis > 0}
+          <span
+            class="rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-600"
+          >
+            {jumlahKritis} ukuran kritis
+          </span>
+        {/if}
       </div>
+
       <Button variant="outline" onclick={load}>
         <svg
           class="h-3.5 w-3.5 {loading ? 'animate-spin' : ''}"

@@ -324,6 +324,8 @@ export interface RiwayatBarangJadi {
   id?: string;
   model_id: string;
   nama_model: string;
+  nama_warna?: string;
+  kode_hex_warna?: string;
   ukuran: string;
   tipe: TipeRiwayatBarangJadi;
   jumlah: number;
