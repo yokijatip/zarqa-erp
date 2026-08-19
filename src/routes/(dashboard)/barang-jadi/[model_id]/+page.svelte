@@ -143,6 +143,12 @@ let fJumlah = $state(0);
     low: "text-amber-600",
     aman: "text-gray-900",
   };
+  const STATUS_STYLE: Record<string, { badge: string; label: string; num: string; ukuran: string }> = {
+    kosong: { badge: "bg-gray-100 text-gray-500", label: "Habis", num: "text-gray-400", ukuran: "bg-gray-100 text-gray-600" },
+    kritis: { badge: "bg-red-100 text-red-600", label: "Kritis", num: "text-red-600", ukuran: "bg-gray-100 text-gray-700" },
+    low:    { badge: "bg-amber-100 text-amber-600", label: "Menipis", num: "text-amber-600", ukuran: "bg-gray-100 text-gray-700" },
+    aman:   { badge: "bg-teal-100 text-teal-700", label: "Aman", num: "text-gray-900", ukuran: "bg-gray-100 text-gray-700" },
+  };
 
   const DIALOG_TITLE: Record<DialogMode, string> = {
     restock: "Restock Barang",
@@ -777,6 +783,60 @@ let fJumlah = $state(0);
       footerSubtext="ukuran terdaftar"
     />
   </div>
+
+  <!-- ── Size Grid Strip ────────────────────────────────────────────── -->
+  {#if filteredItems.length > 0}
+    <div class="mb-5 overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
+      <!-- Strip header -->
+      <div class="flex items-center gap-2.5 px-4 py-3 border-b border-gray-100 bg-gray-50/50">
+        {#if kodeHexWarna}
+          <span class="inline-block h-3 w-3 shrink-0 rounded-full" style="background-color: {kodeHexWarna}"></span>
+        {/if}
+        <span class="text-sm font-semibold text-gray-800">{namaWarna ?? "Semua"}</span>
+        <span class="text-sm font-bold text-gray-800">{totalTersedia} pcs</span>
+
+        {#if jumlahKritis > 0}
+          <span class="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-600">
+            Kritis ({jumlahKritis})
+          </span>
+        {/if}
+      </div>
+
+      <!-- Size columns -->
+      <div class="grid" style="grid-template-columns: repeat({filteredItems.length}, minmax(0, 1fr))">
+        {#each filteredItems as item}
+          {@const status = getStatus(item)}
+          {@const st = STATUS_STYLE[status]}
+          <div class="flex flex-col items-center px-3 py-4 text-center {item !== filteredItems[filteredItems.length - 1] ? 'border-r border-gray-100' : ''}">
+            <!-- Ukuran badge -->
+            <div class="mb-2 flex items-center gap-1">
+              <span class="flex h-7 w-7 items-center justify-center rounded-full {st.ukuran} text-xs font-bold">
+                {item.ukuran}
+              </span>
+              {#if status === "kritis" || status === "kosong"}
+                <span class="rounded-full px-1.5 py-0.5 text-[10px] font-semibold {st.badge}">
+                  {st.label}
+                </span>
+              {/if}
+            </div>
+
+            <!-- Pcs -->
+            <p class="text-2xl font-bold leading-none {st.num}">
+              {item.stok_tersedia}
+            </p>
+            <p class="mt-0.5 text-[11px] text-gray-400">pcs tersedia</p>
+
+            <!-- Date -->
+            {#if item.updatedAt}
+              <p class="mt-2 text-[10px] text-gray-300">
+                {formatDate(item.updatedAt)}
+              </p>
+            {/if}
+          </div>
+        {/each}
+      </div>
+    </div>
+  {/if}
 
   <!-- ── Ukuran Rows ───────────────────────────────────────────────── -->
   <div
