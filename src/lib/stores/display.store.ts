@@ -31,16 +31,13 @@ export function loadSettings(): DisplaySettings {
 export function applySettings(s: DisplaySettings): void {
   if (!browser) return;
   const html = document.documentElement;
+  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const isDark = s.tema === 'dark' || (s.tema === 'system' && prefersDark);
 
   // ── Tema ──────────────────────────────────────────────────────────
   html.classList.remove('dark');
-  if (s.tema === 'dark') {
-    html.classList.add('dark');
-  } else if (s.tema === 'system') {
-    if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
-      html.classList.add('dark');
-    }
-  }
+  if (isDark) html.classList.add('dark');
+  html.style.colorScheme = isDark ? 'dark' : 'light';
 
   // ── Densitas ──────────────────────────────────────────────────────
   html.dataset.density = s.densitas;
@@ -57,4 +54,12 @@ export function saveSettings(s: DisplaySettings): void {
   if (!browser) return;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
   applySettings(s);
+}
+
+export function watchSystemTheme(s: DisplaySettings): () => void {
+  if (!browser || s.tema !== 'system') return () => {};
+  const media = window.matchMedia('(prefers-color-scheme: dark)');
+  const handler = () => applySettings(s);
+  media.addEventListener('change', handler);
+  return () => media.removeEventListener('change', handler);
 }

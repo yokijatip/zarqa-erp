@@ -10,13 +10,15 @@
     isLoggedIn,
     authLoading,
   } from "$lib/stores/auth.store";
-  import { loadSettings, applySettings } from "$lib/stores/display.store";
+  import { loadSettings, applySettings, watchSystemTheme } from "$lib/stores/display.store";
 
   let { children } = $props();
 
   onMount(() => {
     initAuthListener();
-    applySettings(loadSettings());
+    const settings = loadSettings();
+    applySettings(settings);
+    return watchSystemTheme(settings);
   });
 
   // Guard: redirect ke login jika belum login

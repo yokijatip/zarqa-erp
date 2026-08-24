@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Button } from '$lib/components/ui/button';
-  import { loadSettings, saveSettings, type Tema, type Densitas } from '$lib/stores/display.store';
+  import { applySettings, loadSettings, saveSettings, type Tema, type Densitas } from '$lib/stores/display.store';
 
   // Load dari localStorage saat halaman dibuka
   const stored = loadSettings();
@@ -10,6 +10,10 @@
   let animasi  = $state<boolean>(stored.animasi);
 
   let saved = $state(false);
+
+  $effect(() => {
+    applySettings({ tema, densitas, animasi });
+  });
 
   function simpan() {
     saveSettings({ tema, densitas, animasi });

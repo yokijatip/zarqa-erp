@@ -120,6 +120,109 @@
   }
 }
 
+@layer utilities {
+  .dark .bg-white {
+    background-color: var(--card) !important;
+  }
+  .dark .bg-gray-50 {
+    background-color: oklch(0.245 0.04 265) !important;
+  }
+  .dark .bg-gray-100 {
+    background-color: oklch(0.285 0.04 265) !important;
+  }
+  .dark .bg-gray-200 {
+    background-color: oklch(0.35 0.035 265) !important;
+  }
+  .dark .text-gray-950,
+  .dark .text-gray-900,
+  .dark .text-gray-800,
+  .dark .text-gray-700 {
+    color: var(--foreground) !important;
+  }
+  .dark .text-gray-600,
+  .dark .text-gray-500,
+  .dark .text-gray-400 {
+    color: var(--muted-foreground) !important;
+  }
+  .dark .text-gray-300 {
+    color: oklch(0.78 0.03 257) !important;
+  }
+  .dark .border-gray-50,
+  .dark .border-gray-100,
+  .dark .border-gray-200,
+  .dark .border-gray-300 {
+    border-color: var(--border) !important;
+  }
+  .dark .bg-green-50,
+  .dark .bg-green-100,
+  .dark .bg-teal-50,
+  .dark .bg-teal-100,
+  .dark .bg-emerald-50,
+  .dark .bg-emerald-100 {
+    background-color: oklch(0.34 0.07 170 / 35%) !important;
+  }
+  .dark .bg-blue-50,
+  .dark .bg-blue-100,
+  .dark .bg-sky-50,
+  .dark .bg-sky-100 {
+    background-color: oklch(0.35 0.08 250 / 38%) !important;
+  }
+  .dark .bg-amber-50,
+  .dark .bg-amber-100,
+  .dark .bg-yellow-50,
+  .dark .bg-yellow-100 {
+    background-color: oklch(0.36 0.07 80 / 38%) !important;
+  }
+  .dark .bg-red-50,
+  .dark .bg-red-100 {
+    background-color: oklch(0.35 0.08 25 / 40%) !important;
+  }
+  .dark .bg-purple-50,
+  .dark .bg-purple-100,
+  .dark .bg-violet-50,
+  .dark .bg-violet-100 {
+    background-color: oklch(0.34 0.08 300 / 38%) !important;
+  }
+  .dark .border-green-100,
+  .dark .border-green-200,
+  .dark .border-teal-100,
+  .dark .border-teal-200,
+  .dark .border-emerald-100,
+  .dark .border-emerald-200,
+  .dark .border-blue-100,
+  .dark .border-blue-200,
+  .dark .border-amber-100,
+  .dark .border-amber-200,
+  .dark .border-red-100,
+  .dark .border-red-200,
+  .dark .border-purple-100,
+  .dark .border-purple-200 {
+    border-color: var(--border) !important;
+  }
+  .dark .divide-gray-50 > :not(:last-child),
+  .dark .divide-gray-100 > :not(:last-child),
+  .dark .divide-gray-200 > :not(:last-child) {
+    border-color: var(--border) !important;
+  }
+  .dark input,
+  .dark textarea,
+  .dark select {
+    background-color: var(--background);
+    color: var(--foreground);
+    border-color: var(--input);
+  }
+  .dark input::placeholder,
+  .dark textarea::placeholder {
+    color: var(--muted-foreground);
+  }
+  .dark .shadow-sm,
+  .dark .shadow,
+  .dark .shadow-md,
+  .dark .shadow-lg {
+    --tw-shadow-color: oklch(0 0 0 / 35%);
+  }
+}
+
 /* ── Display settings ────────────────────────────────────────────── */
 
 /* Nonaktifkan semua animasi dan transisi */
