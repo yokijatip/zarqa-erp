@@ -4,6 +4,7 @@
     catatBarangKeluar,
     getRiwayatBarangKeluarByPeriod,
     batalBarangKeluar,
+    batalItemBarangKeluar,
     prosesPendingBarangKeluar,
   } from "$lib/firebase/barang-jadi";
   import { barangJadiCache, modelBajuCache } from "$lib/stores/data-cache.svelte";
@@ -37,6 +38,15 @@
   import { type DateRange, getPeriodRange } from "$lib/period";
   import PeriodSelector from "$lib/components/period-selector.svelte";
   import BarangKeluarDetailDialog from "$lib/components/barang-keluar-detail-dialog.svelte";
+  import {
+    type ImportBarangKeluarItem,
+    parseBarangKeluarText,
+    splitImportItemsByStock,
+  } from "$lib/import/barang-keluar";
+  import * as pdfjsLib from "pdfjs-dist";
+  import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.mjs?url";
+
+  pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
   // ── State ──────────────────────────────────────────────────────────
   let stokList = $state<StokBarangJadi[]>([]);
@@ -50,6 +60,16 @@
   let searchQuery = $state("");
   let dateRange = $state<DateRange>(getPeriodRange("bulan_ini"));
   let openCatat = $state(false);
+  let importInput = $state<HTMLInputElement | null>(null);
+  let importOpen = $state(false);
+  let importParsing = $state(false);
+  let importSaving = $state(false);
+  let importError = $state<string | null>(null);
+  let importFileName = $state("");
+  let importItems = $state<ImportBarangKeluarItem[]>([]);
+  let importTujuan = $state("");
+  let importNamaReseller = $state("");
+  let importKeterangan = $state("");
 
   // Cancel dialog
   let batalTarget = $state<BarangKeluar | null>(null);
@@ -75,6 +95,21 @@
         ? `${result.processedPcs} pcs pending berhasil diproses. Sisa pending ${result.remainingPendingPcs} pcs.`
         : `${result.processedPcs} pcs pending berhasil diproses. List sudah selesai.`,
     );
+  }
+
+  async function submitBatalItem(itemIndex: number) {
+    if (!detailTarget || !$currentUser) return;
+    const result = await batalItemBarangKeluar(detailTarget.id, itemIndex, {
+      uid: $currentUser.uid,
+      nama: $currentUser.name || $currentUser.email || $currentUser.uid,
+    });
+    barangJadiCache.invalidate();
+    await load(true);
+    detailTarget = result.deleted
+      ? null
+      : riwayat.find((item) => item.id === detailTarget?.id) ?? detailTarget;
+    if (result.deleted) detailDialogOpen = false;
+    showSuccess("Item barang keluar berhasil dibatalkan.");
   }
   let batalOpen = $state(false);
   let batalSaving = $state(false);
@@ -259,10 +294,25 @@
       .reduce((s, item) => s + item.total_pcs, 0),
   );
   let totalDraftPcs = $derived(totalDraftKeluarPcs + totalDraftPendingPcs);
+  let totalImportKeluarPcs = $derived(
+    importItems
+      .filter((item) => item.status !== "pending")
+      .reduce((s, item) => s + item.total_pcs, 0),
+  );
+  let totalImportPendingPcs = $derived(
+    importItems
+      .filter((item) => item.status === "pending")
+      .reduce((s, item) => s + item.total_pcs, 0),
+  );
   let canSubmit = $derived(
     fTujuan.trim() !== "" &&
       draftItems.length > 0 &&
       draftItems.some((item) => item.total_pcs > 0),
+  );
+  let canSubmitImport = $derived(
+    importItems.length > 0 &&
+      importItems.some((item) => item.total_pcs > 0) &&
+      importItems.every((item) => (item.tujuan_import ?? importTujuan).trim() !== ""),
   );
 
   // riwayat sudah difilter dari Firestore sesuai periode — tidak perlu filter ulang
@@ -793,6 +843,120 @@
     }
   }
 
+  async function extractPdfText(file: File): Promise<string> {
+    const buffer = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(buffer) }).promise;
+    const pages: string[] = [];
+    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+      const page = await pdf.getPage(pageNumber);
+      const content = await page.getTextContent();
+      const rows = new Map<number, { x: number; text: string }[]>();
+      for (const item of content.items as any[]) {
+        const text = String(item.str ?? "").trim();
+        if (!text) continue;
+        const y = Math.round(item.transform?.[5] ?? 0);
+        const x = Number(item.transform?.[4] ?? 0);
+        rows.set(y, [...(rows.get(y) ?? []), { x, text }]);
+      }
+      pages.push(
+        [...rows.entries()]
+          .sort((a, b) => b[0] - a[0])
+          .map(([, row]) =>
+            row
+              .sort((a, b) => a.x - b.x)
+              .map((item) => item.text)
+              .join(" "),
+          )
+          .join("\n"),
+      );
+    }
+    return pages.join("\n");
+  }
+
+  async function handleImportFile(event: Event) {
+    const input = event.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file) return;
+
+    importParsing = true;
+    importError = null;
+    try {
+      const text =
+        file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")
+          ? await extractPdfText(file)
+          : await file.text();
+      const parsed = parseBarangKeluarText(text, modelList, stokList);
+      if (parsed.items.length === 0) {
+        throw new Error("Tidak ada baris barang yang cocok dengan master model, warna, dan ukuran.");
+      }
+      const items = splitImportItemsByStock(parsed.items, stokList);
+      if (items.length === 0) {
+        throw new Error("List terbaca, tapi tidak ada jumlah pcs yang valid.");
+      }
+
+      importFileName = file.name;
+      importItems = items;
+      importTujuan = parsed.tujuan ?? "";
+      importNamaReseller = parsed.nama_reseller ?? "";
+      importKeterangan = `Import dari ${file.name}`;
+      importOpen = true;
+    } catch (e: any) {
+      showError(e?.message ?? "Gagal membaca file import.");
+    } finally {
+      importParsing = false;
+    }
+  }
+
+  async function submitImport() {
+    if (!canSubmitImport || !$currentUser) return;
+    importSaving = true;
+    importError = null;
+    try {
+      const groups = new Map<string, BarangKeluarItem[]>();
+      for (const item of importItems) {
+        const tujuan = (item.tujuan_import ?? importTujuan).trim();
+        const { tujuan_import, ...cleanItem } = item;
+        groups.set(tujuan, [...(groups.get(tujuan) ?? []), cleanItem]);
+      }
+
+      for (const [tujuan, items] of groups) {
+        const itemPertama = items[0];
+        await catatBarangKeluar(
+          {
+            model_id: itemPertama.model_id,
+            nama_model:
+              items.length > 1
+                ? `${items.length} barang`
+                : itemPertama.nama_model,
+            ...(items.length === 1 && itemPertama.nama_warna
+              ? { nama_warna: itemPertama.nama_warna }
+              : {}),
+            ...(items.length === 1 && itemPertama.kode_hex_warna
+              ? { kode_hex_warna: itemPertama.kode_hex_warna }
+              : {}),
+            detail_keluar: itemPertama.detail_keluar,
+            items,
+            tujuan,
+            ...(importNamaReseller.trim() ? { nama_reseller: importNamaReseller.trim() } : {}),
+            ...(importKeterangan.trim() ? { keterangan: importKeterangan.trim() } : {}),
+          },
+          $currentUser.uid,
+        );
+      }
+      barangJadiCache.invalidate();
+      await load(true);
+      importOpen = false;
+      showSuccess(
+        `Import tersimpan: ${totalImportKeluarPcs} pcs keluar${totalImportPendingPcs > 0 ? `, ${totalImportPendingPcs} pcs pending` : ""} di ${groups.size} tujuan.`,
+      );
+    } catch (e: any) {
+      importError = e?.message ?? "Gagal menyimpan import.";
+    } finally {
+      importSaving = false;
+    }
+  }
+
   onMount(load);
 </script>
 
@@ -868,13 +1032,20 @@
       Refresh
     </Button>
     {#if canCatat}
+      <input
+        bind:this={importInput}
+        type="file"
+        class="hidden"
+        accept=".pdf,.txt,.csv,application/pdf,text/plain,text/csv"
+        onchange={handleImportFile}
+      />
       <Button
         variant="outline"
-        onclick={() =>
-          showSuccess("Import otomatis list barang keluar akan ditambahkan di tahap berikutnya.")}
+        onclick={() => importInput?.click()}
+        disabled={importParsing}
       >
-        <UploadIcon class="h-4 w-4" />
-        Import List
+        <UploadIcon class="h-4 w-4 {importParsing ? 'animate-pulse' : ''}" />
+        {importParsing ? "Membaca..." : "Import List"}
       </Button>
       <Button href="/barang-keluar/catat">
         <svg
@@ -1207,6 +1378,116 @@
 </div>
 
 <!-- ── Dialog: Catat Barang Keluar ───────────────────────────────── -->
+<Dialog.Root bind:open={importOpen}>
+  <Dialog.Content class="max-w-2xl">
+    <Dialog.Header>
+      <Dialog.Title>Import List Barang Keluar</Dialog.Title>
+      <Dialog.Description>
+        Cek hasil baca file sebelum stok barang jadi dikurangi.
+      </Dialog.Description>
+    </Dialog.Header>
+
+    <div class="max-h-[62vh] space-y-4 overflow-y-auto px-1 pb-1">
+      <div class="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2">
+        <p class="text-sm font-medium text-blue-900">{importFileName}</p>
+        <p class="mt-0.5 text-xs text-blue-700">
+          {totalImportKeluarPcs} pcs keluar · {totalImportPendingPcs} pcs pending
+          · {[...new Set(importItems.map((item) => item.tujuan_import ?? importTujuan).filter(Boolean))].length} tujuan
+        </p>
+      </div>
+
+      {#if importError}
+        <p class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {importError}
+        </p>
+      {/if}
+
+      <div class="grid gap-3 sm:grid-cols-2">
+        <div>
+          <label class="mb-1.5 block text-sm font-medium text-gray-700" for="import-tujuan">
+            Tujuan Default <span class="text-red-500">*</span>
+          </label>
+          <Select.Root
+            type="single"
+            value={importTujuan || undefined}
+            onValueChange={(val) => (importTujuan = val ?? "")}
+          >
+            <Select.Trigger id="import-tujuan" class="w-full">
+              {#if importTujuan}
+                <span>{importTujuan}</span>
+              {:else}
+                <span class="text-muted-foreground">-- Pilih jika file tidak punya tujuan --</span>
+              {/if}
+            </Select.Trigger>
+            <Select.Content preventScroll={false}>
+              {#each TUJUAN_PENGIRIMAN_OPTIONS as t}
+                <Select.Item value={t}>{t}</Select.Item>
+              {/each}
+            </Select.Content>
+          </Select.Root>
+        </div>
+        <div>
+          <label class="mb-1.5 block text-sm font-medium text-gray-700" for="import-reseller">
+            Nama Reseller
+          </label>
+          <Input id="import-reseller" placeholder="Opsional" bind:value={importNamaReseller} />
+        </div>
+      </div>
+
+      <div>
+        <label class="mb-1.5 block text-sm font-medium text-gray-700" for="import-keterangan">
+          Keterangan
+        </label>
+        <Input id="import-keterangan" bind:value={importKeterangan} />
+      </div>
+
+      <div class="space-y-2">
+        {#each importItems as item}
+          <div class="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <p class="truncate text-sm font-semibold text-gray-800">
+                  {item.nama_model}{item.nama_warna ? ` - ${item.nama_warna}` : ""}
+                </p>
+                <p class="mt-0.5 text-xs text-gray-500">
+                  {itemSummary(item)}
+                </p>
+              </div>
+              <Badge
+                variant="outline"
+                class={item.status === "pending"
+                  ? "border-amber-200 bg-amber-50 text-amber-700"
+                  : "border-green-200 bg-green-50 text-green-700"}
+              >
+                {item.status === "pending" ? "Pending" : "Keluar"}
+              </Badge>
+            </div>
+            <p class="mt-1 text-xs text-gray-400">
+              Tujuan: {item.tujuan_import ?? importTujuan}
+            </p>
+            {#if item.alasan_pending}
+              <p class="mt-1 text-xs text-amber-600">{item.alasan_pending}</p>
+            {/if}
+          </div>
+        {/each}
+      </div>
+    </div>
+
+    <Dialog.Footer class="gap-2">
+      <Button
+        variant="outline"
+        onclick={() => (importOpen = false)}
+        disabled={importSaving}
+      >
+        Batal
+      </Button>
+      <Button onclick={submitImport} disabled={importSaving || !canSubmitImport}>
+        {importSaving ? "Menyimpan..." : "Simpan Import"}
+      </Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
+
 <Dialog.Root bind:open={openCatat}>
   <Dialog.Content class="max-w-lg">
     <Dialog.Header>
@@ -1630,4 +1911,5 @@
   riwayat={detailTarget}
   modelList={modelList}
   onResolvePending={submitProsesPending}
+  onCancelItem={submitBatalItem}
 />

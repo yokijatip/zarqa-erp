@@ -583,7 +583,10 @@ let fJumlah = $state(0);
           selectedItem.model_id,
           selectedItem.nama_model,
           [{ ukuran: selectedItem.ukuran, jumlah_pcs: fJumlah }],
-          undefined,
+          {
+            nama_warna: selectedItem.nama_warna,
+            kode_hex_warna: selectedItem.kode_hex_warna,
+          },
           { uid, nama, tipe: "masuk_restock", catatan: "Restock manual" },
         );
         showSuccess(

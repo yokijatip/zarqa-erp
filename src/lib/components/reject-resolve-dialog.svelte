@@ -72,6 +72,7 @@
       await resolveRejectItem(item.id, aksi, jumlah, {
         uid: $currentUser.uid,
         nama: $currentUser.name || $currentUser.email || $currentUser.uid,
+        batchId: batchId ?? undefined,
         catatan: catatanInput[item.id]?.trim() || undefined,
       });
       if (batchId) await load(batchId);

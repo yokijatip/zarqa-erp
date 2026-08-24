@@ -48,6 +48,7 @@
 		"firebase-admin": "^14.2.0",
 		"jspdf": "^4.2.1",
 		"jspdf-autotable": "^5.0.8",
-		"lucide-svelte": "^0.575.0"
+		"lucide-svelte": "^0.575.0",
+		"pdfjs-dist": "^6.2.108"
 	}
 }

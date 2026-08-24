@@ -675,3 +675,132 @@ export async function batalBarangKeluar(
     transaction.delete(keluarRef);
   });
 }
+
+export async function batalItemBarangKeluar(
+  id: string,
+  itemIndex: number,
+  riwayatMeta?: { uid: string; nama: string; catatan?: string },
+): Promise<{ deleted: boolean }> {
+  const keluarRef = doc(db, COL_KELUAR, id);
+  const keluarSnap = await getDoc(keluarRef);
+  if (!keluarSnap.exists()) throw new Error('Catatan barang keluar tidak ditemukan');
+
+  const keluar = { id: keluarSnap.id, ...keluarSnap.data() } as BarangKeluar;
+  const initialItems: BarangKeluarItem[] =
+    keluar.items && keluar.items.length > 0
+      ? keluar.items
+      : [
+          {
+            model_id: keluar.model_id,
+            nama_model: keluar.nama_model,
+            ...(keluar.nama_warna ? { nama_warna: keluar.nama_warna } : {}),
+            ...(keluar.kode_hex_warna ? { kode_hex_warna: keluar.kode_hex_warna } : {}),
+            detail_keluar: keluar.detail_keluar,
+            total_pcs: keluar.detail_keluar.reduce((sum, item) => sum + item.jumlah_pcs, 0),
+            status: 'keluar',
+          },
+        ];
+
+  const target = initialItems[itemIndex];
+  if (!target) throw new Error('Item barang keluar tidak ditemukan');
+
+  const stokRefs = new Map<string, ReturnType<typeof doc>>();
+  if (target.status !== 'pending') {
+    for (const detail of target.detail_keluar) {
+      const q = target.nama_warna
+        ? query(collection(db, COL_JADI), where('model_id', '==', target.model_id), where('ukuran', '==', detail.ukuran), where('nama_warna', '==', target.nama_warna))
+        : query(collection(db, COL_JADI), where('model_id', '==', target.model_id), where('ukuran', '==', detail.ukuran));
+      const snap = await getDocs(q);
+      if (!snap.empty) stokRefs.set(`${target.model_id}|${target.nama_warna ?? ''}|${detail.ukuran}`, snap.docs[0].ref);
+    }
+  }
+
+  return runTransaction(db, async (transaction) => {
+    const freshKeluarSnap = await transaction.get(keluarRef);
+    if (!freshKeluarSnap.exists()) throw new Error('Catatan barang keluar tidak ditemukan');
+    const freshKeluar = { id: freshKeluarSnap.id, ...freshKeluarSnap.data() } as BarangKeluar;
+    const items: BarangKeluarItem[] =
+      freshKeluar.items && freshKeluar.items.length > 0
+        ? freshKeluar.items
+        : initialItems;
+    const currentTarget = items[itemIndex];
+    if (!currentTarget) throw new Error('Item barang keluar tidak ditemukan');
+
+    const stokSnapshots = new Map<string, { ref: ReturnType<typeof doc>; data: StokBarangJadi }>();
+    for (const [key, ref] of stokRefs) {
+      const snap = await transaction.get(ref);
+      if (snap.exists()) stokSnapshots.set(key, { ref, data: { id: snap.id, ...snap.data() } as StokBarangJadi });
+    }
+
+    if (currentTarget.status !== 'pending') {
+      for (const detail of currentTarget.detail_keluar) {
+        const entry = stokSnapshots.get(`${currentTarget.model_id}|${currentTarget.nama_warna ?? ''}|${detail.ukuran}`);
+        if (!entry) continue;
+        const { ref, data } = entry;
+        const stokSesudah = data.stok_tersedia + detail.jumlah_pcs;
+        const sumber_produksi = (detail.sumber ?? []).reduce(
+          (queue, lot) => appendSumberProduksiLot(queue, lot),
+          data.sumber_produksi ?? [],
+        );
+
+        transaction.update(ref, {
+          stok_tersedia: stokSesudah,
+          total_keluar: Math.max(0, data.total_keluar - detail.jumlah_pcs),
+          sumber_produksi,
+          updatedAt: serverTimestamp(),
+        });
+
+        if (riwayatMeta) {
+          const riwayatRef = doc(collection(db, COL_RIWAYAT));
+          transaction.set(riwayatRef, {
+            model_id: currentTarget.model_id,
+            nama_model: currentTarget.nama_model,
+            ...(currentTarget.nama_warna ? { nama_warna: currentTarget.nama_warna } : {}),
+            ...(currentTarget.kode_hex_warna ? { kode_hex_warna: currentTarget.kode_hex_warna } : {}),
+            ukuran: detail.ukuran,
+            tipe: 'batal_keluar' as TipeRiwayatBarangJadi,
+            jumlah: detail.jumlah_pcs,
+            stok_sebelum: data.stok_tersedia,
+            stok_sesudah: stokSesudah,
+            catatan: riwayatMeta.catatan ?? `Pembatalan item pengiriman ke ${freshKeluar.tujuan}`,
+            dicatat_oleh_uid: riwayatMeta.uid,
+            dicatat_oleh_nama: riwayatMeta.nama,
+            timestamp: serverTimestamp(),
+          });
+        }
+      }
+    }
+
+    const nextItems = items.filter((_, index) => index !== itemIndex);
+    if (nextItems.length === 0) {
+      transaction.delete(keluarRef);
+      return { deleted: true };
+    }
+
+    const nextDetailKeluar = nextItems
+      .filter((item) => item.status !== 'pending')
+      .flatMap((item) => item.detail_keluar);
+    const nextTotalPcs = nextItems
+      .filter((item) => item.status !== 'pending')
+      .reduce((sum, item) => sum + item.total_pcs, 0);
+    const nextPendingPcs = nextItems
+      .filter((item) => item.status === 'pending')
+      .reduce((sum, item) => sum + item.total_pcs, 0);
+    const firstItem = nextItems[0];
+
+    transaction.update(keluarRef, {
+      model_id: firstItem.model_id,
+      model_ids: [...new Set(nextItems.map((item) => item.model_id))],
+      nama_model: nextItems.length > 1 ? `${nextItems.length} barang` : firstItem.nama_model,
+      ...(nextItems.length === 1 && firstItem.nama_warna ? { nama_warna: firstItem.nama_warna } : { nama_warna: null }),
+      ...(nextItems.length === 1 && firstItem.kode_hex_warna ? { kode_hex_warna: firstItem.kode_hex_warna } : { kode_hex_warna: null }),
+      detail_keluar: nextDetailKeluar,
+      items: nextItems,
+      status: nextPendingPcs > 0 ? 'pending' : 'selesai',
+      total_pcs: nextTotalPcs,
+      total_pending_pcs: nextPendingPcs,
+    });
+
+    return { deleted: false };
+  });
+}

@@ -8,15 +8,18 @@
     riwayat,
     modelList = [],
     onResolvePending,
+    onCancelItem,
   }: {
     open: boolean;
     riwayat: BarangKeluar | null;
     modelList?: ModelBaju[];
     onResolvePending?: (itemIndex: number) => Promise<void>;
+    onCancelItem?: (itemIndex: number) => Promise<void>;
   } = $props();
 
   type BarisPekerja = { uid: string; nama: string; jumlah_pcs: number };
   let resolvingIndex = $state<number | null>(null);
+  let cancellingIndex = $state<number | null>(null);
   let resolveError = $state<string | null>(null);
 
   function listItems(r: BarangKeluar): BarangKeluarItem[] {
@@ -249,6 +252,25 @@
       resolvingIndex = null;
     }
   }
+
+  async function cancelItem(itemIndex: number, item: BarangKeluarItem) {
+    if (!onCancelItem) return;
+    const confirmed = window.confirm(
+      item.status === "pending"
+        ? "Batalkan item pending ini?"
+        : "Batalkan item ini? Stok akan dikembalikan.",
+    );
+    if (!confirmed) return;
+    cancellingIndex = itemIndex;
+    resolveError = null;
+    try {
+      await onCancelItem(itemIndex);
+    } catch (e: any) {
+      resolveError = e?.message ?? "Gagal membatalkan item.";
+    } finally {
+      cancellingIndex = null;
+    }
+  }
 </script>
 
 <Dialog.Root bind:open>
@@ -318,16 +340,27 @@
                     {item.alasan_pending}
                   </p>
                 {/if}
-                {#if item.status === "pending" && onResolvePending}
-                  <div class="mt-2 flex justify-end">
+                {#if (item.status === "pending" && onResolvePending) || onCancelItem}
+                  <div class="mt-2 flex justify-end gap-2">
                     <Button
+                      variant="outline"
                       size="sm"
-                      onclick={() => resolvePendingItem(itemIndex)}
-                      disabled={resolvingIndex !== null}
+                      onclick={() => cancelItem(itemIndex, item)}
+                      disabled={resolvingIndex !== null || cancellingIndex !== null}
                       class="h-8"
                     >
-                      {resolvingIndex === itemIndex ? "Memproses..." : "Proses Pending"}
+                      {cancellingIndex === itemIndex ? "Membatalkan..." : "Batal Item"}
                     </Button>
+                    {#if item.status === "pending" && onResolvePending}
+                      <Button
+                        size="sm"
+                        onclick={() => resolvePendingItem(itemIndex)}
+                        disabled={resolvingIndex !== null || cancellingIndex !== null}
+                        class="h-8"
+                      >
+                        {resolvingIndex === itemIndex ? "Memproses..." : "Proses Pending"}
+                      </Button>
+                    {/if}
                   </div>
                 {/if}
               </div>
