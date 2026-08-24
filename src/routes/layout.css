@@ -263,3 +263,52 @@
 .nav-slide:hover::before {
   transform: scaleX(1);
 }
+
+/* Dark compatibility for legacy pages that still use fixed Tailwind colors. */
+html.dark .bg-white {
+  background-color: var(--card) !important;
+}
+html.dark .bg-gray-50 {
+  background-color: oklch(0.245 0.04 265) !important;
+}
+html.dark .bg-gray-100 {
+  background-color: oklch(0.285 0.04 265) !important;
+}
+html.dark .bg-gray-200 {
+  background-color: oklch(0.35 0.035 265) !important;
+}
+html.dark .text-gray-950,
+html.dark .text-gray-900,
+html.dark .text-gray-800,
+html.dark .text-gray-700 {
+  color: var(--foreground) !important;
+}
+html.dark .text-gray-600,
+html.dark .text-gray-500,
+html.dark .text-gray-400 {
+  color: var(--muted-foreground) !important;
+}
+html.dark .border-gray-50,
+html.dark .border-gray-100,
+html.dark .border-gray-200,
+html.dark .border-gray-300 {
+  border-color: var(--border) !important;
+}
+html.dark [data-slot="select-content"],
+html.dark [data-slot="dropdown-menu-content"],
+html.dark [data-slot="popover-content"] {
+  background-color: var(--popover) !important;
+  color: var(--popover-foreground) !important;
+  border-color: var(--border) !important;
+}
+html.dark [data-slot="select-item"][data-highlighted],
+html.dark [data-slot="dropdown-menu-item"][data-highlighted] {
+  background-color: var(--accent) !important;
+  color: var(--accent-foreground) !important;
+}
+html.dark [style*="background-color"],
+html.dark [style*="background:"] {
+  box-shadow:
+    0 0 0 1px oklch(1 0 0 / 45%),
+    inset 0 0 0 1px oklch(0 0 0 / 18%);
+}
