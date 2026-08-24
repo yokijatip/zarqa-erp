@@ -633,9 +633,29 @@ let fJumlah = $state(0);
     }
 
     timeline.sort((a, b) => tsMillis(a.timestamp) - tsMillis(b.timestamp));
+    const uniqueOnceStatuses = new Set([
+      "CUTTING_DONE",
+      "JAHIT_DONE",
+      "STEAM_DONE",
+      "COMPLETED",
+    ]);
+    const seen = new Set<string>();
+    const dedupedTimeline = timeline.filter((item) => {
+      if (!uniqueOnceStatuses.has(item.status_ke)) return true;
+      const key = [
+        item.status_ke,
+        item.dariSumberLain ? "source" : "own",
+        item.updated_by_nama,
+        item.pcs_berhasil,
+        item.pcs_reject,
+      ].join("|");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
     // Sinkronkan ke cache nama juga (bisa lebih akurat dari hasil prefetch cepat)
     batchNamaCache = { ...batchNamaCache, [batchId]: cuttingNama };
-    return { cuttingNama, timeline };
+    return { cuttingNama, timeline: dedupedTimeline };
   }
 
   function bukaDialog(mode: DialogMode, item: StokBarangJadi) {

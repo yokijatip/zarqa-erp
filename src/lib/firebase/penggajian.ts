@@ -215,6 +215,18 @@ export async function getPenggajianPeriode(
     return entry;
   }
 
+  function workerForPayroll(
+    ev: RiwayatEvent,
+    batch: BatchProduksi
+  ): { uid: string; nama: string } | null {
+    if (ev.statusKe === 'CUTTING_DONE') return batch.penugasan?.cutting ?? { uid: ev.uid, nama: ev.nama };
+    if (ev.statusKe === 'JAHIT_DONE') return batch.penugasan?.jahit ?? { uid: ev.uid, nama: ev.nama };
+    if (ev.statusKe === 'STEAM_DONE' || ev.statusKe === 'COMPLETED') {
+      return batch.penugasan?.steam ?? { uid: ev.uid, nama: ev.nama };
+    }
+    return { uid: ev.uid, nama: ev.nama };
+  }
+
   function formatTanggal(date: Date | null): string {
     if (!date) return "—";
     return date.toLocaleDateString("id-ID", {
@@ -231,7 +243,10 @@ export async function getPenggajianPeriode(
     const batch = batchMap.get(ev.batchId);
     if (!batch) continue;
 
-    const entry = getOrCreate(ev.uid, ev.nama, ev.divisi);
+    const payrollWorker = workerForPayroll(ev, batch);
+    if (!payrollWorker?.uid) continue;
+
+    const entry = getOrCreate(payrollWorker.uid, payrollWorker.nama, ev.divisi);
     entry.total_pcs += ev.pcsBerhasil;
     entry.jumlah_batch += 1;
 
