@@ -16,9 +16,10 @@ import { getStokKainList } from '$lib/firebase/stok-kain';
 import { getStokBarangJadi, getRiwayatBarangKeluar } from '$lib/firebase/barang-jadi';
 import { getModelBajuList } from '$lib/firebase/model-baju';
 import { getWarnaList } from '$lib/firebase/warna';
+import { getMasterKainList } from '$lib/firebase/master-kain';
 import { getKaryawanList } from '$lib/firebase/karyawan';
 import { getStokPotonganList } from '$lib/firebase/stok-potongan';
-import type { BatchProduksi, StokKain, StokBarangJadi, BarangKeluar, ModelBaju, Warna, UserProfile, StokPotongan } from '$lib/types';
+import type { BatchProduksi, StokKain, StokBarangJadi, BarangKeluar, ModelBaju, Warna, MasterKain, UserProfile, StokPotongan } from '$lib/types';
 
 // ── Generic cache factory ─────────────────────────────────────────────────────
 
@@ -95,6 +96,9 @@ export const modelBajuCache = createCache<ModelBaju[]>(() => getModelBajuList(fa
 /** Master warna — stale setelah 10 menit (jarang berubah) */
 export const warnaCache = createCache<Warna[]>(getWarnaList, 600);
 
+/** Master jenis kain */
+export const masterKainCache = createCache<MasterKain[]>(getMasterKainList, 600);
+
 /** Daftar karyawan — stale setelah 10 menit (jarang berubah) */
 export const karyawanCache = createCache<UserProfile[]>(getKaryawanList, 600);
 
@@ -110,6 +114,7 @@ export function invalidateAllCaches(): void {
   barangKeluarCache.invalidate();
   modelBajuCache.invalidate();
   warnaCache.invalidate();
+  masterKainCache.invalidate();
   karyawanCache.invalidate();
   stokPotonganCache.invalidate();
 }

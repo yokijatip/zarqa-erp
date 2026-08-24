@@ -4,14 +4,17 @@
     catatBarangKeluar,
     getRiwayatBarangKeluarByPeriod,
     batalBarangKeluar,
+    prosesPendingBarangKeluar,
   } from "$lib/firebase/barang-jadi";
-  import { barangJadiCache } from "$lib/stores/data-cache.svelte";
+  import { barangJadiCache, modelBajuCache } from "$lib/stores/data-cache.svelte";
   import { currentUser, userRole } from "$lib/stores/auth.store";
   import {
     UKURAN_ORDER,
     TUJUAN_PENGIRIMAN_OPTIONS,
     type StokBarangJadi,
+    type ModelBaju,
     type BarangKeluar,
+    type BarangKeluarItem,
     type UkuranBaju,
   } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
@@ -19,6 +22,7 @@
   import * as Table from "$lib/components/ui/table";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
+  import { Badge } from "$lib/components/ui/badge";
   import StatCard from "$lib/components/StatCard.svelte";
   import TruckIcon from "@lucide/svelte/icons/truck";
   import PackageCheckIcon from "@lucide/svelte/icons/package-check";
@@ -28,12 +32,15 @@
   import ClipboardListIcon from "@lucide/svelte/icons/clipboard-list";
   import DownloadIcon from "@lucide/svelte/icons/download";
   import EyeIcon from "@lucide/svelte/icons/eye";
+  import UploadIcon from "@lucide/svelte/icons/upload";
+  import XIcon from "@lucide/svelte/icons/x";
   import { type DateRange, getPeriodRange } from "$lib/period";
   import PeriodSelector from "$lib/components/period-selector.svelte";
   import BarangKeluarDetailDialog from "$lib/components/barang-keluar-detail-dialog.svelte";
 
   // ── State ──────────────────────────────────────────────────────────
   let stokList = $state<StokBarangJadi[]>([]);
+  let modelList = $state<ModelBaju[]>([]);
   let riwayat = $state<BarangKeluar[]>([]);
   let loading = $state(true);
   let saving = $state(false);
@@ -52,6 +59,22 @@
   function bukaDetail(r: BarangKeluar) {
     detailTarget = r;
     detailDialogOpen = true;
+  }
+
+  async function submitProsesPending(itemIndex: number) {
+    if (!detailTarget || !$currentUser) return;
+    const result = await prosesPendingBarangKeluar(detailTarget.id, itemIndex, {
+      uid: $currentUser.uid,
+      nama: $currentUser.name || $currentUser.email || $currentUser.uid,
+    });
+    barangJadiCache.invalidate();
+    await load(true);
+    detailTarget = riwayat.find((item) => item.id === detailTarget?.id) ?? detailTarget;
+    showSuccess(
+      result.remainingPendingPcs > 0
+        ? `${result.processedPcs} pcs pending berhasil diproses. Sisa pending ${result.remainingPendingPcs} pcs.`
+        : `${result.processedPcs} pcs pending berhasil diproses. List sudah selesai.`,
+    );
   }
   let batalOpen = $state(false);
   let batalSaving = $state(false);
@@ -86,10 +109,15 @@
   }
 
   // Form
-  let fModelKey = $state(""); // composite: "${model_id}__${nama_warna ?? ''}"
+  let fModelKey = $state("");
+  let fWarnaKeys = $state<string[]>([]);
   let fTujuan = $state("");
+  let fNamaReseller = $state("");
   let fKeterangan = $state("");
-  let fJumlah = $state<Partial<Record<UkuranBaju, number>>>({});
+  let fJumlahByWarna = $state<Record<string, Partial<Record<UkuranBaju, number>>>>({});
+  let fPending = $state(false);
+  let fAlasanPending = $state("");
+  let draftItems = $state<BarangKeluarItem[]>([]);
 
   // ── Derived ────────────────────────────────────────────────────────
   let canCatat = $derived(
@@ -109,24 +137,24 @@
         nama_model: string;
         nama_warna?: string;
         kode_hex_warna?: string;
+        ukuran_tersedia: UkuranBaju[];
+        warna_tersedia: ModelBaju["warna_tersedia"];
         stok: StokBarangJadi[];
       }
     >();
+    for (const model of modelList.filter((m) => m.aktif)) {
+      map.set(model.id, {
+        key: model.id,
+        model_id: model.id,
+        nama_model: model.nama_model,
+        ukuran_tersedia: model.ukuran_tersedia,
+        warna_tersedia: model.warna_tersedia,
+        stok: [],
+      });
+    }
     for (const item of stokList) {
-      if (item.stok_tersedia > 0) {
-        const key = `${item.model_id}__${item.nama_warna ?? ""}`;
-        if (!map.has(key)) {
-          map.set(key, {
-            key,
-            model_id: item.model_id,
-            nama_model: item.nama_model,
-            nama_warna: item.nama_warna,
-            kode_hex_warna: item.kode_hex_warna,
-            stok: [],
-          });
-        }
-        map.get(key)!.stok.push(item);
-      }
+      const entry = map.get(item.model_id);
+      if (entry) entry.stok.push(item);
     }
     return [...map.values()].sort((a, b) =>
       a.nama_model.localeCompare(b.nama_model),
@@ -136,19 +164,105 @@
   let selectedModelData = $derived(
     modelDenganStok.find((m) => m.key === fModelKey) ?? null,
   );
-
-  let detailKeluar = $derived(
-    selectedModelData
-      ? UKURAN_ORDER.filter((u) => {
-          const s = selectedModelData!.stok.find((i) => i.ukuran === u);
-          return s && s.stok_tersedia > 0 && (fJumlah[u] ?? 0) > 0;
-        }).map((u) => ({ ukuran: u, jumlah_pcs: fJumlah[u]! }))
-      : [],
+  let selectedUkuranList = $derived(
+    selectedModelData?.ukuran_tersedia?.length
+      ? selectedModelData.ukuran_tersedia
+      : UKURAN_ORDER,
   );
 
-  let totalPcs = $derived(detailKeluar.reduce((s, d) => s + d.jumlah_pcs, 0));
+  function warnaKey(item: Pick<StokBarangJadi, "nama_warna">): string {
+    return item.nama_warna?.trim() || "__tanpa_warna__";
+  }
+
+  let warnaTersedia = $derived.by(() => {
+    if (!selectedModelData) return [];
+    const map = new Map<
+      string,
+      {
+        key: string;
+        nama_warna?: string;
+        kode_hex_warna?: string;
+        stok: StokBarangJadi[];
+        total_stok: number;
+      }
+    >();
+    for (const warna of selectedModelData.warna_tersedia ?? []) {
+      map.set(warna.nama_warna.trim() || "__tanpa_warna__", {
+        key: warna.nama_warna.trim() || "__tanpa_warna__",
+        nama_warna: warna.nama_warna,
+        kode_hex_warna: warna.kode_hex,
+        stok: [],
+        total_stok: 0,
+      });
+    }
+    if (map.size === 0) {
+      map.set("__tanpa_warna__", {
+        key: "__tanpa_warna__",
+        stok: [],
+        total_stok: 0,
+      });
+    }
+    for (const item of selectedModelData.stok) {
+      const key = warnaKey(item);
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          nama_warna: item.nama_warna,
+          kode_hex_warna: item.kode_hex_warna,
+          stok: [],
+          total_stok: 0,
+        });
+      }
+      const warna = map.get(key)!;
+      warna.stok.push(item);
+      warna.total_stok += item.stok_tersedia;
+    }
+    return [...map.values()].sort((a, b) =>
+      (a.nama_warna ?? "Tanpa warna").localeCompare(
+        b.nama_warna ?? "Tanpa warna",
+      ),
+    );
+  });
+
+  let selectedWarnaList = $derived(
+    warnaTersedia.filter((w) => fWarnaKeys.includes(w.key)),
+  );
+
+  let detailKeluarByWarna = $derived.by(() => {
+    const map = new Map<string, { warna: (typeof warnaTersedia)[number]; detail: { ukuran: UkuranBaju; jumlah_pcs: number }[]; total: number }>();
+    for (const warna of selectedWarnaList) {
+      const jumlahWarna = fJumlahByWarna[warna.key] ?? {};
+      const ukuranList =
+        selectedModelData?.ukuran_tersedia?.length
+          ? selectedModelData.ukuran_tersedia
+          : UKURAN_ORDER;
+      const detail = ukuranList
+        .filter((u) => (jumlahWarna[u] ?? 0) > 0)
+        .map((u) => ({ ukuran: u, jumlah_pcs: jumlahWarna[u]! }));
+      const total = detail.reduce((sum, d) => sum + d.jumlah_pcs, 0);
+      map.set(warna.key, { warna, detail, total });
+    }
+    return map;
+  });
+
+  let totalPcs = $derived(
+    [...detailKeluarByWarna.values()].reduce((s, item) => s + item.total, 0),
+  );
+  let totalDraftKeluarPcs = $derived(
+    draftItems
+      .filter((item) => item.status !== "pending")
+      .reduce((s, item) => s + item.total_pcs, 0),
+  );
+  let totalDraftPendingPcs = $derived(
+    draftItems
+      .filter((item) => item.status === "pending")
+      .reduce((s, item) => s + item.total_pcs, 0),
+  );
+  let totalDraftPcs = $derived(totalDraftKeluarPcs + totalDraftPendingPcs);
   let canSubmit = $derived(
-    fModelKey !== "" && fTujuan.trim() !== "" && totalPcs > 0,
+    fTujuan.trim() !== "" &&
+      draftItems.length > 0 &&
+      draftItems.some((item) => item.total_pcs > 0),
   );
 
   // riwayat sudah difilter dari Firestore sesuai periode — tidak perlu filter ulang
@@ -238,8 +352,34 @@
       doc.setFont("helvetica", "bold");
       doc.setFontSize(9);
       doc.setTextColor(60, 60, 60);
+      const totalPendingPdf = riwayatPeriod.reduce(
+        (s, r) => s + (r.total_pending_pcs ?? 0),
+        0,
+      );
+      const totalNilaiJualPdf = riwayatPeriod.reduce(
+        (sum, r) =>
+          sum +
+          listItems(r)
+            .filter((item) => item.status !== "pending")
+            .reduce((s, item) => s + item.total_pcs * hargaModel(item.model_id).jual, 0),
+        0,
+      );
+      const totalNilaiProduksiPdf = riwayatPeriod.reduce(
+        (sum, r) =>
+          sum +
+          listItems(r)
+            .filter((item) => item.status !== "pending")
+            .reduce((s, item) => s + item.total_pcs * hargaModel(item.model_id).produksi, 0),
+        0,
+      );
       doc.text(`Total Pengiriman: ${totalPengiriman}`, marginX, 41);
       doc.text(`Total Pcs Keluar: ${totalPcsKeluar}`, marginX + 70, 41);
+      if (totalPendingPdf > 0) {
+        doc.text(`Total Pcs Pending: ${totalPendingPdf}`, marginX + 135, 41);
+      }
+      doc.text(`Total Jual: ${formatRupiah(totalNilaiJualPdf)}`, marginX, 46);
+      doc.text(`Total Produksi: ${formatRupiah(totalNilaiProduksiPdf)}`, marginX + 70, 46);
+      doc.text(`Laba Kotor: ${formatRupiah(totalNilaiJualPdf - totalNilaiProduksiPdf)}`, marginX + 135, 46);
 
       // ── Tabel rekap per tujuan ───────────────────────────────
       const totalPcsSemua = rekapPerTujuan.reduce((s, r) => s + r.totalPcs, 0);
@@ -253,7 +393,7 @@
       ]);
 
       autoTable(doc, {
-        startY: 47,
+          startY: 52,
         head: [
           [
             "Tujuan Pengiriman",
@@ -312,23 +452,36 @@
           .sort(
             (a, b) => tsMillis(b.tanggal_keluar) - tsMillis(a.tanggal_keluar),
           )
-          .map((r) => [
-            formatDate(r.tanggal_keluar),
-            r.nama_model,
-            r.nama_warna ?? "—",
-            r.tujuan,
-            String(r.total_pcs),
-          ]);
+          .flatMap((r) => listItems(r).map((item) => {
+            const harga = hargaModel(item.model_id);
+            const totalJual = item.status === "pending" ? 0 : item.total_pcs * harga.jual;
+            const totalProduksi = item.status === "pending" ? 0 : item.total_pcs * harga.produksi;
+            return [
+               formatDate(r.tanggal_keluar),
+               r.tujuan,
+               r.nama_reseller ?? "-",
+               item.nama_model,
+               item.nama_warna ?? "-",
+               itemSummary(item),
+              item.status === "pending" ? "Pending" : "Keluar",
+              String(item.total_pcs),
+              harga.jual > 0 ? formatRupiah(harga.jual) : "-",
+              harga.produksi > 0 ? formatRupiah(harga.produksi) : "-",
+              formatRupiah(totalJual),
+              formatRupiah(totalProduksi),
+              formatRupiah(totalJual - totalProduksi),
+            ];
+          }));
 
         autoTable(doc, {
           startY: finalY + 14,
-          head: [["Tanggal", "Model", "Warna", "Tujuan", "Pcs"]],
+          head: [["Tanggal", "Tujuan", "Reseller", "Model", "Warna", "Ukuran", "Status", "Pcs", "Harga Jual", "Harga Produksi", "Total Jual", "Total Produksi", "Laba Kotor"]],
           body: detailBody,
           theme: "grid",
           margin: { left: marginX, right: marginX },
           styles: {
             font: "helvetica",
-            fontSize: 8.5,
+            fontSize: 7,
             cellPadding: 2.5,
             lineColor: [230, 230, 230],
             lineWidth: 0.1,
@@ -340,7 +493,13 @@
             halign: "left",
           },
           columnStyles: {
-            4: { halign: "center" },
+            6: { halign: "center" },
+            7: { halign: "center" },
+            8: { halign: "right" },
+            9: { halign: "right" },
+            10: { halign: "right" },
+            11: { halign: "right" },
+            12: { halign: "right" },
           },
           alternateRowStyles: { fillColor: [250, 250, 250] },
         });
@@ -378,25 +537,104 @@
     return riwayatPeriod.filter(
       (r) =>
         r.nama_model.toLowerCase().includes(q) ||
+        listItems(r).some(
+          (item) =>
+            item.nama_model.toLowerCase().includes(q) ||
+            (item.nama_warna ?? "").toLowerCase().includes(q),
+        ) ||
+        (r.nama_reseller ?? "").toLowerCase().includes(q) ||
         r.tujuan.toLowerCase().includes(q),
     );
   });
 
-  function maxUkuran(ukuran: UkuranBaju): number {
-    if (!selectedModelData) return 0;
+  function jumlahWarna(warnaKey: string, ukuran: UkuranBaju): number {
+    return fJumlahByWarna[warnaKey]?.[ukuran] ?? 0;
+  }
+
+  function setJumlahWarna(warnaKey: string, ukuran: UkuranBaju, value: number) {
+    fJumlahByWarna = {
+      ...fJumlahByWarna,
+      [warnaKey]: {
+        ...(fJumlahByWarna[warnaKey] ?? {}),
+        [ukuran]: Number.isFinite(value) && value > 0 ? value : 0,
+      },
+    };
+  }
+
+  function maxUkuran(warnaKey: string, ukuran: UkuranBaju): number {
+    const warna = warnaTersedia.find((w) => w.key === warnaKey);
+    if (!warna) return 0;
     return (
-      selectedModelData.stok.find((i) => i.ukuran === ukuran)?.stok_tersedia ??
+      warna.stok.find((i) => i.ukuran === ukuran)?.stok_tersedia ??
       0
     );
   }
 
-  function melebihiStok(ukuran: UkuranBaju): boolean {
-    return (fJumlah[ukuran] ?? 0) > maxUkuran(ukuran);
+  function melebihiStok(warnaKey: string, ukuran: UkuranBaju): boolean {
+    return jumlahWarna(warnaKey, ukuran) > maxUkuran(warnaKey, ukuran);
   }
 
-  let adaYangMelebihi = $derived(
-    selectedModelData ? UKURAN_ORDER.some((u) => melebihiStok(u)) : false,
+  let adaYangMelebihi = $derived.by(() =>
+    selectedWarnaList.some((warna) =>
+      UKURAN_ORDER.some((u) => melebihiStok(warna.key, u)),
+    ),
   );
+  let canAddItem = $derived(
+    fModelKey !== "" &&
+      fWarnaKeys.length > 0 &&
+      totalPcs > 0 &&
+      (fPending || !adaYangMelebihi),
+  );
+
+  function toggleWarna(key: string, checked: boolean) {
+    fWarnaKeys = checked
+      ? [...new Set([...fWarnaKeys, key])]
+      : fWarnaKeys.filter((k) => k !== key);
+  }
+
+  function itemSummary(item: BarangKeluarItem): string {
+    return item.detail_keluar
+      .map((d) => `${d.ukuran}: ${d.jumlah_pcs}`)
+      .join(", ");
+  }
+
+  function hargaModel(modelId: string) {
+    const model = modelList.find((item) => item.id === modelId);
+    return {
+      jual: model?.harga_jual ?? 0,
+      produksi: model?.harga_produksi ?? 0,
+    };
+  }
+
+  function formatRupiah(value: number): string {
+    return new Intl.NumberFormat("id-ID", {
+      style: "currency",
+      currency: "IDR",
+      maximumFractionDigits: 0,
+    }).format(value);
+  }
+
+  function listItems(r: BarangKeluar): BarangKeluarItem[] {
+    return r.items && r.items.length > 0
+      ? r.items
+      : [
+          {
+            model_id: r.model_id,
+            nama_model: r.nama_model,
+            ...(r.nama_warna ? { nama_warna: r.nama_warna } : {}),
+            ...(r.kode_hex_warna ? { kode_hex_warna: r.kode_hex_warna } : {}),
+            detail_keluar: r.detail_keluar,
+            total_pcs: r.total_pcs,
+            status: "keluar",
+          },
+        ];
+  }
+
+  function listTitle(r: BarangKeluar): string {
+    const items = listItems(r);
+    if (items.length <= 1) return items[0]?.nama_model ?? r.nama_model;
+    return `${items.length} barang`;
+  }
 
   // ── Helpers ────────────────────────────────────────────────────────
   function formatDate(ts: any): string {
@@ -445,8 +683,9 @@
     loading = true;
     errorMsg = null;
     try {
-      [stokList, riwayat] = await Promise.all([
+      [stokList, modelList, riwayat] = await Promise.all([
         barangJadiCache.get(force),
+        modelBajuCache.get(force),
         getRiwayatBarangKeluarByPeriod(dateRange),
       ]);
     } catch {
@@ -467,36 +706,77 @@
   // ── Actions ──────────────────────────────────────────────────────
   function bukaCatat() {
     fModelKey = "";
+    fWarnaKeys = [];
     fTujuan = "";
+    fNamaReseller = "";
     fKeterangan = "";
-    fJumlah = {};
+    fJumlahByWarna = {};
+    fPending = false;
+    fAlasanPending = "";
+    draftItems = [];
     openCatat = true;
   }
 
+  function resetLineForm() {
+    fModelKey = "";
+    fWarnaKeys = [];
+    fJumlahByWarna = {};
+    fPending = false;
+    fAlasanPending = "";
+  }
+
+  function tambahDraftItem() {
+    if (!canAddItem || !selectedModelData) return;
+    const items: BarangKeluarItem[] = [...detailKeluarByWarna.values()]
+      .filter((entry) => entry.total > 0)
+      .map(({ warna, detail, total }) => ({
+        model_id: selectedModelData.model_id,
+        nama_model: selectedModelData.nama_model,
+        ...(warna.nama_warna ? { nama_warna: warna.nama_warna } : {}),
+        ...(warna.kode_hex_warna ? { kode_hex_warna: warna.kode_hex_warna } : {}),
+        detail_keluar: detail,
+        total_pcs: total,
+        status: fPending ? "pending" : "keluar",
+        ...(fPending && fAlasanPending.trim()
+          ? { alasan_pending: fAlasanPending.trim() }
+          : {}),
+      }));
+    draftItems = [...draftItems, ...items];
+    resetLineForm();
+  }
+
+  function hapusDraftItem(index: number) {
+    draftItems = draftItems.filter((_, i) => i !== index);
+  }
+
   async function submitCatat() {
-    if (!canSubmit || !$currentUser || adaYangMelebihi) return;
+    if (!canSubmit || !$currentUser) return;
     saving = true;
     try {
       const keteranganTrimmed = fKeterangan.trim();
-      // Simpan dulu ke variabel lokal SEBELUM load(true) — selectedModelData bersifat
-      // reactive dan bisa jadi null setelah reload kalau pengiriman ini menghabiskan
-      // sisa stok terakhir model tsb (model otomatis hilang dari modelDenganStok).
-      const namaModelDikirim = selectedModelData!.nama_model;
+      const namaResellerTrimmed = fNamaReseller.trim();
       const tujuanDikirim = fTujuan.trim();
-      const totalPcsDikirim = totalPcs;
+      const itemPertama = draftItems[0];
+      const totalPcsDikirim = totalDraftKeluarPcs;
+      const totalPending = totalDraftPendingPcs;
 
       await catatBarangKeluar(
         {
-          model_id: selectedModelData!.model_id,
-          nama_model: selectedModelData!.nama_model,
-          ...(selectedModelData!.nama_warna
-            ? { nama_warna: selectedModelData!.nama_warna }
+          model_id: itemPertama.model_id,
+          nama_model:
+            draftItems.length > 1
+              ? `${draftItems.length} barang`
+              : itemPertama.nama_model,
+          ...(draftItems.length === 1 && itemPertama.nama_warna
+            ? { nama_warna: itemPertama.nama_warna }
             : {}),
-          ...(selectedModelData!.kode_hex_warna
-            ? { kode_hex_warna: selectedModelData!.kode_hex_warna }
+          ...(draftItems.length === 1 && itemPertama.kode_hex_warna
+            ? { kode_hex_warna: itemPertama.kode_hex_warna }
             : {}),
-          detail_keluar: detailKeluar,
+          detail_keluar: itemPertama.detail_keluar,
+          items: draftItems,
           tujuan: tujuanDikirim,
+          ...(namaResellerTrimmed ? { nama_reseller: namaResellerTrimmed } : {}),
           ...(keteranganTrimmed ? { keterangan: keteranganTrimmed } : {}),
         },
         $currentUser.uid,
@@ -504,7 +784,7 @@
       await load(true);
       openCatat = false;
       showSuccess(
-        `Pengiriman ${totalPcsDikirim} pcs "${namaModelDikirim}" ke ${tujuanDikirim} berhasil dicatat.`,
+        `List barang keluar tersimpan: ${totalPcsDikirim} pcs keluar${totalPending > 0 ? `, ${totalPending} pcs pending` : ""} ke ${tujuanDikirim}.`,
       );
     } catch (e: any) {
       showError(e?.message ?? "Gagal mencatat barang keluar.");
@@ -588,7 +868,15 @@
       Refresh
     </Button>
     {#if canCatat}
-      <Button onclick={bukaCatat}>
+      <Button
+        variant="outline"
+        onclick={() =>
+          showSuccess("Import otomatis list barang keluar akan ditambahkan di tahap berikutnya.")}
+      >
+        <UploadIcon class="h-4 w-4" />
+        Import List
+      </Button>
+      <Button href="/barang-keluar/catat">
         <svg
           class="h-4 w-4"
           xmlns="http://www.w3.org/2000/svg"
@@ -641,10 +929,10 @@
       valueClass="text-teal-700"
     />
     <StatCard
-      title="Model Tersedia"
+      title="Model Tercatat"
       value={totalModelTersedia}
       icon={ShirtIcon}
-      footerSubtext="model ada stoknya"
+      footerSubtext="model barang jadi"
     />
   {/if}
 </div>
@@ -787,7 +1075,7 @@
           Mulai dengan mencatat pengiriman pertama
         </p>
         {#if canCatat}
-          <Button onclick={bukaCatat} class="mt-1">+ Catat Keluar</Button>
+          <Button href="/barang-keluar/catat" class="mt-1">+ Catat Keluar</Button>
         {/if}
       {/if}
     </div>
@@ -796,9 +1084,10 @@
       <Table.Header>
         <Table.Row class="bg-gray-50 hover:bg-gray-50">
           <Table.Head>Tanggal</Table.Head>
-          <Table.Head>Model</Table.Head>
-          <Table.Head>Detail Ukuran</Table.Head>
-          <Table.Head class="text-center">Total PCS</Table.Head>
+          <Table.Head>List Barang</Table.Head>
+          <Table.Head>Detail</Table.Head>
+          <Table.Head class="text-center">PCS Keluar</Table.Head>
+          <Table.Head>Status</Table.Head>
           <Table.Head>Tujuan</Table.Head>
           <Table.Head class="w-12"></Table.Head>
           {#if canCatat}<Table.Head class="w-12"></Table.Head>{/if}
@@ -816,17 +1105,32 @@
               </p>
             </Table.Cell>
             <Table.Cell>
-              <p class="text-sm font-medium text-gray-800">{r.nama_model}</p>
+              <p class="text-sm font-medium text-gray-800">{listTitle(r)}</p>
+              <p class="mt-0.5 text-xs text-gray-400">
+                {listItems(r).length} item pencatatan
+              </p>
             </Table.Cell>
             <Table.Cell>
-              <div class="flex flex-wrap gap-1">
-                {#each r.detail_keluar as d}
-                  <span
-                    class="rounded bg-green-100 px-1.5 py-0.5 text-[11px] font-medium text-green-700"
-                  >
-                    {d.ukuran}: {d.jumlah_pcs}
-                  </span>
+              <div class="space-y-1.5">
+                {#each listItems(r).slice(0, 3) as item}
+                  <div class="flex flex-wrap items-center gap-1.5">
+                    <span class="text-xs font-medium text-gray-700">
+                      {item.nama_model}{item.nama_warna ? ` - ${item.nama_warna}` : ""}
+                    </span>
+                    <span
+                      class="rounded px-1.5 py-0.5 text-[11px] font-medium {item.status === 'pending'
+                        ? 'bg-amber-100 text-amber-700'
+                        : 'bg-green-100 text-green-700'}"
+                    >
+                      {itemSummary(item)}
+                    </span>
+                  </div>
                 {/each}
+                {#if listItems(r).length > 3}
+                  <p class="text-xs text-gray-400">
+                    +{listItems(r).length - 3} item lain
+                  </p>
+                {/if}
               </div>
             </Table.Cell>
             <Table.Cell class="text-center">
@@ -834,7 +1138,27 @@
               <p class="text-xs text-gray-400">pcs</p>
             </Table.Cell>
             <Table.Cell>
+              <Badge
+                variant="outline"
+                class={r.status === "pending"
+                  ? "border-amber-200 bg-amber-50 text-amber-700"
+                  : "border-green-200 bg-green-50 text-green-700"}
+              >
+                {r.status === "pending" ? "Pending" : "Selesai"}
+              </Badge>
+              {#if (r.total_pending_pcs ?? 0) > 0}
+                <p class="mt-1 text-xs text-amber-600">
+                  {r.total_pending_pcs} pcs pending
+                </p>
+              {/if}
+            </Table.Cell>
+            <Table.Cell>
               <p class="text-sm font-medium text-gray-700">{r.tujuan}</p>
+              {#if r.nama_reseller}
+                <p class="mt-0.5 truncate text-xs text-gray-500">
+                  Reseller: {r.nama_reseller}
+                </p>
+              {/if}
               {#if r.keterangan}
                 <p class="mt-0.5 truncate text-xs text-gray-400">
                   {r.keterangan}
@@ -884,15 +1208,110 @@
 
 <!-- ── Dialog: Catat Barang Keluar ───────────────────────────────── -->
 <Dialog.Root bind:open={openCatat}>
-  <Dialog.Content class="max-w-md">
+  <Dialog.Content class="max-w-lg">
     <Dialog.Header>
       <Dialog.Title>Catat Barang Keluar</Dialog.Title>
       <Dialog.Description>
-        Rekam pengiriman barang jadi ke tujuan.
+        Buat satu list pencatatan berisi beberapa barang keluar.
       </Dialog.Description>
     </Dialog.Header>
 
-    <div class="max-h-[60vh] space-y-5 overflow-y-auto px-1 pb-1">
+    <div class="max-h-[68vh] space-y-5 overflow-y-auto px-1 pb-1">
+      <!-- Tujuan -->
+      <div>
+        <label
+          class="mb-1.5 block text-sm font-medium text-gray-700"
+          for="tujuan-keluar"
+        >
+          Tujuan Pengiriman <span class="text-red-500">*</span>
+        </label>
+        <Select.Root
+          type="single"
+          value={fTujuan || undefined}
+          onValueChange={(val) => (fTujuan = val ?? "")}
+        >
+          <Select.Trigger id="tujuan-keluar" class="w-full">
+            {#if fTujuan}
+              <span>{fTujuan}</span>
+            {:else}
+              <span class="text-muted-foreground"
+                >-- Pilih tujuan pengiriman --</span
+              >
+            {/if}
+          </Select.Trigger>
+          <Select.Content preventScroll={false}>
+            {#each TUJUAN_PENGIRIMAN_OPTIONS as t}
+              <Select.Item value={t}>{t}</Select.Item>
+            {/each}
+          </Select.Content>
+        </Select.Root>
+      </div>
+
+      <div>
+        <label
+          class="mb-1.5 block text-sm font-medium text-gray-700"
+          for="nama-reseller"
+        >
+          Nama Reseller
+          <span class="text-xs font-normal text-gray-400">(opsional)</span>
+        </label>
+        <Input
+          id="nama-reseller"
+          placeholder="Nama reseller atau toko tujuan..."
+          bind:value={fNamaReseller}
+        />
+      </div>
+
+      {#if draftItems.length > 0}
+        <div class="rounded-lg border border-gray-100 bg-gray-50 p-3">
+          <div class="mb-2 flex items-center justify-between gap-3">
+            <p class="text-sm font-medium text-gray-700">
+              Daftar barang keluar
+            </p>
+            <p class="text-xs text-gray-400">
+              {totalDraftKeluarPcs} keluar · {totalDraftPendingPcs} pending
+            </p>
+          </div>
+          <div class="space-y-2">
+            {#each draftItems as item, index}
+              <div class="flex items-start gap-2 rounded-md bg-white px-3 py-2">
+                <div class="min-w-0 flex-1">
+                  <div class="flex flex-wrap items-center gap-1.5">
+                    <p class="truncate text-sm font-medium text-gray-800">
+                      {item.nama_model}{item.nama_warna ? ` - ${item.nama_warna}` : ""}
+                    </p>
+                    <Badge
+                      variant="outline"
+                      class={item.status === "pending"
+                        ? "border-amber-200 bg-amber-50 text-amber-700"
+                        : "border-green-200 bg-green-50 text-green-700"}
+                    >
+                      {item.status === "pending" ? "Pending" : "Keluar"}
+                    </Badge>
+                  </div>
+                  <p class="mt-1 text-xs text-gray-500">
+                    {itemSummary(item)} · {item.total_pcs} pcs
+                  </p>
+                  {#if item.alasan_pending}
+                    <p class="mt-0.5 text-xs text-amber-600">
+                      {item.alasan_pending}
+                    </p>
+                  {/if}
+                </div>
+                <button
+                  type="button"
+                  onclick={() => hapusDraftItem(index)}
+                  class="rounded p-1 text-gray-300 hover:bg-red-50 hover:text-red-500"
+                  title="Hapus item"
+                >
+                  <XIcon class="h-4 w-4" />
+                </button>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
       <!-- Pilih Model -->
       <div>
         <label
@@ -919,7 +1338,8 @@
             value={fModelKey || undefined}
             onValueChange={(val) => {
               fModelKey = val ?? "";
-              fJumlah = {};
+              fWarnaKeys = [];
+              fJumlahByWarna = {};
             }}
           >
             <Select.Trigger class="w-full">
@@ -966,46 +1386,107 @@
         {/if}
       </div>
 
-      <!-- Stok info + input per ukuran -->
+      <!-- Pilih Warna -->
       {#if selectedModelData}
+        <div>
+          <p class="mb-1.5 text-sm font-medium text-gray-700">
+            Warna <span class="text-red-500">*</span>
+          </p>
+          <div class="space-y-2">
+            {#each warnaTersedia as w}
+              {@const checked = fWarnaKeys.includes(w.key)}
+              <label
+                class="flex cursor-pointer items-center gap-3 rounded-lg border {checked
+                  ? 'border-green-200 bg-green-50'
+                  : 'border-gray-100 bg-gray-50'} px-3 py-2"
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onchange={(e) =>
+                    toggleWarna(w.key, (e.currentTarget as HTMLInputElement).checked)}
+                  class="h-4 w-4 rounded border-gray-300 text-green-600 focus:ring-green-500"
+                />
+                {#if w.kode_hex_warna}
+                  <span
+                    class="h-3 w-3 shrink-0 rounded-full ring-1 ring-black/10"
+                    style="background:{w.kode_hex_warna}"
+                  ></span>
+                {/if}
+                <span class="min-w-0 flex-1 truncate text-sm font-medium text-gray-700">
+                  {w.nama_warna ?? "Tanpa warna"}
+                </span>
+                <span class="text-xs text-gray-400">{w.total_stok} pcs</span>
+              </label>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      <!-- Stok info + input per ukuran -->
+      {#if selectedWarnaList.length > 0}
         <div>
           <p class="mb-2 text-sm font-medium text-gray-700">
             Jumlah Per Ukuran <span class="text-red-500">*</span>
           </p>
-          <div class="space-y-2">
-            {#each UKURAN_ORDER.filter( (u) => selectedModelData!.stok.some((i) => i.ukuran === u), ) as ukuran}
-              {@const stokItem = selectedModelData.stok.find(
-                (i) => i.ukuran === ukuran,
-              )!}
-              {@const melebihi = melebihiStok(ukuran)}
-              <div
-                class="flex items-center gap-3 rounded-lg border {melebihi
-                  ? 'border-red-200 bg-red-50'
-                  : 'border-gray-100 bg-gray-50'} px-3 py-2"
-              >
-                <div
-                  class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-xs font-bold text-gray-700 shadow-sm"
-                >
-                  {ukuran}
-                </div>
-                <div class="flex-1">
-                  <p class="text-xs text-gray-500">
-                    Tersedia: <span class="font-semibold text-gray-700"
-                      >{stokItem.stok_tersedia} pcs</span
-                    >
+          <div class="space-y-3">
+            {#each selectedWarnaList as w}
+              <div class="rounded-lg border border-gray-100 bg-gray-50 p-3">
+                <div class="mb-2 flex items-center justify-between gap-3">
+                  <p class="flex min-w-0 items-center gap-2 text-sm font-semibold text-gray-800">
+                    {#if w.kode_hex_warna}
+                      <span
+                        class="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-black/10"
+                        style="background:{w.kode_hex_warna}"
+                      ></span>
+                    {/if}
+                    <span class="truncate">{w.nama_warna ?? "Tanpa warna"}</span>
                   </p>
-                  {#if melebihi}
-                    <p class="text-xs text-red-600">Melebihi stok!</p>
-                  {/if}
+                  <p class="text-xs text-gray-400">{w.total_stok} pcs stok</p>
                 </div>
-                <Input
-                  type="number"
-                  min="0"
-                  max={stokItem.stok_tersedia}
-                  placeholder="0"
-                  bind:value={fJumlah[ukuran]}
-                  class="w-20 text-center {melebihi ? 'border-red-300' : ''}"
-                />
+                <div class="space-y-2">
+                  {#each selectedUkuranList as ukuran}
+                    {@const stokItem = w.stok.find((i) => i.ukuran === ukuran)}
+                    {@const melebihi = melebihiStok(w.key, ukuran)}
+                    <div
+                      class="flex items-center gap-3 rounded-lg border {melebihi && !fPending
+                        ? 'border-red-200 bg-red-50'
+                        : 'border-gray-100 bg-white'} px-3 py-2"
+                    >
+                      <div
+                        class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-50 text-xs font-bold text-gray-700 shadow-sm"
+                      >
+                        {ukuran}
+                      </div>
+                      <div class="flex-1">
+                        <p class="text-xs text-gray-500">
+                          Tersedia: <span class="font-semibold text-gray-700"
+                            >{stokItem?.stok_tersedia ?? 0} pcs</span
+                          >
+                        </p>
+                        {#if melebihi && !fPending}
+                          <p class="text-xs text-red-600">Melebihi stok. Tandai pending jika belum tersedia.</p>
+                        {:else if melebihi && fPending}
+                          <p class="text-xs text-amber-600">Akan dicatat sebagai pending.</p>
+                        {/if}
+                      </div>
+                      <Input
+                        type="number"
+                        min="0"
+                        max={fPending ? undefined : (stokItem?.stok_tersedia ?? 0)}
+                        placeholder="0"
+                        value={jumlahWarna(w.key, ukuran) || ""}
+                        oninput={(e) =>
+                          setJumlahWarna(
+                            w.key,
+                            ukuran,
+                            Number((e.currentTarget as HTMLInputElement).value || 0),
+                          )}
+                        class="w-20 text-center {melebihi && !fPending ? 'border-red-300' : ''}"
+                      />
+                    </div>
+                  {/each}
+                </div>
               </div>
             {/each}
           </div>
@@ -1019,35 +1500,40 @@
         </div>
       {/if}
 
-      <!-- Tujuan -->
-      <div>
-        <label
-          class="mb-1.5 block text-sm font-medium text-gray-700"
-          for="tujuan-keluar"
+      {#if selectedWarnaList.length > 0}
+        <div class="rounded-lg border border-gray-100 bg-gray-50 p-3">
+          <label class="flex items-start gap-2 text-sm text-gray-700">
+            <input
+              type="checkbox"
+              bind:checked={fPending}
+              class="mt-0.5 h-4 w-4 rounded border-gray-300 text-amber-600 focus:ring-amber-500"
+            />
+            <span>
+              Tandai item ini pending
+              <span class="block text-xs text-gray-400">
+                Pending tidak mengurangi stok dan membuat status list menjadi pending.
+              </span>
+            </span>
+          </label>
+          {#if fPending}
+            <Input
+              class="mt-3"
+              placeholder="Alasan pending, misal stok belum ada"
+              bind:value={fAlasanPending}
+            />
+          {/if}
+        </div>
+
+        <Button
+          type="button"
+          variant="outline"
+          class="w-full"
+          onclick={tambahDraftItem}
+          disabled={!canAddItem}
         >
-          Tujuan Pengiriman <span class="text-red-500">*</span>
-        </label>
-        <Select.Root
-          type="single"
-          value={fTujuan || undefined}
-          onValueChange={(val) => (fTujuan = val ?? "")}
-        >
-          <Select.Trigger id="tujuan-keluar" class="w-full">
-            {#if fTujuan}
-              <span>{fTujuan}</span>
-            {:else}
-              <span class="text-muted-foreground"
-                >— Pilih tujuan pengiriman —</span
-              >
-            {/if}
-          </Select.Trigger>
-          <Select.Content preventScroll={false}>
-            {#each TUJUAN_PENGIRIMAN_OPTIONS as t}
-              <Select.Item value={t}>{t}</Select.Item>
-            {/each}
-          </Select.Content>
-        </Select.Root>
-      </div>
+          Tambah ke Daftar
+        </Button>
+      {/if}
 
       <!-- Keterangan -->
       <div>
@@ -1074,9 +1560,9 @@
       </Button>
       <Button
         onclick={submitCatat}
-        disabled={saving || !canSubmit || adaYangMelebihi}
+        disabled={saving || !canSubmit}
       >
-        {saving ? "Menyimpan..." : "Catat Keluar"}
+        {saving ? "Menyimpan..." : "Simpan List"}
       </Button>
     </Dialog.Footer>
   </Dialog.Content>
@@ -1139,4 +1625,9 @@
   </Dialog.Root>
 {/if}
 
-<BarangKeluarDetailDialog bind:open={detailDialogOpen} riwayat={detailTarget} />
+<BarangKeluarDetailDialog
+  bind:open={detailDialogOpen}
+  riwayat={detailTarget}
+  modelList={modelList}
+  onResolvePending={submitProsesPending}
+/>

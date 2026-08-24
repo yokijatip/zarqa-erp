@@ -62,7 +62,14 @@
     harian: "Harian",
     mingguan: "Mingguan",
     bulanan: "Bulanan",
+    tahunan: "Tahunan",
   };
+  const TIPE_OPTIONS: TipePenggajian[] = [
+    "harian",
+    "mingguan",
+    "bulanan",
+    "tahunan",
+  ];
 
   // ── Derived ────────────────────────────────────────────────────────
   let karyawanMap = $derived(new Map(karyawanList.map(k => [k.uid, k])));
@@ -557,7 +564,7 @@
   >
     Semua ({data.length})
   </button>
-  {#each (["harian", "mingguan", "bulanan"] as const) as tipe}
+  {#each TIPE_OPTIONS as tipe}
     {@const count = data.filter(d => karyawanMap.get(d.uid)?.tipe_penggajian === tipe).length}
     <button
       onclick={() => (activeTab = tipe)}

@@ -12,8 +12,6 @@
   import CheckCircleIcon from "@lucide/svelte/icons/check-circle";
   import AlertTriangleIcon from "@lucide/svelte/icons/triangle-alert";
   import TrendingUpIcon from "@lucide/svelte/icons/trending-up";
-  import { type DateRange, filterByRange, getPeriodRange } from "$lib/period";
-  import PeriodSelector from "$lib/components/period-selector.svelte";
 
   // ── Stage config ──────────────────────────────────────────────────
   type StageConf = {
@@ -171,11 +169,18 @@
   let loadingPerforma = $state(true);
   let selectedStage = $state<StatusBatch | null>(null);
   let lastUpdated = $state<Date | null>(null);
-  let dateRange = $state<DateRange>(getPeriodRange('bulan_ini'));
 
   // ── Derived ────────────────────────────────────────────────────────
-  let batchPeriod = $derived(
-    filterByRange(batchAktif, dateRange, (b) => b.createdAt),
+  let batchPeriod = $derived(batchAktif);
+  let kainPrioritas = $derived.by(() =>
+    [...stokKainList]
+      .sort((a, b) => {
+        const aLevel = a.stok_tersedia < 100 ? 0 : a.stok_tersedia < 250 ? 1 : 2;
+        const bLevel = b.stok_tersedia < 100 ? 0 : b.stok_tersedia < 250 ? 1 : 2;
+        if (aLevel !== bLevel) return aLevel - bLevel;
+        return a.stok_tersedia - b.stok_tersedia;
+      })
+      .slice(0, 6),
   );
 
   let kainKritis = $derived(stokKainList.filter((k) => k.stok_tersedia < 100));
@@ -227,6 +232,10 @@
   function persenStok(kain: StokKain): number {
     const total = kain.stok_tersedia + kain.stok_terpakai;
     return total > 0 ? Math.min((kain.stok_tersedia / total) * 100, 100) : 0;
+  }
+
+  function labelKain(kain: StokKain): string {
+    return kain.nama_warna ? `${kain.nama_kain} - ${kain.nama_warna}` : kain.nama_kain;
   }
 
   function formatLastUpdated(d: Date): string {
@@ -290,9 +299,11 @@
     <h1 class="text-xl font-semibold text-gray-900">Dashboard Gudang</h1>
     <p class="mt-0.5 text-sm text-gray-500">{TODAY_STR}</p>
   </div>
-  <div class="flex items-center gap-2">
-    <PeriodSelector bind:dateRange defaultPeriod="bulan_ini" />
-  </div>
+  {#if lastUpdated}
+    <p class="text-xs text-gray-400">
+      Live · {formatLastUpdated(lastUpdated)}
+    </p>
+  {/if}
 </div>
 
 <!-- ── Alert Banners ───────────────────────────────────────────────── -->
@@ -859,8 +870,9 @@
       </div>
     {:else}
       <div class="space-y-3">
-        {#each stokKainList.slice(0, 7) as kain}
+        {#each kainPrioritas as kain}
           {@const kritis = kain.stok_tersedia < 100}
+          {@const menipis = kain.stok_tersedia >= 100 && kain.stok_tersedia < 250}
           {@const persen = persenStok(kain)}
           <div>
             <div class="mb-1.5 flex items-center justify-between">
@@ -870,21 +882,21 @@
                     ? 'bg-amber-400'
                     : 'bg-blue-400'}"
                 ></span>
-                <span class="text-sm text-gray-700">{kain.nama_kain}</span>
+                <span class="text-sm text-gray-700">{labelKain(kain)}</span>
               </div>
               <span
-                class="text-xs {kritis
+                class="text-xs {kritis || menipis
                   ? 'font-semibold text-amber-600'
                   : 'text-gray-500'}"
               >
-                {kain.stok_tersedia.toLocaleString("id-ID")} {kain.satuan}{kritis
+                {kain.stok_tersedia.toLocaleString("id-ID")} {kain.satuan}{kritis || menipis
                   ? " ⚠"
                   : ""}
               </span>
             </div>
             <div class="h-1.5 w-full rounded-full bg-gray-100">
               <div
-                class="h-1.5 rounded-full {kritis
+                class="h-1.5 rounded-full {kritis || menipis
                   ? 'bg-amber-400'
                   : 'bg-blue-400'}"
                 style="width: {persen.toFixed(1)}%"
@@ -892,9 +904,9 @@
             </div>
           </div>
         {/each}
-        {#if stokKainList.length > 7}
+        {#if stokKainList.length > kainPrioritas.length}
           <p class="pt-1 text-center text-xs text-gray-400">
-            +{stokKainList.length - 7} kain lainnya ·
+            +{stokKainList.length - kainPrioritas.length} kain lainnya ·
             <a href="/stok-kain" class="text-blue-500 hover:underline"
               >lihat semua</a
             >

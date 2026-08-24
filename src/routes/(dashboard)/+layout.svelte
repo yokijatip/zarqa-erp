@@ -21,6 +21,7 @@
     '/stok-potongan':    [{ label: 'Gudang', href: '/gudang' }, { label: 'Stok Potongan' }],
     '/barang-jadi':      [{ label: 'Gudang', href: '/gudang' }, { label: 'Barang Jadi' }],
     '/barang-keluar':    [{ label: 'Gudang', href: '/gudang' }, { label: 'Barang Keluar' }],
+    '/barang-keluar/catat': [{ label: 'Gudang', href: '/gudang' }, { label: 'Barang Keluar', href: '/barang-keluar' }, { label: 'Input' }],
     '/pengaturan':       [{ label: 'Pengaturan' }],
     '/pengaturan/profil': [{ label: 'Pengaturan', href: '/pengaturan' }, { label: 'Profil' }],
   };

@@ -17,6 +17,7 @@
     type StokBarangJadi,
     type UkuranBaju,
     type BarangKeluar,
+    type BarangKeluarItem,
     type RiwayatBarangJadi,
     type SumberCutting,
   } from "$lib/types";
@@ -149,6 +150,52 @@ let fJumlah = $state(0);
     low:    { badge: "bg-amber-100 text-amber-600", label: "Menipis", num: "text-amber-600", ukuran: "bg-gray-100 text-gray-700" },
     aman:   { badge: "bg-teal-100 text-teal-700", label: "Aman", num: "text-gray-900", ukuran: "bg-gray-100 text-gray-700" },
   };
+
+  function itemMatchesCurrentView(item: BarangKeluarItem): boolean {
+    const modelId = $page.params.model_id;
+    if (item.model_id !== modelId) return false;
+    if (selectedColor && (item.nama_warna ?? "") !== selectedColor) return false;
+    return true;
+  }
+
+  function itemsForCurrentView(r: BarangKeluar): BarangKeluarItem[] {
+    if (r.items && r.items.length > 0) {
+      return r.items.filter(itemMatchesCurrentView);
+    }
+    const legacyItem: BarangKeluarItem = {
+      model_id: r.model_id,
+      nama_model: r.nama_model,
+      ...(r.nama_warna ? { nama_warna: r.nama_warna } : {}),
+      ...(r.kode_hex_warna ? { kode_hex_warna: r.kode_hex_warna } : {}),
+      detail_keluar: r.detail_keluar,
+      total_pcs: r.total_pcs,
+      status: "keluar",
+    };
+    return itemMatchesCurrentView(legacyItem) ? [legacyItem] : [];
+  }
+
+  let riwayatKeluarTampil = $derived.by(() =>
+    riwayatKeluar.filter((r) => itemsForCurrentView(r).length > 0),
+  );
+
+  function totalItemPcsByStatus(
+    items: BarangKeluarItem[],
+    status: BarangKeluarItem["status"],
+  ): number {
+    return items
+      .filter((item) => item.status === status)
+      .reduce((sum, item) => sum + item.total_pcs, 0);
+  }
+
+  function statusItemLabel(status: BarangKeluarItem["status"]): string {
+    return status === "pending" ? "Pending" : "Keluar";
+  }
+
+  function statusItemClass(status: BarangKeluarItem["status"]): string {
+    return status === "pending"
+      ? "border-amber-200 bg-amber-50 text-amber-700"
+      : "border-emerald-200 bg-emerald-50 text-emerald-700";
+  }
 
   const DIALOG_TITLE: Record<DialogMode, string> = {
     restock: "Restock Barang",
@@ -1172,7 +1219,7 @@ let fJumlah = $state(0);
   <div class="mt-6">
     <h2 class="mb-3 text-sm font-semibold text-gray-700">Riwayat Keluar</h2>
 
-    {#if riwayatKeluar.length === 0}
+    {#if riwayatKeluarTampil.length === 0}
       <div
         class="flex items-center gap-3 rounded-xl border border-gray-100 bg-white px-5 py-6 text-sm text-gray-400 shadow-sm"
       >
@@ -1198,41 +1245,75 @@ let fJumlah = $state(0);
       >
         <!-- Header tabel -->
         <div
-          class="grid grid-cols-[1fr_auto_auto_auto] gap-4 border-b border-gray-100 bg-gray-50 px-5 py-2.5 text-[11px] font-medium uppercase tracking-wider text-gray-400"
+          class="grid grid-cols-[1fr_minmax(220px,auto)_auto_auto] gap-4 border-b border-gray-100 bg-gray-50 px-5 py-2.5 text-[11px] font-medium uppercase tracking-wider text-gray-400"
         >
           <span>Tujuan</span>
           <span class="text-right">Ukuran & Jumlah</span>
-          <span class="w-16 text-right">Total</span>
+          <span class="w-24 text-right">Keluar / Pending</span>
           <span class="w-28 text-right">Tanggal</span>
         </div>
-        {#each riwayatKeluar as r, i}
+        {#each riwayatKeluarTampil as r, i}
+          {@const items = itemsForCurrentView(r)}
+          {@const totalKeluarRecord = totalItemPcsByStatus(items, "keluar")}
+          {@const totalPendingRecord = totalItemPcsByStatus(items, "pending")}
           <div
-            class="grid grid-cols-[1fr_auto_auto_auto] items-start gap-4 px-5 py-3.5 text-sm {i >
+            class="grid grid-cols-[1fr_minmax(220px,auto)_auto_auto] items-start gap-4 px-5 py-3.5 text-sm {i >
             0
               ? 'border-t border-gray-100'
               : ''}"
           >
             <div>
               <p class="font-medium text-gray-800">{r.tujuan}</p>
+              {#if r.nama_reseller}
+                <p class="mt-0.5 text-xs font-medium text-gray-500">
+                  Reseller: {r.nama_reseller}
+                </p>
+              {/if}
               {#if r.keterangan}
                 <p class="mt-0.5 text-xs text-gray-400">{r.keterangan}</p>
               {/if}
             </div>
-            <div class="flex flex-wrap justify-end gap-1.5">
-              {#each r.detail_keluar as d}
-                <span
-                  class="rounded-md border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] text-gray-600"
-                >
-                  {d.ukuran}
-                  <span class="font-semibold text-gray-800"
-                    >×{d.jumlah_pcs}</span
+            <div class="flex max-w-md flex-col items-end gap-1.5">
+              {#each items as item}
+                <div class="flex flex-wrap justify-end gap-1.5">
+                  {#if !selectedColor && item.nama_warna}
+                    <span
+                      class="rounded-md border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-500"
+                    >
+                      {item.nama_warna}
+                    </span>
+                  {/if}
+                  <span
+                    class="rounded-md border px-2 py-0.5 text-[11px] font-semibold {statusItemClass(item.status)}"
                   >
-                </span>
+                    {statusItemLabel(item.status)}
+                  </span>
+                {#each item.detail_keluar as d}
+                  <span
+                    class="rounded-md border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] text-gray-600"
+                  >
+                    {d.ukuran}
+                    <span class="font-semibold text-gray-800"
+                      >×{d.jumlah_pcs}</span
+                    >
+                  </span>
+                {/each}
+                </div>
+                {#if item.status === "pending" && item.alasan_pending}
+                  <p class="max-w-xs text-right text-[11px] text-amber-600">
+                    {item.alasan_pending}
+                  </p>
+                {/if}
               {/each}
             </div>
-            <p class="w-16 text-right font-semibold text-gray-800">
-              {r.total_pcs} pcs
-            </p>
+            <div class="w-24 text-right">
+              <p class="font-semibold text-gray-800">{totalKeluarRecord} pcs</p>
+              {#if totalPendingRecord > 0}
+                <p class="text-[11px] font-semibold text-amber-600">
+                  {totalPendingRecord} pending
+                </p>
+              {/if}
+            </div>
             <p class="w-28 text-right text-xs text-gray-400">
               {formatDateTime(r.tanggal_keluar)}
             </p>
@@ -1240,7 +1321,7 @@ let fJumlah = $state(0);
         {/each}
       </div>
       <p class="mt-2 text-right text-[11px] text-gray-300">
-        Menampilkan {riwayatKeluar.length} catatan terbaru
+        Menampilkan {riwayatKeluarTampil.length} catatan terbaru
       </p>
     {/if}
   </div>

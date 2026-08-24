@@ -46,7 +46,11 @@
       "Bash(yes)",
       "Bash(npx svelte-check:*)",
       "Bash(\"/c/Users/ervid/AppData/Local/Android/Sdk/platform-tools/adb\" logcat *)",
-      "Skill(claude-api)"
+      "Skill(claude-api)",
+      "Read(//d/Android/zarqa-erp-app/src/main/**)",
+      "Read(//d/Android/**)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Dev\\\\Android\\\\zarqa-erp-app\" -Recurse -Filter \"*.kt\" -File)",
+      "Bash(Select-Object FullName)"
     ]
   }
 }

@@ -40,6 +40,21 @@
       (k) => k.tipe_akun === "temporary" && isExpired(k.tanggal_expired),
     ).length,
   );
+  let totalExpiringSoon = $derived(
+    karyawanList.filter(
+      (k) =>
+        k.tipe_akun === "temporary" &&
+        !isExpired(k.tanggal_expired) &&
+        daysUntil(k.tanggal_expired) <= 14,
+    ).length,
+  );
+  let tipePenggajianCount = $derived.by(() => {
+    const map = { harian: 0, mingguan: 0, bulanan: 0, tahunan: 0 };
+    for (const k of karyawanList) {
+      map[k.tipe_penggajian ?? "bulanan"] += 1;
+    }
+    return map;
+  });
 
   let totalPcsMingguIni = $derived(
     penggajianMingguIni.reduce((s, d) => s + d.total_pcs, 0),
@@ -64,6 +79,13 @@
     if (!ts) return false;
     const d = ts.toDate ? ts.toDate() : new Date(ts);
     return d < new Date();
+  }
+
+  function daysUntil(ts: any): number {
+    if (!ts) return Number.POSITIVE_INFINITY;
+    const d = ts.toDate ? ts.toDate() : new Date(ts);
+    const diff = d.getTime() - Date.now();
+    return Math.ceil(diff / (1000 * 60 * 60 * 24));
   }
 
   function rupiah(n: number): string {
@@ -209,6 +231,51 @@
   </div>
 
   <!-- ── Distribusi + Penggajian ────────────────────────────────────── -->
+  <div class="mb-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
+    <div class="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
+      <div class="flex items-center justify-between">
+        <p class="text-xs font-medium uppercase tracking-wide text-gray-400">Status Kontrak</p>
+        <ClockIcon class="h-4 w-4 text-gray-300" />
+      </div>
+      <div class="mt-3 grid grid-cols-3 gap-2 text-center">
+        <div class="rounded-lg bg-green-50 px-2 py-2">
+          <p class="text-lg font-bold text-green-700">{totalPermanent}</p>
+          <p class="text-[10px] text-green-600">Tetap</p>
+        </div>
+        <div class="rounded-lg bg-orange-50 px-2 py-2">
+          <p class="text-lg font-bold text-orange-700">{totalTemporary}</p>
+          <p class="text-[10px] text-orange-600">Kontrak</p>
+        </div>
+        <div class="rounded-lg {totalExpired + totalExpiringSoon > 0 ? 'bg-red-50' : 'bg-gray-50'} px-2 py-2">
+          <p class="text-lg font-bold {totalExpired + totalExpiringSoon > 0 ? 'text-red-700' : 'text-gray-400'}">
+            {totalExpired + totalExpiringSoon}
+          </p>
+          <p class="text-[10px] {totalExpired + totalExpiringSoon > 0 ? 'text-red-600' : 'text-gray-400'}">Perlu cek</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="rounded-xl border border-gray-100 bg-white p-4 shadow-sm lg:col-span-2">
+      <div class="flex items-center justify-between">
+        <p class="text-xs font-medium uppercase tracking-wide text-gray-400">Tipe Penggajian</p>
+        <PieChartIcon class="h-4 w-4 text-gray-300" />
+      </div>
+      <div class="mt-3 grid grid-cols-4 gap-2 text-center">
+        {#each [
+          ["Harian", tipePenggajianCount.harian],
+          ["Mingguan", tipePenggajianCount.mingguan],
+          ["Bulanan", tipePenggajianCount.bulanan],
+          ["Tahunan", tipePenggajianCount.tahunan],
+        ] as item}
+          <div class="rounded-lg bg-gray-50 px-2 py-2">
+            <p class="text-lg font-bold text-gray-800">{item[1]}</p>
+            <p class="text-[10px] text-gray-500">{item[0]}</p>
+          </div>
+        {/each}
+      </div>
+    </div>
+  </div>
+
   <div class="mb-5 grid grid-cols-1 gap-4 lg:grid-cols-2">
     <!-- Top Karyawan Terproduktif (Minggu Ini) -->
     <div

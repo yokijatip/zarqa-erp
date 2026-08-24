@@ -62,6 +62,7 @@
   let fKain = $state<
     {
       kain_id: string;
+      jenis_kain: string;
       nama_kain: string;
       satuan: "yard" | "kg";
       jumlah_dipakai: string;
@@ -165,6 +166,28 @@
       ? (selectedPotonganGroup?.ukuran_tersedia ?? [])
       : (selectedModel?.ukuran_tersedia ?? []),
   );
+
+  let stokKainGroups = $derived.by(() => {
+    const map = new Map<string, typeof stokKainList>();
+    for (const kain of stokKainList) {
+      const list = map.get(kain.nama_kain) ?? [];
+      list.push(kain);
+      map.set(kain.nama_kain, list);
+    }
+    return Array.from(map.entries())
+      .map(([nama_kain, items]) => ({
+        nama_kain,
+        total: items.reduce((sum, item) => sum + item.stok_tersedia, 0),
+        items: [...items].sort((a, b) =>
+          (a.nama_warna ?? "").localeCompare(b.nama_warna ?? ""),
+        ),
+      }))
+      .sort((a, b) => a.nama_kain.localeCompare(b.nama_kain));
+  });
+
+  function stokKainByJenis(namaKain: string) {
+    return stokKainGroups.find((group) => group.nama_kain === namaKain)?.items ?? [];
+  }
 
   // Total yard kain yang dipakai (sum dari semua kain entry) — hanya info,
   // tidak dipakai lagi untuk kalkulasi pcs jadi (lihat perKainEstimasi).
@@ -713,6 +736,7 @@
                   {@const kainStok = stokKainList.find(
                     (k) => k.id === kainEntry.kain_id,
                   )}
+                  {@const pilihanWarnaKain = stokKainByJenis(kainEntry.jenis_kain)}
                   {@const est = perKainEstimasi.find((e) => e.index === i)}
                   <div
                     class="flex flex-col gap-1.5 rounded-lg border border-gray-200 bg-gray-50 p-3"
@@ -735,6 +759,110 @@
                         </button>
                       {/if}
                     </div>
+                    <div class="grid gap-2 sm:grid-cols-[1fr_1.15fr]">
+                      <div>
+                        <p class="mb-0.5 text-[10px] text-gray-500">
+                          Jenis kain
+                        </p>
+                        <Select.Root
+                          type="single"
+                          value={kainEntry.jenis_kain || undefined}
+                          onValueChange={(val: string | undefined) => {
+                            kainEntry.jenis_kain = val ?? "";
+                            kainEntry.kain_id = "";
+                            kainEntry.nama_kain = "";
+                            kainEntry.satuan = "yard";
+                          }}
+                        >
+                          <Select.Trigger class="h-8 border-gray-200 bg-white px-3 text-xs">
+                            {#if kainEntry.jenis_kain}
+                              <span class="truncate">{kainEntry.jenis_kain}</span>
+                            {:else}
+                              <span class="text-gray-400">Pilih jenis</span>
+                            {/if}
+                          </Select.Trigger>
+                          <Select.Content preventScroll={false} class="z-[100] max-h-56 text-xs">
+                            {#each stokKainGroups as group}
+                              <Select.Item value={group.nama_kain} class="text-xs">
+                                <span class="flex w-full items-center gap-2">
+                                  <span class="truncate">{group.nama_kain}</span>
+                                  <span class="ml-auto text-gray-400">
+                                    {group.items.length} warna
+                                  </span>
+                                </span>
+                              </Select.Item>
+                            {/each}
+                          </Select.Content>
+                        </Select.Root>
+                      </div>
+
+                      <div>
+                        <p class="mb-0.5 text-[10px] text-gray-500">
+                          Warna / stok
+                        </p>
+                        <Select.Root
+                          type="single"
+                          value={kainEntry.kain_id || undefined}
+                          onValueChange={(val: string | undefined) => {
+                            if (val) {
+                              kainEntry.kain_id = val;
+                              const found = stokKainList.find((k) => k.id === val);
+                              if (found) {
+                                kainEntry.jenis_kain = found.nama_kain;
+                                kainEntry.satuan = found.satuan;
+                                kainEntry.nama_kain = found.nama_warna
+                                  ? `${found.nama_kain} (${found.nama_warna})`
+                                  : found.nama_kain;
+                              }
+                            }
+                          }}
+                        >
+                          <Select.Trigger
+                            class="h-8 border-gray-200 bg-white px-3 text-xs"
+                            disabled={!kainEntry.jenis_kain}
+                          >
+                            {#if kainStok}
+                              <span class="flex min-w-0 items-center gap-2">
+                                {#if kainStok.kode_hex_warna}
+                                  <span
+                                    class="h-2.5 w-2.5 shrink-0 rounded-full"
+                                    style="background-color: {kainStok.kode_hex_warna}"
+                                  ></span>
+                                {/if}
+                                <span class="truncate">{kainStok.nama_warna ?? "Tanpa warna"}</span>
+                                <span class="ml-auto shrink-0 text-gray-400">
+                                  {kainStok.stok_tersedia} {kainStok.satuan}
+                                </span>
+                              </span>
+                            {:else if kainEntry.jenis_kain}
+                              <span class="text-gray-400">Pilih warna</span>
+                            {:else}
+                              <span class="text-gray-400">Pilih jenis dulu</span>
+                            {/if}
+                          </Select.Trigger>
+                          <Select.Content preventScroll={false} class="z-[100] max-h-56 text-xs">
+                            {#each pilihanWarnaKain as kain}
+                              <Select.Item value={kain.id} class="text-xs">
+                                <span class="flex w-full items-center gap-2">
+                                  {#if kain.kode_hex_warna}
+                                    <span
+                                      class="h-2.5 w-2.5 shrink-0 rounded-full"
+                                      style="background-color: {kain.kode_hex_warna}"
+                                    ></span>
+                                  {/if}
+                                  <span class="truncate">{kain.nama_warna ?? "Tanpa warna"}</span>
+                                  <span class="ml-auto shrink-0 text-gray-400">
+                                    {kain.stok_tersedia} {kain.satuan}
+                                  </span>
+                                </span>
+                              </Select.Item>
+                            {/each}
+                          </Select.Content>
+                        </Select.Root>
+                      </div>
+                    </div>
+
+                    <div class="hidden">
                     <Select.Root
                       type="single"
                       value={kainEntry.kain_id || undefined}
@@ -799,6 +927,7 @@
                         {/each}
                       </Select.Content>
                     </Select.Root>
+                    </div>
 
                     {#if kainStok}
                       <div class="flex flex-wrap items-center gap-1.5">
@@ -825,7 +954,7 @@
                     <div class="grid grid-cols-2 gap-2">
                       <div>
                         <label class="mb-0.5 block text-[10px] text-gray-500">
-                          Jumlah dipakai (yard)
+                          Jumlah dipakai ({kainEntry.satuan})
                         </label>
                         <input
                           type="number"
@@ -867,6 +996,7 @@
                       ...fKain,
                       {
                         kain_id: "",
+                        jenis_kain: "",
                         nama_kain: "",
                         satuan: "yard" as const,
                         jumlah_dipakai: "",

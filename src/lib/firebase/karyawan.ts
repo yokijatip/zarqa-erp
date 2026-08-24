@@ -6,7 +6,7 @@ import {
 } from 'firebase/firestore';
 import { PUBLIC_FIREBASE_API_KEY } from '$env/static/public';
 import { db } from './config';
-import type { UserProfile, UserRole } from '$lib/types';
+import type { UserProfile, UserRole, TipePenggajian } from '$lib/types';
 
 const COL = 'users';
 
@@ -43,7 +43,7 @@ export interface CreateAkunInput {
   role: UserRole;
   tipe_akun: 'permanent' | 'temporary';
   tanggal_expired?: Date | null;
-  tipe_penggajian?: 'harian' | 'mingguan' | 'bulanan';
+  tipe_penggajian?: TipePenggajian;
 }
 
 // Buat akun Firebase Auth + profil Firestore
@@ -112,7 +112,7 @@ export interface UpdateKaryawanInput {
   role?: UserRole;
   tipe_akun?: 'permanent' | 'temporary';
   tanggal_expired?: Date | null;
-  tipe_penggajian?: 'harian' | 'mingguan' | 'bulanan';
+  tipe_penggajian?: TipePenggajian;
 }
 
 export async function updateKaryawan(uid: string, data: UpdateKaryawanInput): Promise<void> {

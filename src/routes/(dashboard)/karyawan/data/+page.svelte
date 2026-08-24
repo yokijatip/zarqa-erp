@@ -76,7 +76,14 @@
     harian: "Harian",
     mingguan: "Mingguan",
     bulanan: "Bulanan",
+    tahunan: "Tahunan",
   };
+  const TIPE_PENGGAJIAN_OPTIONS: TipePenggajian[] = [
+    "harian",
+    "mingguan",
+    "bulanan",
+    "tahunan",
+  ];
 
   // ── Helpers ────────────────────────────────────────────────────────
   function showSuccess(msg: string) {
@@ -436,16 +443,15 @@
         {/if}
       </div>
     {:else}
-      <Table.Root>
+      <Table.Root class="table-fixed">
         <Table.Header>
           <Table.Row class="bg-gray-50 hover:bg-gray-50">
-            <Table.Head>Nama</Table.Head>
-            <Table.Head>Email</Table.Head>
-            <Table.Head>Role</Table.Head>
-            <Table.Head class="text-center">Tipe</Table.Head>
-            <Table.Head class="text-center">Penggajian</Table.Head>
-            <Table.Head>Expired</Table.Head>
-            <Table.Head></Table.Head>
+            <Table.Head class="w-[32%]">Karyawan</Table.Head>
+            <Table.Head class="w-[16%]">Role</Table.Head>
+            <Table.Head class="w-[13%] text-center">Tipe</Table.Head>
+            <Table.Head class="w-[14%] text-center">Penggajian</Table.Head>
+            <Table.Head class="w-[10%]">Expired</Table.Head>
+            <Table.Head class="w-[15%]"></Table.Head>
           </Table.Row>
         </Table.Header>
         <Table.Body>
@@ -453,14 +459,18 @@
             {@const expired = isExpired(k.tanggal_expired)}
             <Table.Row>
               <Table.Cell>
-                <p class="text-sm font-medium text-gray-800">{k.name}</p>
-              </Table.Cell>
-              <Table.Cell>
-                <p class="text-sm text-gray-600">{k.email}</p>
+                <div class="min-w-0">
+                  <p class="truncate text-sm font-semibold text-gray-800" title={k.name}>
+                    {k.name}
+                  </p>
+                  <p class="mt-0.5 truncate text-xs text-gray-500" title={k.email}>
+                    {k.email}
+                  </p>
+                </div>
               </Table.Cell>
               <Table.Cell>
                 <span
-                  class="rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700"
+                  class="inline-flex max-w-full whitespace-nowrap rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700"
                 >
                   {ROLE_LABEL[k.role] ?? k.role}
                 </span>
@@ -468,13 +478,13 @@
               <Table.Cell class="text-center">
                 {#if k.tipe_akun === "temporary"}
                   <span
-                    class="inline-block rounded-full bg-orange-100 px-2.5 py-0.5 text-xs font-semibold text-orange-700"
+                    class="inline-flex whitespace-nowrap rounded-full bg-orange-100 px-2.5 py-0.5 text-xs font-semibold text-orange-700"
                   >
                     Temporary
                   </span>
                 {:else}
                   <span
-                    class="inline-block rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-semibold text-green-700"
+                    class="inline-flex whitespace-nowrap rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-semibold text-green-700"
                   >
                     Permanent
                   </span>
@@ -482,7 +492,7 @@
               </Table.Cell>
               <Table.Cell class="text-center">
                 <span
-                  class="inline-block rounded-full bg-purple-50 px-2.5 py-0.5 text-xs font-semibold text-purple-700"
+                  class="inline-flex whitespace-nowrap rounded-full bg-purple-50 px-2.5 py-0.5 text-xs font-semibold text-purple-700"
                 >
                   {TIPE_PENGGAJIAN_LABEL[k.tipe_penggajian ?? "bulanan"]}
                 </span>
@@ -501,7 +511,7 @@
                 {/if}
               </Table.Cell>
               <Table.Cell class="text-right">
-                <div class="flex justify-end gap-2">
+                <div class="flex justify-end gap-2 whitespace-nowrap">
                   <Button
                     variant="outline"
                     size="sm"
@@ -676,8 +686,8 @@
         <label class="mb-1.5 block text-sm font-medium text-gray-700">
           Tipe Penggajian <span class="text-red-500">*</span>
         </label>
-        <div class="flex gap-2">
-          {#each (["harian", "mingguan", "bulanan"] as const) as tipe}
+        <div class="grid grid-cols-2 gap-2">
+          {#each TIPE_PENGGAJIAN_OPTIONS as tipe}
             <button
               type="button"
               onclick={() => (fTipePenggajian = tipe)}
@@ -695,6 +705,8 @@
             Gaji dihitung per hari kerja (borongan)
           {:else if fTipePenggajian === "mingguan"}
             Gaji dihitung per pcs (untuk tukang steam, jahit, cutting)
+          {:else if fTipePenggajian === "tahunan"}
+            Gaji tetap per tahun
           {:else}
             Gaji tetap per bulan
           {/if}
@@ -804,8 +816,8 @@
           <label class="mb-1.5 block text-sm font-medium text-gray-700">
             Tipe Penggajian <span class="text-red-500">*</span>
           </label>
-          <div class="flex gap-2">
-            {#each (["harian", "mingguan", "bulanan"] as const) as tipe}
+          <div class="grid grid-cols-2 gap-2">
+            {#each TIPE_PENGGAJIAN_OPTIONS as tipe}
               <button
                 type="button"
                 onclick={() => (eTipePenggajian = tipe)}

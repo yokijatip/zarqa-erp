@@ -78,6 +78,7 @@ export async function restockKain(
 
     transaction.update(ref, {
       stok_tersedia: stokBaru,
+      ...(hargaPerUnit != null && hargaPerUnit > 0 ? { harga_per_unit: hargaPerUnit } : {}),
       ...(finalCatatan !== undefined ? { catatan: finalCatatan } : {}),
       updatedAt: serverTimestamp(),
     });

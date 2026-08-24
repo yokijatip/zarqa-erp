@@ -123,6 +123,15 @@
   let jahitPcs   = $derived(jahitBatches.reduce((s, b) => s + (b.pcs_saat_ini ?? b.total_pcs), 0));
   let steamPcs   = $derived(steamBatches.reduce((s, b) => s + (b.pcs_saat_ini ?? b.total_pcs), 0));
   let terlambatBatches = $derived(filteredBatches.filter(b => hitungHari(b.createdAt) > 5));
+  let totalAktifPcs = $derived(cuttingPcs + jahitPcs + steamPcs);
+  let bottleneck = $derived.by(() => {
+    const items = [
+      { label: "Cutting", count: cuttingBatches.length, pcs: cuttingPcs },
+      { label: "Jahit", count: jahitBatches.length, pcs: jahitPcs },
+      { label: "Steam", count: steamBatches.length, pcs: steamPcs },
+    ];
+    return items.sort((a, b) => b.count - a.count || b.pcs - a.pcs)[0];
+  });
 
   // ── Umur batch ────────────────────────────────────────────────────
   let batchUmur = $derived({
@@ -137,7 +146,12 @@
   let groupsByKepala = $derived.by((): Group[] => {
     const map = new Map<string, BatchProduksi[]>();
     for (const b of filteredBatches) {
-      const nama = b.penugasan?.jahit?.nama ?? '— Belum ditugaskan';
+      const nama =
+        CUTTING_STAGES.includes(b.status)
+          ? (b.penugasan?.cutting?.nama ?? '— Belum ditugaskan')
+          : JAHIT_STAGES.includes(b.status)
+            ? (b.penugasan?.jahit?.nama ?? '— Belum ditugaskan')
+            : (b.penugasan?.steam?.nama ?? '— Belum ditugaskan');
       if (!map.has(nama)) map.set(nama, []);
       map.get(nama)!.push(b);
     }
@@ -284,7 +298,7 @@
         <ActivityIcon class="h-4 w-4 text-gray-300" />
       </div>
       <p class="text-2xl font-bold text-gray-900">{filteredBatches.length}</p>
-      <p class="mt-1 text-xs text-gray-400">{(cuttingPcs + jahitPcs + steamPcs).toLocaleString('id-ID')} pcs total</p>
+      <p class="mt-1 text-xs text-gray-400">{totalAktifPcs.toLocaleString('id-ID')} pcs total</p>
     </div>
     <!-- Cutting -->
     <div class="rounded-xl border border-orange-100 bg-orange-50 p-4 shadow-sm">
@@ -342,6 +356,28 @@
 
 <!-- ── Grafik Produksi ─────────────────────────────────────────────── -->
 {#if !loading && filteredBatches.length > 0}
+  <div class="mb-5 grid grid-cols-1 gap-3 lg:grid-cols-3">
+    <div class="rounded-xl border border-gray-100 bg-white px-4 py-3 shadow-sm">
+      <p class="text-xs font-medium text-gray-400">Fokus Hari Ini</p>
+      <p class="mt-1 text-sm font-semibold text-gray-800">
+        {bottleneck.label}
+        <span class="font-normal text-gray-400">· {bottleneck.count} batch</span>
+      </p>
+    </div>
+    <div class="rounded-xl border border-gray-100 bg-white px-4 py-3 shadow-sm">
+      <p class="text-xs font-medium text-gray-400">Risiko Lama</p>
+      <p class="mt-1 text-sm font-semibold {terlambatBatches.length > 0 ? 'text-red-600' : 'text-gray-800'}">
+        {terlambatBatches.length > 0 ? `${terlambatBatches.length} batch perlu dicek` : "Tidak ada"}
+      </p>
+    </div>
+    <div class="rounded-xl border border-gray-100 bg-white px-4 py-3 shadow-sm">
+      <p class="text-xs font-medium text-gray-400">Output Aktif</p>
+      <p class="mt-1 text-sm font-semibold text-gray-800">
+        {totalAktifPcs.toLocaleString("id-ID")} pcs
+      </p>
+    </div>
+  </div>
+
   {@const totalBatch = filteredBatches.length}
   {@const maxModelPcs = modelRanking[0]?.totalPcs ?? 1}
   <div class="mb-5 grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -475,7 +511,7 @@
       onclick={() => viewMode = 'kepala'}
       class="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition {viewMode === 'kepala' ? 'bg-gray-900 text-white' : 'text-gray-500 hover:bg-gray-50'}"
     >
-      <UsersIcon class="h-3 w-3" /> Per Kepala Jahit
+      <UsersIcon class="h-3 w-3" /> Penanggung Jawab
     </button>
     <button
       onclick={() => viewMode = 'model'}

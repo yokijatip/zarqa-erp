@@ -13,8 +13,8 @@ export type UserRole =
   | 'developer'
   | 'owner';
 
-// Tipe penggajian: harian (borongan/hari), mingguan (per pcs/minggu), bulanan (gaji tetap)
-export type TipePenggajian = 'harian' | 'mingguan' | 'bulanan';
+// Tipe penggajian: harian (borongan/hari), mingguan (per pcs/minggu), bulanan/tahunan (gaji tetap)
+export type TipePenggajian = 'harian' | 'mingguan' | 'bulanan' | 'tahunan';
 
 export interface UserProfile {
   uid: string;
@@ -24,7 +24,7 @@ export interface UserProfile {
   photoURL?: string;
   tipe_akun?: 'permanent' | 'temporary';
   tanggal_expired?: Timestamp;
-  // Tipe penggajian: harian (borongan/hari), mingguan (per pcs/minggu), bulanan (gaji tetap)
+  // Tipe penggajian: harian (borongan/hari), mingguan (per pcs/minggu), bulanan/tahunan (gaji tetap)
   tipe_penggajian?: TipePenggajian;
   // Tarif upah per pcs (Rp) untuk karyawan divisi produksi (Cutting/Jahit/Steam).
   // Dipakai untuk menghitung Penggajian mingguan — hanya relevan untuk role
@@ -44,6 +44,16 @@ export interface Warna {
 }
 
 export type WarnaInput = Omit<Warna, 'id' | 'createdAt' | 'updatedAt'>;
+
+export interface MasterKain {
+  id: string;
+  nama_kain: string;
+  nama_lower?: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export type MasterKainInput = Pick<MasterKain, 'nama_kain'>;
 
 // ─── RIWAYAT STOK KAIN ──────────────────────────────────────────
 
@@ -73,11 +83,13 @@ export interface RiwayatStokKain {
 
 export interface StokKain {
   id: string;
+  master_kain_id?: string;
   nama_kain: string;
   warna_id?: string;
   nama_warna?: string;
   kode_hex_warna?: string;
   satuan: 'yard' | 'kg';
+  harga_per_unit?: number;
   stok_tersedia: number;
   stok_terpakai: number;
   catatan?: string;
@@ -108,6 +120,8 @@ export interface ModelBaju {
   deskripsi?: string;
   ukuran_tersedia: UkuranBaju[];
   warna_tersedia?: WarnaTersedia[];
+  harga_jual?: number;
+  harga_produksi?: number;
   tarif_cutting?: number;
   tarif_jahit?: number;
   tarif_steam?: number;
@@ -317,6 +331,7 @@ export type TipeRiwayatBarangJadi =
   | 'masuk_stok_awal'
   | 'kurangi_manual'
   | 'set_manual'
+  | 'barang_keluar'
   | 'batal_keluar'
   | 'reject_diperbaiki';
 
@@ -350,6 +365,20 @@ export interface DetailKeluar {
   sumber?: SumberProduksi[];
 }
 
+export type StatusBarangKeluarItem = 'keluar' | 'pending';
+export type StatusBarangKeluar = 'selesai' | 'pending';
+
+export interface BarangKeluarItem {
+  model_id: string;
+  nama_model: string;
+  nama_warna?: string;
+  kode_hex_warna?: string;
+  detail_keluar: DetailKeluar[];
+  total_pcs: number;
+  status: StatusBarangKeluarItem;
+  alasan_pending?: string;
+}
+
 // Daftar tujuan pengiriman baku — dipakai di dropdown form & rekap,
 // supaya nilai `tujuan` selalu konsisten dan bisa direkap per kategori.
 export const TUJUAN_PENGIRIMAN_OPTIONS = [
@@ -366,15 +395,20 @@ export type TujuanPengiriman = (typeof TUJUAN_PENGIRIMAN_OPTIONS)[number];
 export interface BarangKeluar {
   id: string;
   model_id: string;
+  model_ids?: string[];
   nama_model: string;
   nama_warna?: string;
   kode_hex_warna?: string;
   detail_keluar: DetailKeluar[];
+  items?: BarangKeluarItem[];
+  status?: StatusBarangKeluar;
+  total_pending_pcs?: number;
   total_pcs: number;
   // Tetap `string` (bukan union) supaya catatan lama dengan teks bebas
   // masih valid secara tipe. Form baru hanya mengisi lewat dropdown
   // TUJUAN_PENGIRIMAN_OPTIONS, jadi data ke depannya konsisten.
   tujuan: string;
+  nama_reseller?: string;
   keterangan?: string;
   dicatat_oleh: string;
   tanggal_keluar?: Timestamp;

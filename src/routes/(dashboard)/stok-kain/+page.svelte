@@ -1,6 +1,9 @@
 <script lang="ts">
   import { afterNavigate } from "$app/navigation";
   import {
+    addMasterKain,
+  } from "$lib/firebase/master-kain";
+  import {
     addStokKain,
     restockKain,
     updateStokKain,
@@ -9,8 +12,8 @@
     getRiwayatStokKain,
   } from "$lib/firebase/stok-kain";
   import { getBatchListByDateRange } from "$lib/firebase/batch-produksi";
-  import { stokKainCache, warnaCache } from "$lib/stores/data-cache.svelte";
-  import type { StokKain, Warna, BatchProduksi, RiwayatStokKain } from "$lib/types";
+  import { stokKainCache, warnaCache, masterKainCache } from "$lib/stores/data-cache.svelte";
+  import type { StokKain, Warna, MasterKain, BatchProduksi, RiwayatStokKain } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
   import * as Select from "$lib/components/ui/select/index.js";
@@ -24,6 +27,7 @@
   // ── State ──────────────────────────────────────────────────────────
   let stokList = $state<StokKain[]>([]);
   let warnaList = $state<Warna[]>([]);
+  let masterKainList = $state<MasterKain[]>([]);
   let loading = $state(true);
   let saving = $state(false);
   let errorMsg = $state<string | null>(null);
@@ -35,6 +39,7 @@
 
   // Dialog state
   let openTambah = $state(false);
+  let openMasterKain = $state(false);
   let openRestock = $state(false);
   let openKurangi = $state(false);
   let openEdit = $state(false);
@@ -77,12 +82,25 @@
     });
   }
 
+  function formatTanggalBeli(value?: string): string {
+    if (!value) return "-";
+    const d = new Date(`${value}T00:00:00`);
+    if (Number.isNaN(d.getTime())) return value;
+    return d.toLocaleDateString("id-ID", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    });
+  }
+
   // Form: tambah kain
-  let fNama = $state("");
+  let fMasterKainId = $state("");
   let fWarnaId = $state("");
   let fSatuan = $state<"yard" | "kg">("yard");
   let fStok = $state<number | "">("");
+  let fHargaPerUnit = $state<number | "">("");
   let fCatatan = $state("");
+  let mNamaKain = $state("");
 
   // Form: restock
   let rJumlah = $state<number | "">("");
@@ -348,6 +366,15 @@
     };
   }
 
+  function formatRupiah(value?: number | null) {
+    if (value == null || value <= 0) return "-";
+    return new Intl.NumberFormat("id-ID", {
+      style: "currency",
+      currency: "IDR",
+      maximumFractionDigits: 0,
+    }).format(value);
+  }
+
   function showSuccess(msg: string) {
     successMsg = msg;
     setTimeout(() => (successMsg = null), 3000);
@@ -363,9 +390,10 @@
     loading = true;
     errorMsg = null;
     try {
-      [stokList, warnaList] = await Promise.all([
+      [stokList, warnaList, masterKainList] = await Promise.all([
         stokKainCache.get(force),
         warnaCache.get(force),
+        masterKainCache.get(force),
       ]);
     } catch {
       showError("Gagal memuat data. Periksa koneksi Firebase.");
@@ -378,14 +406,38 @@
     return warnaList.find((w) => w.id === warnaId) ?? null;
   }
 
+  function getSelectedMasterKain(masterKainId: string) {
+    return masterKainList.find((k) => k.id === masterKainId) ?? null;
+  }
+
+  async function refreshFormMasters() {
+    try {
+      [warnaList, masterKainList] = await Promise.all([
+        warnaCache.get(true),
+        masterKainCache.get(true),
+      ]);
+    } catch {
+      showError("Gagal memuat master kain atau warna.");
+    }
+  }
+
   // ── Actions ─────────────────────────────────────────────────────────
   async function submitTambah() {
-    if (!fNama.trim() || fStok === "" || Number(fStok) <= 0) return;
+    const selectedMasterKain = getSelectedMasterKain(fMasterKainId);
+    if (
+      !selectedMasterKain ||
+      fStok === "" ||
+      Number(fStok) <= 0 ||
+      fHargaPerUnit === "" ||
+      Number(fHargaPerUnit) <= 0
+    )
+      return;
     saving = true;
     try {
       const selectedWarna = getSelectedWarna(fWarnaId);
       await addStokKain({
-        nama_kain: fNama.trim(),
+        master_kain_id: selectedMasterKain.id,
+        nama_kain: selectedMasterKain.nama_kain,
         ...(selectedWarna
           ? {
               warna_id: selectedWarna.id,
@@ -394,16 +446,18 @@
             }
           : {}),
         satuan: fSatuan,
+        harga_per_unit: Number(fHargaPerUnit),
         stok_tersedia: Number(fStok),
         ...(fCatatan.trim() ? { catatan: fCatatan.trim() } : {}),
       });
-      const namaKain = fNama.trim();
+      const namaKain = selectedMasterKain.nama_kain;
       await load(true);
       openTambah = false;
-      fNama = "";
+      fMasterKainId = "";
       fWarnaId = "";
       fSatuan = "yard";
       fStok = "";
+      fHargaPerUnit = "";
       fCatatan = "";
       showSuccess(`Kain "${namaKain}" berhasil ditambahkan.`);
     } catch {
@@ -443,12 +497,38 @@
   }
 
   function bukaTambah() {
-    fNama = "";
+    fMasterKainId = "";
     fWarnaId = "";
     fSatuan = "yard";
     fStok = "";
+    fHargaPerUnit = "";
     fCatatan = "";
     openTambah = true;
+    void refreshFormMasters();
+  }
+
+  function bukaMasterKain() {
+    mNamaKain = "";
+    openMasterKain = true;
+    void refreshFormMasters();
+  }
+
+  async function submitMasterKain() {
+    const namaKain = mNamaKain.trim();
+    if (!namaKain) return;
+    saving = true;
+    try {
+      const id = await addMasterKain({ nama_kain: namaKain });
+      masterKainList = await masterKainCache.get(true);
+      fMasterKainId = id;
+      mNamaKain = "";
+      openMasterKain = false;
+      showSuccess(`Jenis kain "${namaKain}" berhasil ditambahkan.`);
+    } catch (e: unknown) {
+      showError(e instanceof Error ? e.message : "Gagal menambahkan master kain.");
+    } finally {
+      saving = false;
+    }
   }
 
   function bukaRestock(kain: StokKain) {
@@ -601,22 +681,27 @@
       Kelola inventaris kain untuk produksi
     </p>
   </div>
-  <Button onclick={bukaTambah}>
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke-width="2.5"
-      stroke="currentColor"
-    >
-      <path
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        d="M12 4.5v15m7.5-7.5h-15"
-      />
-    </svg>
-    Tambah Kain
-  </Button>
+  <div class="flex flex-wrap gap-2">
+    <Button variant="outline" onclick={bukaMasterKain}>
+      Master Kain
+    </Button>
+    <Button onclick={bukaTambah}>
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke-width="2.5"
+        stroke="currentColor"
+      >
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          d="M12 4.5v15m7.5-7.5h-15"
+        />
+      </svg>
+      Tambah Kain
+    </Button>
+  </div>
 </div>
 
 <!-- ── Stats Row ──────────────────────────────────────────────── -->
@@ -1115,29 +1200,51 @@
 
 <!-- ── Dialog: Tambah Kain ──────────────────────────────────────── -->
 <Dialog.Root bind:open={openTambah}>
-  <Dialog.Content class="max-w-md">
-    <Dialog.Header>
+  <Dialog.Content class="flex max-h-[calc(100vh-2rem)] max-w-md flex-col overflow-hidden">
+    <Dialog.Header class="shrink-0">
       <Dialog.Title>Tambah Kain Baru</Dialog.Title>
       <Dialog.Description>
         Daftarkan jenis kain baru ke inventaris gudang.
       </Dialog.Description>
     </Dialog.Header>
 
-    <div class="space-y-4">
+    <div class="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
       <div>
-        <label
-          class="mb-1.5 block text-sm font-medium text-gray-700"
-          for="nama-kain"
+        <div class="mb-1.5 flex items-center justify-between gap-3">
+          <label class="block text-sm font-medium text-gray-700" for="jenis-kain">
+            Jenis Kain <span class="text-red-500">*</span>
+          </label>
+          <button
+            type="button"
+            class="text-xs font-medium text-blue-600 hover:underline"
+            onclick={bukaMasterKain}
+          >
+            Tambah jenis
+          </button>
+        </div>
+        <Select.Root
+          type="single"
+          value={fMasterKainId || undefined}
+          onValueChange={(val) => (fMasterKainId = val ?? "")}
         >
-          Nama Kain <span class="text-red-500">*</span>
-        </label>
-        <input
-          id="nama-kain"
-          type="text"
-          placeholder="Contoh: Katun Premium, Wolfis, Jersey..."
-          bind:value={fNama}
-          class="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none"
-        />
+          <Select.Trigger class="w-full" id="jenis-kain">
+            {#if fMasterKainId && getSelectedMasterKain(fMasterKainId)}
+              {getSelectedMasterKain(fMasterKainId)?.nama_kain}
+            {:else}
+              <span class="text-muted-foreground">-- Pilih jenis kain --</span>
+            {/if}
+          </Select.Trigger>
+          <Select.Content preventScroll={false}>
+            {#each masterKainList as kain}
+              <Select.Item value={kain.id}>{kain.nama_kain}</Select.Item>
+            {/each}
+          </Select.Content>
+        </Select.Root>
+        {#if masterKainList.length === 0}
+          <p class="mt-1 text-xs text-gray-400">
+            Belum ada master kain. Tambahkan jenis kain dulu agar nama tidak dobel.
+          </p>
+        {/if}
       </div>
 
       <div>
@@ -1241,6 +1348,23 @@
       <div>
         <label
           class="mb-1.5 block text-sm font-medium text-gray-700"
+          for="harga-awal"
+        >
+          Harga per {fSatuan} <span class="text-red-500">*</span>
+        </label>
+        <input
+          id="harga-awal"
+          type="number"
+          min="1"
+          placeholder="0"
+          bind:value={fHargaPerUnit}
+          class="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none"
+        />
+      </div>
+
+      <div>
+        <label
+          class="mb-1.5 block text-sm font-medium text-gray-700"
           for="catatan-tambah"
         >
           Catatan
@@ -1256,13 +1380,18 @@
       </div>
     </div>
 
-    <Dialog.Footer class="gap-2">
+    <Dialog.Footer class="shrink-0 gap-2 border-t border-gray-100 pt-4">
       <Button variant="outline" onclick={() => (openTambah = false)}>
         Batal
       </Button>
       <Button
         onclick={submitTambah}
-        disabled={saving || !fNama.trim() || fStok === "" || Number(fStok) <= 0}
+        disabled={saving ||
+          !getSelectedMasterKain(fMasterKainId) ||
+          fStok === "" ||
+          Number(fStok) <= 0 ||
+          fHargaPerUnit === "" ||
+          Number(fHargaPerUnit) <= 0}
       >
         {#if saving}
           <svg
@@ -1289,6 +1418,75 @@
 </Dialog.Root>
 
 <!-- ── Dialog: Restock ───────────────────────────────────────────── -->
+<!-- Dialog: Master Kain -->
+<Dialog.Root bind:open={openMasterKain}>
+  <Dialog.Content class="max-w-md">
+    <Dialog.Header>
+      <Dialog.Title>Master Kain</Dialog.Title>
+      <Dialog.Description>
+        Kelola nama jenis kain agar stok per warna tetap rapi.
+      </Dialog.Description>
+    </Dialog.Header>
+
+    <div class="space-y-4">
+      <div>
+        <label
+          class="mb-1.5 block text-sm font-medium text-gray-700"
+          for="master-nama-kain"
+        >
+          Nama Jenis Kain <span class="text-red-500">*</span>
+        </label>
+        <input
+          id="master-nama-kain"
+          type="text"
+          placeholder="Contoh: Sabrina, Wolfis, Katun Premium..."
+          bind:value={mNamaKain}
+          class="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none"
+        />
+      </div>
+
+      <div class="rounded-xl border border-gray-100 bg-gray-50 p-3">
+        <div class="mb-2 flex items-center justify-between">
+          <p class="text-xs font-semibold uppercase tracking-wide text-gray-500">
+            Jenis Tersedia
+          </p>
+          <span class="text-xs text-gray-400">{masterKainList.length} jenis</span>
+        </div>
+        {#if masterKainList.length === 0}
+          <p class="text-sm text-gray-400">Belum ada jenis kain.</p>
+        {:else}
+          <div class="max-h-44 space-y-1 overflow-y-auto pr-1">
+            {#each masterKainList as kain}
+              <button
+                type="button"
+                class="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-sm text-gray-700 hover:bg-white"
+                onclick={() => {
+                  fMasterKainId = kain.id;
+                  openMasterKain = false;
+                }}
+              >
+                <span>{kain.nama_kain}</span>
+                {#if fMasterKainId === kain.id}
+                  <span class="text-xs font-medium text-blue-600">Dipilih</span>
+                {/if}
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    </div>
+
+    <Dialog.Footer class="gap-2">
+      <Button variant="outline" onclick={() => (openMasterKain = false)}>
+        Tutup
+      </Button>
+      <Button onclick={submitMasterKain} disabled={saving || !mNamaKain.trim()}>
+        {saving ? "Menyimpan..." : "Simpan Jenis"}
+      </Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
+
 <Dialog.Root bind:open={openRestock}>
   <Dialog.Content class="max-w-md">
     <Dialog.Header>
@@ -1320,11 +1518,18 @@
               {selectedKain.nama_warna}
             </div>
           {/if}
-          <div class="mt-2 flex items-center gap-4 text-xs text-gray-500">
+          <div class="mt-3 grid grid-cols-2 gap-2 text-xs">
             <span
-              >Saat ini: <strong class="text-gray-700"
+              class="rounded-lg bg-white px-3 py-2 text-gray-500"
+              >Saat ini<br /><strong class="text-sm text-gray-800"
                 >{selectedKain.stok_tersedia.toLocaleString("id-ID")}
                 {selectedKain.satuan}</strong
+              ></span
+            >
+            <span
+              class="rounded-lg bg-white px-3 py-2 text-gray-500"
+              >Harga terakhir<br /><strong class="text-sm text-gray-800"
+                >{formatRupiah(selectedKain.harga_per_unit)}</strong
               ></span
             >
           </div>
@@ -1420,7 +1625,7 @@
           class="mb-1.5 block text-sm font-medium text-gray-700"
           for="restock-harga"
         >
-          Harga per {selectedKain?.satuan ?? "unit"}
+          Harga beli per {selectedKain?.satuan ?? "unit"}
           <span class="text-xs font-normal text-gray-400">(opsional)</span>
         </label>
         <input
@@ -1431,6 +1636,9 @@
           bind:value={rHargaPerUnit}
           class="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none"
         />
+        <p class="mt-1 text-xs text-gray-400">
+          Jika diisi, harga terakhir kain ini ikut diperbarui.
+        </p>
       </div>
     </div>
 
@@ -1860,6 +2068,33 @@
 
                 {#if item.catatan}
                   <p class="mt-0.5 text-xs text-gray-600">{item.catatan}</p>
+                {/if}
+
+                {#if isRestock && (item.tanggal_beli || item.supplier || item.harga_per_unit)}
+                  <div class="mt-2 grid gap-2 text-[11px] text-gray-500 sm:grid-cols-3">
+                    {#if item.tanggal_beli}
+                      <div class="rounded-lg bg-gray-50 px-2 py-1.5">
+                        <p class="text-gray-400">Tanggal beli</p>
+                        <p class="font-medium text-gray-700">
+                          {formatTanggalBeli(item.tanggal_beli)}
+                        </p>
+                      </div>
+                    {/if}
+                    {#if item.supplier}
+                      <div class="rounded-lg bg-gray-50 px-2 py-1.5">
+                        <p class="text-gray-400">Supplier</p>
+                        <p class="font-medium text-gray-700">{item.supplier}</p>
+                      </div>
+                    {/if}
+                    {#if item.harga_per_unit}
+                      <div class="rounded-lg bg-gray-50 px-2 py-1.5">
+                        <p class="text-gray-400">Harga beli</p>
+                        <p class="font-medium text-gray-700">
+                          {formatRupiah(item.harga_per_unit)} / {riwayatKain?.satuan}
+                        </p>
+                      </div>
+                    {/if}
+                  </div>
                 {/if}
 
                 <div class="mt-1 flex items-center gap-2 text-[11px] text-gray-400">

@@ -6,6 +6,8 @@
     StokKain,
     StokBarangJadi,
     BarangKeluar,
+    BarangKeluarItem,
+    ModelBaju,
     StatusBatch,
   } from "$lib/types";
   import { STATUS_LABEL } from "$lib/types";
@@ -14,6 +16,7 @@
     stokKainCache,
     barangJadiCache,
     barangKeluarCache,
+    modelBajuCache,
   } from "$lib/stores/data-cache.svelte";
   import { type DateRange, filterByRange, getPeriodRange } from "$lib/period";
   import PeriodSelector from "$lib/components/period-selector.svelte";
@@ -34,6 +37,7 @@
   let stokKain = $state<StokKain[]>([]);
   let barangJadi = $state<StokBarangJadi[]>([]);
   let barangKeluar = $state<BarangKeluar[]>([]);
+  let modelBaju = $state<ModelBaju[]>([]);
   let loading = $state(false);
   let lastLoaded = $state<Date | null>(null);
   let errorMsg = $state<string | null>(null);
@@ -59,22 +63,87 @@
   let totalKainYard = $derived(
     stokKain.reduce((s, k) => s + k.stok_tersedia, 0),
   );
+  let modelMap = $derived(new Map(modelBaju.map((m) => [m.id, m])));
+  let modelNameMap = $derived(new Map(modelBaju.map((m) => [m.nama_model, m])));
+
+  function fulfilledKeluarItems(k: BarangKeluar): BarangKeluarItem[] {
+    return k.items && k.items.length > 0
+      ? k.items.filter((item) => item.status !== "pending")
+      : [
+          {
+            model_id: k.model_id,
+            nama_model: k.nama_model,
+            ...(k.nama_warna ? { nama_warna: k.nama_warna } : {}),
+            ...(k.kode_hex_warna ? { kode_hex_warna: k.kode_hex_warna } : {}),
+            detail_keluar: k.detail_keluar,
+            total_pcs: k.total_pcs,
+            status: "keluar",
+          },
+        ];
+  }
+
+  let keluarItemsFiltered = $derived.by(() =>
+    keluarFiltered.flatMap((k) => fulfilledKeluarItems(k)),
+  );
   let totalKeluarPcs = $derived(
-    keluarFiltered.reduce((s, k) => s + k.total_pcs, 0),
+    keluarItemsFiltered.reduce((s, item) => s + item.total_pcs, 0),
   );
   let stokKainKritis = $derived(
     stokKain.filter((k) => k.stok_tersedia < 100),
   );
+  let stokKainRingkas = $derived.by(() =>
+    [...stokKain]
+      .sort((a, b) => {
+        const statusA = a.stok_tersedia < 100 ? 0 : a.stok_tersedia < 250 ? 1 : 2;
+        const statusB = b.stok_tersedia < 100 ? 0 : b.stok_tersedia < 250 ? 1 : 2;
+        if (statusA !== statusB) return statusA - statusB;
+        return a.stok_tersedia - b.stok_tersedia;
+      })
+      .slice(0, 5),
+  );
+
+  function stokKainLabel(kain: StokKain): string {
+    return kain.nama_warna
+      ? `${kain.nama_kain} - ${kain.nama_warna}`
+      : kain.nama_kain;
+  }
 
   // ── Derived: Estimasi Keuangan (Demo) ────────────────────────────
-  const HARGA_PER_PCS = 85_000;
-  const BIAYA_PER_PCS = 42_000;
+  let estimasiKeuangan = $derived.by(() => {
+    let pendapatan = 0;
+    let biayaProduksi = 0;
+    let pcsTanpaHargaJual = 0;
+    let pcsTanpaHargaProduksi = 0;
 
-  let estPendapatan = $derived(totalKeluarPcs * HARGA_PER_PCS);
-  let estBiaya = $derived(totalKeluarPcs * BIAYA_PER_PCS);
-  let estLaba = $derived(estPendapatan - estBiaya);
+    for (const item of keluarItemsFiltered) {
+      const model = modelMap.get(item.model_id) ?? modelNameMap.get(item.nama_model);
+      const hargaJual = model?.harga_jual ?? 0;
+      const hargaProduksi = model?.harga_produksi ?? 0;
+
+      if (hargaJual > 0) pendapatan += item.total_pcs * hargaJual;
+      else pcsTanpaHargaJual += item.total_pcs;
+
+      if (hargaProduksi > 0) biayaProduksi += item.total_pcs * hargaProduksi;
+      else pcsTanpaHargaProduksi += item.total_pcs;
+    }
+
+    const labaKotor = pendapatan - biayaProduksi;
+    return {
+      pendapatan,
+      biayaProduksi,
+      labaKotor,
+      labaBersih: labaKotor,
+      pcsTanpaHargaJual,
+      pcsTanpaHargaProduksi,
+    };
+  });
+
+  let estPendapatan = $derived(estimasiKeuangan.pendapatan);
+  let estBiaya = $derived(estimasiKeuangan.biayaProduksi);
+  let estLabaKotor = $derived(estimasiKeuangan.labaKotor);
+  let estLabaBersih = $derived(estimasiKeuangan.labaBersih);
   let marginPersen = $derived(
-    estPendapatan > 0 ? Math.round((estLaba / estPendapatan) * 100) : 0,
+    estPendapatan > 0 ? Math.round((estLabaKotor / estPendapatan) * 100) : 0,
   );
 
   // Compare to previous same-length period
@@ -86,7 +155,15 @@
     return barangKeluar.filter((k) => {
       const d = k.tanggal_keluar?.toDate?.();
       return d && d >= prevFrom && d <= prevTo;
-    }).reduce((s, k) => s + k.total_pcs, 0);
+    }).reduce(
+      (s, k) =>
+        s +
+        fulfilledKeluarItems(k).reduce(
+          (sum, item) => sum + item.total_pcs,
+          0,
+        ),
+      0,
+    );
   });
 
   let growthPersen = $derived.by(() => {
@@ -153,8 +230,11 @@
 
   function buildTopModels(source: BarangKeluar[], limit = 6) {
     const map: Record<string, number> = {};
-    for (const k of source)
-      map[k.nama_model] = (map[k.nama_model] ?? 0) + k.total_pcs;
+    for (const k of source) {
+      for (const item of fulfilledKeluarItems(k)) {
+        map[item.nama_model] = (map[item.nama_model] ?? 0) + item.total_pcs;
+      }
+    }
     return Object.entries(map)
       .sort((a, b) => b[1] - a[1])
       .slice(0, limit);
@@ -177,7 +257,15 @@
             kd.getMonth() === d.getMonth() &&
             kd.getFullYear() === d.getFullYear()
           );
-        }).reduce((s, k) => s + k.total_pcs, 0),
+        }).reduce(
+          (s, k) =>
+            s +
+            fulfilledKeluarItems(k).reduce(
+              (sum, item) => sum + item.total_pcs,
+              0,
+            ),
+          0,
+        ),
       );
     }
     return { labels, data };
@@ -236,7 +324,8 @@
           {
             label: "Total Keluar (pcs)",
             data: hasData ? tops.map(([, v]) => v) : [0],
-            backgroundColor: "#3b82f6",
+            backgroundColor: "#2563eb",
+            hoverBackgroundColor: "#1d4ed8",
             borderRadius: 7,
             borderSkipped: false,
           },
@@ -246,10 +335,17 @@
         indexAxis: "y",
         responsive: true,
         maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => `${(ctx.parsed.x ?? 0).toLocaleString("id-ID")} pcs keluar`,
+            },
+          },
+        },
         scales: {
           x: {
-            grid: { color: "#f8fafc" },
+            grid: { color: "#f1f5f9" },
             border: { display: false },
             ticks: { precision: 0, font: { size: 11 } },
             beginAtZero: true,
@@ -277,15 +373,15 @@
           {
             label: "Pcs Keluar",
             data: trend.data,
-            borderColor: "#3b82f6",
-            backgroundColor: "rgba(59,130,246,0.07)",
-            borderWidth: 2.5,
+            borderColor: "#2563eb",
+            backgroundColor: "rgba(37,99,235,0.08)",
+            borderWidth: 3,
             fill: true,
-            tension: 0.4,
+            tension: 0.35,
             pointBackgroundColor: "#fff",
-            pointBorderColor: "#3b82f6",
+            pointBorderColor: "#2563eb",
             pointBorderWidth: 2,
-            pointRadius: 5,
+            pointRadius: 4,
             pointHoverRadius: 7,
           },
         ],
@@ -293,7 +389,15 @@
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
+        interaction: { intersect: false, mode: "index" },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => `${(ctx.parsed.y ?? 0).toLocaleString("id-ID")} pcs keluar`,
+            },
+          },
+        },
         scales: {
           x: {
             grid: { display: false },
@@ -301,7 +405,7 @@
             ticks: { font: { size: 11 } },
           },
           y: {
-            grid: { color: "#f1f5f9" },
+            grid: { color: "#eef2f7" },
             border: { display: false },
             ticks: { precision: 0, font: { size: 11 } },
             beginAtZero: true,
@@ -324,7 +428,8 @@
       batchCache.isFresh() &&
       stokKainCache.isFresh() &&
       barangJadiCache.isFresh() &&
-      barangKeluarCache.isFresh();
+      barangKeluarCache.isFresh() &&
+      modelBajuCache.isFresh();
 
     if (!force && allFresh) {
       // Ambil dari cache tanpa loading state — instan
@@ -332,6 +437,7 @@
       stokKain = stokKainCache.data ?? [];
       barangJadi = barangJadiCache.data ?? [];
       barangKeluar = barangKeluarCache.data ?? [];
+      modelBaju = modelBajuCache.data ?? [];
       lastLoaded = batchCache.fetchedAt ? new Date(batchCache.fetchedAt) : lastLoaded;
       await tick();
       buildStatusChart();
@@ -343,11 +449,12 @@
     loading = true;
     errorMsg = null;
     try {
-      [batches, stokKain, barangJadi, barangKeluar] = await Promise.all([
+      [batches, stokKain, barangJadi, barangKeluar, modelBaju] = await Promise.all([
         batchCache.get(force),
         stokKainCache.get(force),
         barangJadiCache.get(force),
         barangKeluarCache.get(force),
+        modelBajuCache.get(force),
       ]);
       lastLoaded = new Date();
       await tick();
@@ -617,13 +724,12 @@
       <div class="flex items-center gap-2">
         <h2 class="text-sm font-semibold text-gray-800">Ringkasan Keuangan</h2>
         <span
-          class="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-400"
-          >ESTIMASI DEMO</span
+          class="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-600"
+          >ESTIMASI</span
         >
       </div>
       <p class="text-xs text-gray-400">
-        Berdasarkan volume keluar pada periode yang dipilih · Harga estimasi Rp
-        85.000/pcs
+        Berdasarkan barang keluar selesai dan harga di master model baju
       </p>
     </div>
     <span
@@ -641,7 +747,10 @@
         {formatRupiah(estPendapatan)}
       </p>
       <p class="mt-0.5 text-xs text-gray-400">
-        {totalKeluarPcs} pcs × Rp 85.000
+        {totalKeluarPcs.toLocaleString("id-ID")} pcs terkirim
+        {#if estimasiKeuangan.pcsTanpaHargaJual > 0}
+          · {estimasiKeuangan.pcsTanpaHargaJual.toLocaleString("id-ID")} pcs tanpa harga jual
+        {/if}
       </p>
     </div>
     <div class="rounded-lg border border-gray-100 bg-gray-50 p-4">
@@ -650,25 +759,33 @@
         {formatRupiah(estBiaya)}
       </p>
       <p class="mt-0.5 text-xs text-gray-400">
-        {totalKeluarPcs} pcs × Rp 42.000
+        Harga produksi model
+        {#if estimasiKeuangan.pcsTanpaHargaProduksi > 0}
+          · {estimasiKeuangan.pcsTanpaHargaProduksi.toLocaleString("id-ID")} pcs belum lengkap
+        {/if}
       </p>
     </div>
     <div class="rounded-lg border border-gray-100 bg-gray-50 p-4">
       <p class="text-xs font-medium text-gray-500">Est. Laba Kotor</p>
       <p class="mt-1.5 text-xl font-bold text-gray-900">
-        {formatRupiah(estLaba)}
+        {formatRupiah(estLabaKotor)}
       </p>
-      <p class="mt-0.5 text-xs text-gray-400">Pendapatan − Biaya</p>
+      <p class="mt-0.5 text-xs text-gray-400">Pendapatan - biaya produksi</p>
     </div>
     <div class="rounded-lg border border-gray-100 bg-gray-50 p-4">
-      <p class="text-xs font-medium text-gray-500">Margin Laba</p>
-      <p class="mt-1.5 text-xl font-bold text-gray-900">{marginPersen}%</p>
+      <p class="text-xs font-medium text-gray-500">Est. Laba Bersih</p>
+      <p class="mt-1.5 text-xl font-bold text-gray-900">
+        {formatRupiah(estLabaBersih)}
+      </p>
       <div class="mt-1.5 h-1.5 w-full rounded-full bg-gray-200">
         <div
-          class="h-1.5 rounded-full bg-gray-400"
-          style="width: {Math.min(marginPersen, 100)}%"
+          class="h-1.5 rounded-full bg-emerald-500"
+          style="width: {Math.min(Math.max(marginPersen, 0), 100)}%"
         ></div>
       </div>
+      <p class="mt-0.5 text-xs text-gray-400">
+        Margin kotor {marginPersen}%, belum dikurangi pengeluaran umum
+      </p>
     </div>
   </div>
 </div>
@@ -771,7 +888,11 @@
     <div class="mb-4 flex items-center justify-between">
       <div>
         <h2 class="text-sm font-semibold text-gray-800">Stok Kain</h2>
-        <p class="text-xs text-gray-400">{stokKain.length} jenis kain</p>
+        <p class="text-xs text-gray-400">
+          {stokKainKritis.length > 0
+            ? `${stokKainKritis.length} perlu perhatian`
+            : `${stokKain.length} jenis kain`}
+        </p>
       </div>
       <a
         href="/stok-kain"
@@ -780,28 +901,29 @@
       >
     </div>
     <div class="space-y-3">
-      {#each stokKain as kain}
+      {#each stokKainRingkas as kain}
         {@const total = kain.stok_tersedia + kain.stok_terpakai}
         {@const persen = total > 0 ? (kain.stok_tersedia / total) * 100 : 0}
         {@const kritis = kain.stok_tersedia < 100}
+        {@const menipis = kain.stok_tersedia >= 100 && kain.stok_tersedia < 250}
         <div>
           <div class="mb-1.5 flex items-center justify-between">
             <span class="text-sm text-gray-700 truncate max-w-[60%]"
-              >{kain.nama_kain}</span
+              >{stokKainLabel(kain)}</span
             >
             <span
-              class="text-xs {kritis
+              class="text-xs {kritis || menipis
                 ? 'font-semibold text-amber-600'
                 : 'text-gray-500'}"
             >
-              {kain.stok_tersedia.toLocaleString("id-ID")} {kain.satuan}{kritis
-                ? " ⚠"
+              {kain.stok_tersedia.toLocaleString("id-ID")} {kain.satuan}{kritis || menipis
+                ? " !"
                 : ""}
             </span>
           </div>
           <div class="h-1.5 w-full rounded-full bg-gray-100">
             <div
-              class="h-1.5 rounded-full {kritis
+              class="h-1.5 rounded-full {kritis || menipis
                 ? 'bg-amber-400'
                 : 'bg-blue-400'}"
               style="width: {Math.min(persen, 100).toFixed(1)}%"

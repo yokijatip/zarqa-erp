@@ -1,7 +1,7 @@
 // src/lib/firebase/penggajian.ts
 //
 // Sistem penggajian baru:
-// - Karyawan punya tipe penggajian: harian, mingguan, atau bulanan
+// - Karyawan punya tipe penggajian: harian, mingguan, bulanan, atau tahunan
 // - Penggajian mingguan dihitung per pcs dari riwayat_proses
 // - Tarif per pcs diinput saat akan cetak laporan
 //
@@ -29,6 +29,7 @@ const STATUS_DIVISI: Partial<Record<StatusBatch, DivisiProduksi>> = {
 interface RiwayatEvent {
   batchId: string;
   divisi: DivisiProduksi;
+  statusKe: StatusBatch;
   uid: string;
   nama: string;
   pcsBerhasil: number;
@@ -41,6 +42,23 @@ function tsToDate(ts: any): Date | null {
   return ts.toDate ? ts.toDate() : new Date(ts);
 }
 
+function steamPayrollKey(event: RiwayatEvent): string {
+  return `${event.batchId}::${event.uid}`;
+}
+
+function dedupeSteamFinalizationEvents(events: RiwayatEvent[]): RiwayatEvent[] {
+  const steamDoneKeys = new Set(
+    events
+      .filter((event) => event.statusKe === 'STEAM_DONE' && event.divisi === 'Steam' && event.pcsBerhasil > 0)
+      .map(steamPayrollKey)
+  );
+
+  return events.filter((event) => {
+    if (event.statusKe !== 'COMPLETED' || event.divisi !== 'Steam') return true;
+    return !steamDoneKeys.has(steamPayrollKey(event));
+  });
+}
+
 // Ambil semua event riwayat_proses yang relevan untuk penggajian
 async function getRiwayatEvents(range: { start: Date; end: Date } | null): Promise<RiwayatEvent[]> {
   const snap = await getDocs(collectionGroup(db, 'riwayat_proses'));
@@ -48,16 +66,14 @@ async function getRiwayatEvents(range: { start: Date; end: Date } | null): Promi
 
   snap.docs.forEach((d) => {
     const data = d.data() as RiwayatProses;
-    const divisi = STATUS_DIVISI[data.status_ke as StatusBatch];
+    const statusKe = data.status_ke as StatusBatch;
+    const divisi = STATUS_DIVISI[statusKe];
     if (!divisi) return;
 
     const uid = data.updated_by_uid || data.updated_by_nama;
     if (!uid) return;
 
     const timestamp = tsToDate(data.timestamp);
-    if (range) {
-      if (!timestamp || timestamp < range.start || timestamp > range.end) return;
-    }
 
     const batchId = d.ref.parent.parent?.id;
     if (!batchId) return;
@@ -72,6 +88,7 @@ async function getRiwayatEvents(range: { start: Date; end: Date } | null): Promi
     events.push({
       batchId,
       divisi,
+      statusKe,
       uid,
       nama: data.updated_by_nama,
       pcsBerhasil: data.pcs_berhasil ?? 0,
@@ -80,7 +97,12 @@ async function getRiwayatEvents(range: { start: Date; end: Date } | null): Promi
     });
   });
 
-  return events;
+  const payrollEvents = dedupeSteamFinalizationEvents(events);
+  if (!range) return payrollEvents;
+  return payrollEvents.filter((event) => {
+    if (!event.timestamp) return false;
+    return event.timestamp >= range.start && event.timestamp <= range.end;
+  });
 }
 
 async function getBatchMap(batchIds: string[]): Promise<Map<string, BatchProduksi>> {
