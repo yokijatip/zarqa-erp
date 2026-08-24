@@ -387,6 +387,11 @@
       <p class="mt-0.5 text-sm text-gray-500">{config.description}</p>
     </div>
     <div class="flex flex-wrap gap-2">
+      {#if config.key === "cutting"}
+        <Button variant="outline" onclick={() => goto("/produksi/cutting/rekap")}>
+          Rekap Cutting
+        </Button>
+      {/if}
       {#if config.createMode && config.createButtonLabel}
         <ProductionCreateDialog
           mode={config.createMode}

@@ -191,6 +191,7 @@ export interface BatchProduksi {
   dibuat_oleh: string;
   catatan_admin?: string;
   dari_potongan?: boolean;
+  stok_kain_dipotong?: boolean;
   stok_potongan_synced?: boolean;
   sumber_cutting?: SumberCutting[];
   penugasan?: {
