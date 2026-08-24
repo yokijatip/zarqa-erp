@@ -42,6 +42,7 @@
   let fWarna = $state<WarnaTersedia[]>([]);
   let fHargaJual = $state("");
   let fHargaProduksi = $state("");
+  let fKebutuhanYard = $state<Partial<Record<UkuranBaju, string>>>({});
   let fTarifCutting = $state("");
   let fTarifJahit = $state("");
   let fTarifSteam = $state("");
@@ -70,6 +71,9 @@
   function toggleUkuran(u: UkuranBaju) {
     if (fUkuran.includes(u)) {
       fUkuran = fUkuran.filter((x) => x !== u);
+      const next = { ...fKebutuhanYard };
+      delete next[u];
+      fKebutuhanYard = next;
     } else {
       fUkuran = UKURAN_ORDER.filter((x) => [...fUkuran, x].includes(x));
     }
@@ -95,6 +99,7 @@
     fWarna = [];
     fHargaJual = "";
     fHargaProduksi = "";
+    fKebutuhanYard = {};
     fTarifCutting = "";
     fTarifJahit = "";
     fTarifSteam = "";
@@ -114,6 +119,12 @@
     fWarna = [...(model.warna_tersedia ?? [])];
     fHargaJual = model.harga_jual != null ? String(model.harga_jual) : "";
     fHargaProduksi = model.harga_produksi != null ? String(model.harga_produksi) : "";
+    fKebutuhanYard = Object.fromEntries(
+      Object.entries(model.kebutuhan_yard_per_pcs ?? {}).map(([ukuran, value]) => [
+        ukuran,
+        value != null ? String(value) : "",
+      ]),
+    ) as Partial<Record<UkuranBaju, string>>;
     fTarifCutting = model.tarif_cutting != null ? String(model.tarif_cutting) : "";
     fTarifJahit = model.tarif_jahit != null ? String(model.tarif_jahit) : "";
     fTarifSteam = model.tarif_steam != null ? String(model.tarif_steam) : "";
@@ -172,6 +183,11 @@
         ...(fDeskripsi.trim() ? { deskripsi: fDeskripsi.trim() } : {}),
         ukuran_tersedia: fUkuran,
         warna_tersedia: fWarna.length > 0 ? fWarna : [],
+        kebutuhan_yard_per_pcs: Object.fromEntries(
+          fUkuran
+            .map((ukuran) => [ukuran, Number(fKebutuhanYard[ukuran]) || 0] as const)
+            .filter(([, value]) => value > 0),
+        ),
         harga_jual: Number(fHargaJual) || 0,
         harga_produksi: Number(fHargaProduksi) || 0,
         tarif_cutting: Number(fTarifCutting) || 0,
@@ -561,6 +577,21 @@
             </div>
           {/if}
 
+          {#if Object.values(model.kebutuhan_yard_per_pcs ?? {}).some((v) => (v ?? 0) > 0)}
+            <div>
+              <p class="mb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+                Kebutuhan Yard / Pcs
+              </p>
+              <div class="flex flex-wrap gap-1.5 text-xs">
+                {#each UKURAN_ORDER.filter((u) => model.kebutuhan_yard_per_pcs?.[u]) as u}
+                  <span class="rounded-md border border-cyan-100 bg-cyan-50 px-2 py-0.5 font-medium text-cyan-700">
+                    {u}: {model.kebutuhan_yard_per_pcs?.[u]} yd
+                  </span>
+                {/each}
+              </div>
+            </div>
+          {/if}
+
           <!-- Harga -->
           {#if (model.harga_jual || model.harga_produksi)}
             <div>
@@ -929,6 +960,42 @@
             </div>
           </div>
         </div>
+
+        {#if fUkuran.length > 0}
+          <div class="rounded-lg border border-gray-200 bg-gray-50/70 p-3.5 space-y-2.5">
+            <div>
+              <p class="text-xs font-semibold text-gray-800">Kebutuhan Yard / Pcs</p>
+              <p class="text-[11px] text-gray-500">Dipakai otomatis saat membuat order cutting. Bisa dikosongkan jika belum pasti.</p>
+            </div>
+            <div class="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+              {#each fUkuran as ukuran}
+                <div>
+                  <label class="block text-[11px] font-medium text-gray-700 mb-1" for={`kebutuhan-yard-${ukuran}`}>
+                    {ukuran}
+                  </label>
+                  <div class="relative">
+                    <Input
+                      id={`kebutuhan-yard-${ukuran}`}
+                      type="number"
+                      min="0"
+                      step="0.1"
+                      placeholder="0"
+                      value={fKebutuhanYard[ukuran] ?? ""}
+                      oninput={(e) => {
+                        fKebutuhanYard = {
+                          ...fKebutuhanYard,
+                          [ukuran]: (e.currentTarget as HTMLInputElement).value,
+                        };
+                      }}
+                      class="pr-10 text-xs h-8"
+                    />
+                    <span class="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-gray-400">yd</span>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          </div>
+        {/if}
 
         <!-- Tarif Default Produksi (Opsional) -->
         <div class="rounded-lg border border-gray-200 bg-gray-50/70 p-3.5 space-y-2.5">

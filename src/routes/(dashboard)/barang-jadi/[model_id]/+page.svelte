@@ -89,10 +89,41 @@ let fJumlah = $state(0);
   });
 
   let filteredItems = $derived.by(() => {
-    let items = [...stokList];
     if (selectedColor) {
-      items = items.filter((i) => (i.nama_warna ?? '') === selectedColor);
+      const items = stokList.filter((i) => (i.nama_warna ?? '') === selectedColor);
+      items.sort(
+        (a, b) =>
+          UKURAN_ORDER.indexOf(a.ukuran as UkuranBaju) -
+          UKURAN_ORDER.indexOf(b.ukuran as UkuranBaju),
+      );
+      return items;
     }
+
+    const map = new Map<string, StokBarangJadi>();
+    for (const item of stokList) {
+      const existing = map.get(item.ukuran);
+      if (!existing) {
+        map.set(item.ukuran, {
+          ...item,
+          id: `all__${item.ukuran}`,
+          nama_warna: undefined,
+          kode_hex_warna: undefined,
+        });
+        continue;
+      }
+      map.set(item.ukuran, {
+        ...existing,
+        stok_tersedia: existing.stok_tersedia + item.stok_tersedia,
+        total_masuk: existing.total_masuk + item.total_masuk,
+        total_keluar: existing.total_keluar + item.total_keluar,
+        updatedAt:
+          tsMillis(item.updatedAt) > tsMillis(existing.updatedAt)
+            ? item.updatedAt
+            : existing.updatedAt,
+      });
+    }
+
+    const items = [...map.values()];
     items.sort(
       (a, b) =>
         UKURAN_ORDER.indexOf(a.ukuran as UkuranBaju) -
@@ -101,14 +132,14 @@ let fJumlah = $state(0);
     return items;
   });
 
-  let sorted = filteredItems;
+  let sorted = $derived(filteredItems);
 
   let namaModel = $derived(stokList[0]?.nama_model ?? "");
   let activeColorEntry = $derived.by(() => {
     if (selectedColor) {
       return allColors.find((c) => c.key === selectedColor) ?? allColors[0] ?? null;
     }
-    return allColors[0] ?? null;
+    return null;
   });
   let namaWarna = $derived(activeColorEntry?.nama_warna);
   let kodeHexWarna = $derived(activeColorEntry?.kode_hex_warna);
@@ -695,10 +726,10 @@ let fJumlah = $state(0);
             }}
           >
             <Select.Trigger class="h-7 gap-1.5 rounded-full border border-gray-200 bg-white px-2.5 py-0 text-xs font-medium text-gray-600 hover:border-gray-300 hover:bg-gray-50">
-              {#if activeColorEntry?.kode_hex_warna}
+              {#if selectedColor && activeColorEntry?.kode_hex_warna}
                 <span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style="background-color: {activeColorEntry.kode_hex_warna}"></span>
               {/if}
-              {activeColorEntry?.nama_warna ?? 'Semua warna'}
+              {selectedColor ? (activeColorEntry?.nama_warna ?? selectedColor) : 'Semua warna'}
             </Select.Trigger>
             <Select.Content>
               <Select.Item value="">
@@ -836,10 +867,10 @@ let fJumlah = $state(0);
     <div class="mb-5 overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
       <!-- Strip header -->
       <div class="flex items-center gap-2.5 px-4 py-3 border-b border-gray-100 bg-gray-50/50">
-        {#if kodeHexWarna}
+        {#if selectedColor && kodeHexWarna}
           <span class="inline-block h-3 w-3 shrink-0 rounded-full" style="background-color: {kodeHexWarna}"></span>
         {/if}
-        <span class="text-sm font-semibold text-gray-800">{namaWarna ?? "Semua"}</span>
+        <span class="text-sm font-semibold text-gray-800">{selectedColor ? namaWarna : "Semua warna"}</span>
         <span class="text-sm font-bold text-gray-800">{totalTersedia} pcs</span>
 
         {#if jumlahKritis > 0}
@@ -946,6 +977,7 @@ let fJumlah = $state(0);
         {/if}
 
         <!-- Actions -->
+        {#if selectedColor}
         <div class="flex shrink-0 gap-1">
           <button
             onclick={() => bukaDialog("restock", item)}
@@ -966,6 +998,11 @@ let fJumlah = $state(0);
             ✎ Set
           </button>
         </div>
+        {:else}
+          <p class="w-36 shrink-0 text-right text-[11px] text-gray-400">
+            Pilih warna untuk aksi stok
+          </p>
+        {/if}
       </div>
     {/each}
   </div>

@@ -111,15 +111,13 @@ export interface WarnaTersedia {
   kode_hex: string;
 }
 
-// Kebutuhan kain dihapus dari model baju.
-// Input yard kain sekarang dilakukan saat proses cutting,
-// karena tiap order bisa beda jumlah yard nya.
 export interface ModelBaju {
   id: string;
   nama_model: string;
   deskripsi?: string;
   ukuran_tersedia: UkuranBaju[];
   warna_tersedia?: WarnaTersedia[];
+  kebutuhan_yard_per_pcs?: Partial<Record<UkuranBaju, number>>;
   harga_jual?: number;
   harga_produksi?: number;
   tarif_cutting?: number;

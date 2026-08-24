@@ -189,6 +189,17 @@
     return stokKainGroups.find((group) => group.nama_kain === namaKain)?.items ?? [];
   }
 
+  function defaultYardPerPcs(ukuran = fUkuran): string {
+    if (!selectedModel || !ukuran) return "";
+    const value = selectedModel.kebutuhan_yard_per_pcs?.[ukuran as UkuranBaju];
+    return value && value > 0 ? String(value) : "";
+  }
+
+  function applyDefaultYardPerPcs() {
+    const value = defaultYardPerPcs();
+    fKain = fKain.map((k) => ({ ...k, yard_per_pcs: value }));
+  }
+
   // Total yard kain yang dipakai (sum dari semua kain entry) — hanya info,
   // tidak dipakai lagi untuk kalkulasi pcs jadi (lihat perKainEstimasi).
   let totalYardDipakai = $derived(
@@ -421,7 +432,7 @@
     fUkuran = "";
     fJumlah = {};
     // Rasio kebutuhan kain spesifik per ukuran/model — perlu diisi ulang
-    fKain = fKain.map((k) => ({ ...k, yard_per_pcs: "" }));
+    applyDefaultYardPerPcs();
     errorMsg = null;
     stokPotonganModel = [];
   }
@@ -661,7 +672,7 @@
                 fWarnaId = value ?? "";
                 fUkuran = "";
                 fJumlah = {};
-                fKain = fKain.map((k) => ({ ...k, yard_per_pcs: "" }));
+                applyDefaultYardPerPcs();
                 errorMsg = null;
               }}
             >
@@ -707,7 +718,7 @@
               onValueChange={(val) => {
                 fUkuran = (val ?? "") as UkuranBaju | "";
                 // Rasio "1 pcs = ? yard" spesifik per ukuran — reset supaya diisi ulang
-                fKain = fKain.map((k) => ({ ...k, yard_per_pcs: "" }));
+                applyDefaultYardPerPcs();
               }}
             >
               <Select.Trigger class="w-full">
@@ -967,7 +978,7 @@
                       </div>
                       <div>
                         <label class="mb-0.5 block text-[10px] text-gray-500">
-                          1 pcs ({fUkuran}) = ? yard
+                          Yard / pcs ({fUkuran})
                         </label>
                         <input
                           type="number"
@@ -979,6 +990,11 @@
                         />
                       </div>
                     </div>
+                    {#if defaultYardPerPcs()}
+                      <p class="text-[10px] text-cyan-700">
+                        Rasio master model: {defaultYardPerPcs()} yard/pcs.
+                      </p>
+                    {/if}
                     {#if est}
                       <p class="text-[10px] text-gray-500">
                         ≈ <span class="font-semibold text-gray-700"
@@ -1000,7 +1016,7 @@
                         nama_kain: "",
                         satuan: "yard" as const,
                         jumlah_dipakai: "",
-                        yard_per_pcs: "",
+                        yard_per_pcs: defaultYardPerPcs(),
                       },
                     ];
                   }}
