@@ -134,6 +134,8 @@ export async function tambahStokBarangJadi(
         transaction.set(riwayatRef, {
           model_id: modelId,
           nama_model: namaModel,
+          ...(warna?.nama_warna ? { nama_warna: warna.nama_warna } : {}),
+          ...(warna?.kode_hex_warna ? { kode_hex_warna: warna.kode_hex_warna } : {}),
           ukuran: item.ukuran,
           tipe: riwayatMeta.tipe,
           jumlah: item.jumlah_pcs,

@@ -786,6 +786,8 @@ export async function completeBatchProduksi(
       transaction.set(riwayatBarangJadiRef, {
         model_id: currentBatch.model_id,
         nama_model: currentBatch.nama_model,
+        ...(currentBatch.nama_warna ? { nama_warna: currentBatch.nama_warna } : {}),
+        ...(currentBatch.kode_hex_warna ? { kode_hex_warna: currentBatch.kode_hex_warna } : {}),
         ukuran: item.ukuran,
         tipe: 'masuk_produksi',
         jumlah: item.jumlah_pcs,

@@ -60,6 +60,7 @@
     timeline: BatchTimelineEntry[];
   };
   let batchDetailCache = $state<Record<string, BatchDetail>>({});
+  let batchWarnaCache = $state<Record<string, { nama_warna?: string; kode_hex_warna?: string } | null>>({});
   let loadingBatchId = $state<string | null>(null);
   let expandedBatchId = $state<string | null>(null);
   let loading = $state(true);
@@ -382,9 +383,27 @@ let fJumlah = $state(0);
     return ts?.toMillis ? ts.toMillis() : ts ? new Date(ts).getTime() : 0;
   }
 
+  function warnaRiwayat(r: RiwayatBarangJadi): string {
+    if (r.nama_warna) return r.nama_warna;
+    if (r.batch_id && batchWarnaCache[r.batch_id]?.nama_warna) {
+      return batchWarnaCache[r.batch_id]?.nama_warna ?? "";
+    }
+
+    const warnaUntukUkuran = new Set(
+      stokList
+        .filter((stok) => stok.ukuran === r.ukuran && stok.nama_warna)
+        .map((stok) => stok.nama_warna as string),
+    );
+
+    // Riwayat lama belum punya field warna. Kalau ukuran ini hanya punya satu
+    // warna di stok sekarang, warna itu aman dipakai sebagai fallback.
+    if (warnaUntukUkuran.size === 1) return [...warnaUntukUkuran][0];
+    return "";
+  }
+
   let riwayatMasukUntukWarna = $derived.by(() => {
     if (!selectedColor) return riwayatMasuk;
-    return riwayatMasuk.filter((r) => (r.nama_warna ?? "") === selectedColor);
+    return riwayatMasuk.filter((r) => warnaRiwayat(r) === selectedColor);
   });
 
   // Filter berdasarkan warna aktif + rentang tanggal (kalau diisi)
@@ -444,6 +463,37 @@ let fJumlah = $state(0);
       }
     }
   });
+
+  $effect(() => {
+    for (const item of riwayatMasuk) {
+      if (
+        item.batch_id &&
+        !item.nama_warna &&
+        !(item.batch_id in batchWarnaCache)
+      ) {
+        prefetchBatchWarna(item.batch_id);
+      }
+    }
+  });
+
+  async function prefetchBatchWarna(batchId: string) {
+    batchWarnaCache = {
+      ...batchWarnaCache,
+      [batchId]: null,
+    };
+    try {
+      const batch = await getBatchById(batchId);
+      batchWarnaCache = {
+        ...batchWarnaCache,
+        [batchId]: {
+          nama_warna: batch?.nama_warna,
+          kode_hex_warna: batch?.kode_hex_warna,
+        },
+      };
+    } catch {
+      batchWarnaCache = { ...batchWarnaCache, [batchId]: null };
+    }
+  }
 
   async function prefetchCuttingNama(batchId: string) {
     // Tandai sedang di-fetch (value undefined) agar tidak dobel-fetch

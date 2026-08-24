@@ -231,32 +231,32 @@
 
   const STATUS_STYLE = {
     kosong: {
-      badge: "bg-gray-100 text-gray-500",
+      badge: "bg-gray-100 text-gray-500 dark:bg-white/10 dark:text-slate-300",
       label: "Habis",
-      num: "text-gray-400",
+      num: "text-gray-400 dark:text-slate-400",
       bar: "bg-gray-300",
-      ukuran: "bg-gray-100 text-gray-600",
+      ukuran: "bg-gray-100 text-gray-600 dark:bg-white/10 dark:text-slate-300",
     },
     kritis: {
-      badge: "bg-red-100 text-red-600",
+      badge: "bg-red-100 text-red-600 dark:bg-red-500/15 dark:text-red-300",
       label: "Kritis",
-      num: "text-red-600",
+      num: "text-red-600 dark:text-red-300",
       bar: "bg-red-400",
-      ukuran: "bg-gray-100 text-gray-700",
+      ukuran: "bg-gray-100 text-gray-700 dark:bg-white/10 dark:text-slate-200",
     },
     low: {
-      badge: "bg-amber-100 text-amber-600",
+      badge: "bg-amber-100 text-amber-600 dark:bg-amber-400/15 dark:text-amber-200",
       label: "Menipis",
-      num: "text-amber-600",
+      num: "text-amber-600 dark:text-amber-200",
       bar: "bg-amber-400",
-      ukuran: "bg-gray-100 text-gray-700",
+      ukuran: "bg-gray-100 text-gray-700 dark:bg-white/10 dark:text-slate-200",
     },
     aman: {
-      badge: "bg-teal-100 text-teal-700",
+      badge: "bg-teal-100 text-teal-700 dark:bg-teal-400/15 dark:text-teal-200",
       label: "Aman",
-      num: "text-gray-900",
+      num: "text-gray-900 dark:text-slate-50",
       bar: "bg-teal-400",
-      ukuran: "bg-gray-100 text-gray-700",
+      ukuran: "bg-gray-100 text-gray-700 dark:bg-white/10 dark:text-slate-200",
     },
   };
 
@@ -654,12 +654,12 @@
       {@const isOpen = expandedModels.has(model.model_id)}
       {@const totalModelPcs = getModelTotal(model)}
       {@const colorCount = model.colors.size}
-      <div class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
+      <div class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm dark:border-white/10 dark:bg-slate-900">
         <!-- ── Model Header (clickable to expand/collapse) ── -->
         <button
           type="button"
           onclick={() => toggleModel(model.model_id)}
-          class="flex w-full items-center gap-3 px-5 py-3.5 text-left transition-colors hover:bg-gray-50"
+          class="flex w-full items-center gap-3 px-5 py-3.5 text-left transition-colors hover:bg-gray-50 dark:hover:bg-white/5"
         >
           <!-- Chevron -->
           <svg
@@ -678,21 +678,21 @@
             <div class="flex items-center gap-2">
               <a
                 href="/barang-jadi/{model.model_id}"
-                class="text-sm font-semibold text-gray-800 hover:underline"
+                class="text-sm font-semibold text-gray-800 hover:underline dark:text-slate-100"
                 onclick={(e) => e.stopPropagation()}
               >
                 {model.nama_model}
               </a>
               {#if colorCount > 1}
-                <span class="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-500">
+                <span class="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-500 dark:bg-white/10 dark:text-slate-300">
                   {colorCount} warna
                 </span>
               {:else if colorCount === 1}
                 {#each [...model.colors.values()] as color}
                   {#if color.nama_warna}
-                    <span class="inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-600">
+                    <span class="inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-600 dark:border-white/10 dark:bg-slate-950 dark:text-slate-300">
                       {#if color.kode_hex_warna}
-                        <span class="inline-block h-2 w-2 shrink-0 rounded-full" style="background-color: {color.kode_hex_warna}"></span>
+                        <span class="inline-block h-2 w-2 shrink-0 rounded-full ring-1 ring-black/10 dark:ring-white/60" style="background-color: {color.kode_hex_warna}"></span>
                       {/if}
                       {color.nama_warna}
                     </span>
@@ -704,7 +704,7 @@
 
           <!-- Total pcs -->
           <div class="text-right">
-            <p class="text-base font-bold tabular-nums text-gray-800 {modelStatus === 'kritis' ? 'text-red-600' : ''}">
+            <p class="text-base font-bold tabular-nums text-gray-800 dark:text-slate-100 {modelStatus === 'kritis' ? 'text-red-600 dark:text-red-400' : ''}">
               {totalModelPcs.toLocaleString("id-ID")}
             </p>
             <p class="text-xs text-gray-400">pcs tersedia</p>
@@ -718,7 +718,7 @@
 
         <!-- ── Expanded: Colors ── -->
         {#if isOpen}
-          <div class="border-t border-gray-100 divide-y divide-gray-50">
+          <div class="divide-y divide-gray-50 border-t border-gray-100 dark:divide-white/10 dark:border-white/10">
             {#each [...model.colors.values()] as color}
               {@const colorStatus = getColorStatus(color)}
               {@const colorSt = STATUS_STYLE[colorStatus]}
@@ -730,7 +730,7 @@
                 <button
                   type="button"
                   onclick={() => toggleColor(model.model_id, color.nama_warna ?? '')}
-                  class="flex w-full items-center gap-2 px-5 py-2.5 bg-gray-50/50 hover:bg-gray-100 transition text-left"
+                  class="flex w-full items-center gap-2 bg-gray-50/50 px-5 py-2.5 text-left transition hover:bg-gray-100 dark:bg-slate-800/80 dark:hover:bg-slate-800"
                 >
                   <!-- Chevron -->
                   <svg
@@ -745,9 +745,9 @@
                   </svg>
 
                   {#if color.nama_warna}
-                    <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-gray-700">
+                    <span class="inline-flex items-center gap-1.5 text-xs font-semibold text-gray-700 dark:text-slate-200">
                       {#if color.kode_hex_warna}
-                        <span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-gray-200" style="background-color: {color.kode_hex_warna}"></span>
+                        <span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full border border-gray-200 ring-1 ring-black/10 dark:border-white/30 dark:ring-white/60" style="background-color: {color.kode_hex_warna}"></span>
                       {/if}
                       {color.nama_warna}
                     </span>
@@ -755,7 +755,7 @@
                     <span class="text-xs text-gray-400 font-medium">Tanpa warna</span>
                   {/if}
                   <span class="text-xs text-gray-400">·</span>
-                  <span class="text-xs text-gray-600 font-semibold">{colorTotal} pcs</span>
+                  <span class="text-xs font-semibold text-gray-600 dark:text-slate-300">{colorTotal} pcs</span>
                   <span class="inline-block rounded-full px-1.5 py-0.5 text-[10px] font-semibold {colorSt.badge}">
                     {colorSt.label}
                   </span>
@@ -766,7 +766,7 @@
                   {/if}
                   <a
                     href="/barang-jadi/{model.model_id}?warna={encodeURIComponent(color.nama_warna ?? '')}"
-                    class="ml-auto shrink-0 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-[11px] font-medium text-gray-500 transition hover:bg-gray-50"
+                    class="ml-auto shrink-0 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-[11px] font-medium text-gray-500 transition hover:bg-gray-50 dark:border-white/10 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-900"
                     onclick={(e) => e.stopPropagation()}
                   >
                     Detail →
@@ -776,7 +776,7 @@
                 <!-- Size grid -->
                 {#if colorOpen}
                   <div
-                    class="grid divide-x divide-gray-100"
+                    class="grid divide-x divide-gray-100 bg-white dark:divide-white/10 dark:bg-slate-950/40"
                     style="grid-template-columns: repeat({color.items.length}, minmax(0, 1fr))"
                   >
                     {#each color.items as item}
@@ -817,10 +817,10 @@
 
   <!-- Footer summary -->
   <div
-    class="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-gray-100 bg-white px-5 py-3 shadow-sm"
+    class="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-gray-100 bg-white px-5 py-3 shadow-sm dark:border-white/10 dark:bg-slate-900"
   >
     <p class="text-xs text-gray-400">
-      Menampilkan <span class="font-medium text-gray-700"
+      Menampilkan <span class="font-medium text-gray-700 dark:text-slate-200"
         >{filteredGrouped.length}</span
       >
       dari {totalModel} model
@@ -835,7 +835,7 @@
     </p>
     <div class="flex flex-wrap gap-4 text-xs text-gray-400">
       <span>
-        Tersedia: <span class="font-semibold text-teal-700"
+        Tersedia: <span class="font-semibold text-teal-700 dark:text-teal-300"
           >{totalTersedia.toLocaleString("id-ID")} pcs</span
         >
       </span>
