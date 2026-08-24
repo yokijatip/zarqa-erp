@@ -294,11 +294,13 @@ export async function kurangiStokManual(
 
     if (riwayatMeta) {
       const riwayatRef = doc(collection(db, COL_RIWAYAT));
-      transaction.set(riwayatRef, {
-        model_id: data.model_id,
-        nama_model: data.nama_model,
-        ukuran: data.ukuran,
-        tipe: 'kurangi_manual' as TipeRiwayatBarangJadi,
+        transaction.set(riwayatRef, {
+          model_id: data.model_id,
+          nama_model: data.nama_model,
+          ...(data.nama_warna ? { nama_warna: data.nama_warna } : {}),
+          ...(data.kode_hex_warna ? { kode_hex_warna: data.kode_hex_warna } : {}),
+          ukuran: data.ukuran,
+          tipe: 'kurangi_manual' as TipeRiwayatBarangJadi,
         jumlah,
         stok_sebelum: data.stok_tersedia,
         stok_sesudah: stokSesudah,
@@ -335,11 +337,13 @@ export async function setStokManual(
 
     if (riwayatMeta) {
       const riwayatRef = doc(collection(db, COL_RIWAYAT));
-      transaction.set(riwayatRef, {
-        model_id: data.model_id,
-        nama_model: data.nama_model,
-        ukuran: data.ukuran,
-        tipe: 'set_manual' as TipeRiwayatBarangJadi,
+        transaction.set(riwayatRef, {
+          model_id: data.model_id,
+          nama_model: data.nama_model,
+          ...(data.nama_warna ? { nama_warna: data.nama_warna } : {}),
+          ...(data.kode_hex_warna ? { kode_hex_warna: data.kode_hex_warna } : {}),
+          ukuran: data.ukuran,
+          tipe: 'set_manual' as TipeRiwayatBarangJadi,
         jumlah: Math.abs(selisih),
         stok_sebelum: data.stok_tersedia,
         stok_sesudah: jumlahBaru,

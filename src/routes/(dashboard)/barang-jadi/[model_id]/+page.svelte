@@ -382,16 +382,21 @@ let fJumlah = $state(0);
     return ts?.toMillis ? ts.toMillis() : ts ? new Date(ts).getTime() : 0;
   }
 
-  // Filter berdasarkan rentang tanggal (kalau diisi)
+  let riwayatMasukUntukWarna = $derived.by(() => {
+    if (!selectedColor) return riwayatMasuk;
+    return riwayatMasuk.filter((r) => (r.nama_warna ?? "") === selectedColor);
+  });
+
+  // Filter berdasarkan warna aktif + rentang tanggal (kalau diisi)
   let riwayatMasukTerfilter = $derived.by(() => {
-    if (!filterDari && !filterSampai) return riwayatMasuk;
+    if (!filterDari && !filterSampai) return riwayatMasukUntukWarna;
     const dari = filterDari
       ? new Date(filterDari + "T00:00:00").getTime()
       : -Infinity;
     const sampai = filterSampai
       ? new Date(filterSampai + "T23:59:59").getTime()
       : Infinity;
-    return riwayatMasuk.filter((r) => {
+    return riwayatMasukUntukWarna.filter((r) => {
       const t = tsMillis(r.timestamp);
       return t >= dari && t <= sampai;
     });
@@ -1046,8 +1051,10 @@ let fJumlah = $state(0);
       <div
         class="flex items-center gap-3 rounded-xl border border-gray-100 bg-white px-5 py-6 text-sm text-gray-400 shadow-sm"
       >
-        {riwayatMasuk.length === 0
-          ? "Belum ada riwayat masuk untuk model ini"
+        {riwayatMasukUntukWarna.length === 0
+          ? selectedColor
+            ? `Belum ada riwayat masuk untuk warna ${namaWarna ?? selectedColor}`
+            : "Belum ada riwayat masuk untuk model ini"
           : "Tidak ada riwayat pada rentang tanggal ini"}
       </div>
     {:else}

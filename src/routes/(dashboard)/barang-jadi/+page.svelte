@@ -39,15 +39,25 @@
   let savingTambah = $state(false);
   let fModelId = $state("");
   let fWarnaId = $state("");
+  let fWarnaIds = $state<string[]>([]);
   let fJumlahPerUkuran = $state<Record<string, number>>({});
+  let fJumlahPerWarna = $state<Record<string, Record<string, number>>>({});
 
   let selectedModel = $derived(modelList.find((m) => m.id === fModelId) ?? null);
   let selectedWarna = $derived(
     (selectedModel?.warna_tersedia ?? []).find((w) => w.warna_id === fWarnaId) ?? null,
   );
+  let selectedWarnaList = $derived(
+    (selectedModel?.warna_tersedia ?? []).filter((w) => fWarnaIds.includes(w.warna_id)),
+  );
   let modelHasWarna = $derived((selectedModel?.warna_tersedia ?? []).length > 0);
   let totalInputTambah = $derived(
-    Object.values(fJumlahPerUkuran).reduce((s, v) => s + (v ?? 0), 0),
+    modelHasWarna
+      ? Object.values(fJumlahPerWarna).reduce(
+          (sum, perUkuran) => sum + Object.values(perUkuran).reduce((s, v) => s + (v ?? 0), 0),
+          0,
+        )
+      : Object.values(fJumlahPerUkuran).reduce((s, v) => s + (v ?? 0), 0),
   );
 
   function successMsg2(msg: string) {
@@ -283,7 +293,9 @@
     openTambah = true;
     fModelId = "";
     fWarnaId = "";
+    fWarnaIds = [];
     fJumlahPerUkuran = {};
+    fJumlahPerWarna = {};
     if (modelList.length === 0) {
       loadingModels = true;
       try {
@@ -296,39 +308,80 @@
 
   function resetWarnaDanJumlah() {
     fWarnaId = "";
+    fWarnaIds = [];
     fJumlahPerUkuran = {};
+    fJumlahPerWarna = {};
+  }
+
+  function toggleTambahWarna(warnaId: string, checked: boolean) {
+    fWarnaIds = checked
+      ? [...new Set([...fWarnaIds, warnaId])]
+      : fWarnaIds.filter((id) => id !== warnaId);
+    if (!checked) {
+      const next = { ...fJumlahPerWarna };
+      delete next[warnaId];
+      fJumlahPerWarna = next;
+    }
+  }
+
+  function jumlahTambahWarna(warnaId: string, ukuran: string): number {
+    return fJumlahPerWarna[warnaId]?.[ukuran] ?? 0;
+  }
+
+  function setJumlahTambahWarna(warnaId: string, ukuran: string, value: number) {
+    fJumlahPerWarna = {
+      ...fJumlahPerWarna,
+      [warnaId]: {
+        ...(fJumlahPerWarna[warnaId] ?? {}),
+        [ukuran]: value,
+      },
+    };
   }
 
   async function submitTambah() {
     if (!selectedModel || savingTambah) return;
-    if (modelHasWarna && !selectedWarna) {
-      showError("Pilih warna terlebih dahulu.");
+    if (modelHasWarna && selectedWarnaList.length === 0) {
+      showError("Pilih minimal satu warna terlebih dahulu.");
       return;
     }
-    const items = selectedModel.ukuran_tersedia
-      .map((u) => ({ ukuran: u, jumlah_pcs: fJumlahPerUkuran[u] ?? 0 }))
-      .filter((i) => i.jumlah_pcs > 0);
-    if (items.length === 0) { showError("Isi setidaknya satu ukuran."); return; }
+    if (totalInputTambah <= 0) { showError("Isi setidaknya satu ukuran."); return; }
     savingTambah = true;
     try {
-      const warnaPayload = selectedWarna
-        ? { nama_warna: selectedWarna.nama_warna, kode_hex_warna: selectedWarna.kode_hex }
-        : undefined;
-      await tambahStokBarangJadi(
-        selectedModel.id,
-        selectedModel.nama_model,
-        items,
-        warnaPayload,
-        $currentUser ? {
-          uid: $currentUser.uid,
-          nama: $currentUser.name || $currentUser.email || $currentUser.uid,
-          tipe: 'masuk_stok_awal',
-          catatan: 'Stok awal manual',
-        } : undefined,
-      );
+      const meta = $currentUser ? {
+        uid: $currentUser.uid,
+        nama: $currentUser.name || $currentUser.email || $currentUser.uid,
+        tipe: 'masuk_stok_awal' as const,
+        catatan: 'Stok awal manual',
+      } : undefined;
+      if (modelHasWarna) {
+        for (const warna of selectedWarnaList) {
+          const items = selectedModel.ukuran_tersedia
+            .map((u) => ({ ukuran: u, jumlah_pcs: jumlahTambahWarna(warna.warna_id, u) }))
+            .filter((i) => i.jumlah_pcs > 0);
+          if (items.length === 0) continue;
+          await tambahStokBarangJadi(
+            selectedModel.id,
+            selectedModel.nama_model,
+            items,
+            { nama_warna: warna.nama_warna, kode_hex_warna: warna.kode_hex },
+            meta,
+          );
+        }
+      } else {
+        const items = selectedModel.ukuran_tersedia
+          .map((u) => ({ ukuran: u, jumlah_pcs: fJumlahPerUkuran[u] ?? 0 }))
+          .filter((i) => i.jumlah_pcs > 0);
+        await tambahStokBarangJadi(
+          selectedModel.id,
+          selectedModel.nama_model,
+          items,
+          undefined,
+          meta,
+        );
+      }
       openTambah = false;
       await load(true);
-      successToast = `Stok awal ${selectedModel.nama_model}${selectedWarna ? ` (${selectedWarna.nama_warna})` : ''} berhasil ditambahkan.`;
+      successToast = `Stok awal ${selectedModel.nama_model} berhasil ditambahkan (${totalInputTambah} pcs).`;
       setTimeout(() => (successToast = null), 3500);
     } catch (e: any) {
       showError(e?.message ?? "Gagal menyimpan stok awal.");
@@ -818,7 +871,7 @@
           <Select.Root
             type="single"
             value={fModelId || undefined}
-            onValueChange={(val) => { fModelId = val ?? ""; fJumlahPerUkuran = {}; }}
+            onValueChange={(val) => { fModelId = val ?? ""; fWarnaId = ""; fWarnaIds = []; fJumlahPerUkuran = {}; fJumlahPerWarna = {}; }}
           >
             <Select.Trigger class="w-full">
               {#if selectedModel}
@@ -841,10 +894,10 @@
                   <span class="flex items-center gap-1.5">
                     <span>{m.nama_model}</span>
                     {#each m.warna_tersedia ?? [] as w, i}
-                      {#if i === 0}<span class="text-gray-300">·</span>{/if}
-                      <span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-black/10" style="background:{w.kode_hex}"></span>
-                      <span class="text-gray-400 text-xs">{w.nama_warna}</span>
-                      {#if i < (m.warna_tersedia?.length ?? 0) - 1}<span class="text-gray-300">·</span>{/if}
+                      {#if i === 0}<span class="hidden text-gray-300">·</span>{/if}
+                      <span class="hidden h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-black/10" style="background:{w.kode_hex}"></span>
+                      <span class="hidden text-gray-400 text-xs">{w.nama_warna}</span>
+                      {#if i < (m.warna_tersedia?.length ?? 0) - 1}<span class="hidden text-gray-300">·</span>{/if}
                     {/each}
                   </span>
                 </Select.Item>
@@ -857,40 +910,33 @@
       <!-- Pilih warna (muncul hanya jika model punya warna_tersedia) -->
       {#if selectedModel && modelHasWarna}
         <div>
-          <label class="mb-1.5 block text-sm font-medium text-gray-700" for="tambah-warna">
+          <p class="mb-1.5 text-sm font-medium text-gray-700">
             Warna <span class="text-red-500">*</span>
-          </label>
-          <Select.Root
-            type="single"
-            value={fWarnaId || undefined}
-            onValueChange={(val) => { fWarnaId = val ?? ""; fJumlahPerUkuran = {}; }}
-          >
-            <Select.Trigger class="w-full">
-              {#if selectedWarna}
-                <span class="flex items-center gap-2 truncate">
-                  <span class="inline-block h-3 w-3 shrink-0 rounded-full ring-1 ring-black/10" style="background:{selectedWarna.kode_hex}"></span>
-                  <span class="truncate">{selectedWarna.nama_warna}</span>
-                </span>
-              {:else}
-                <span class="text-muted-foreground">— Pilih warna —</span>
-              {/if}
-            </Select.Trigger>
-            <Select.Content preventScroll={false}>
-              {#each selectedModel.warna_tersedia ?? [] as w}
-                <Select.Item value={w.warna_id}>
-                  <span class="flex items-center gap-2">
-                    <span class="inline-block h-3 w-3 shrink-0 rounded-full ring-1 ring-black/10" style="background:{w.kode_hex}"></span>
-                    <span>{w.nama_warna}</span>
-                  </span>
-                </Select.Item>
-              {/each}
-            </Select.Content>
-          </Select.Root>
+          </p>
+          <div class="max-h-36 space-y-2 overflow-y-auto rounded-lg border border-gray-100 bg-gray-50 p-2">
+            {#each selectedModel.warna_tersedia ?? [] as w}
+              {@const checked = fWarnaIds.includes(w.warna_id)}
+              <label
+                class="flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2 {checked
+                  ? 'bg-white shadow-sm ring-1 ring-blue-100'
+                  : 'hover:bg-white/70'}"
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onchange={(e) => toggleTambahWarna(w.warna_id, (e.currentTarget as HTMLInputElement).checked)}
+                  class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span class="inline-block h-3 w-3 shrink-0 rounded-full ring-1 ring-black/10" style="background:{w.kode_hex}"></span>
+                <span class="min-w-0 flex-1 truncate text-sm font-medium text-gray-700">{w.nama_warna}</span>
+              </label>
+            {/each}
+          </div>
         </div>
       {/if}
 
       <!-- Input per ukuran -->
-      {#if selectedModel && (!modelHasWarna || selectedWarna)}
+      {#if selectedModel && !modelHasWarna}
         <div>
           <p class="mb-2 text-sm font-medium text-gray-700">Jumlah per Ukuran</p>
           <div class="grid grid-cols-3 gap-3 sm:grid-cols-5">
@@ -920,6 +966,45 @@
           {/if}
         </div>
       {/if}
+
+      {#if selectedModel && modelHasWarna && selectedWarnaList.length > 0}
+        <div class="space-y-3">
+          <p class="text-sm font-medium text-gray-700">Jumlah per Ukuran</p>
+          {#each selectedWarnaList as warna}
+            <div class="rounded-lg border border-gray-100 bg-gray-50 p-3">
+              <div class="mb-3 flex items-center gap-2">
+                <span class="inline-block h-3 w-3 shrink-0 rounded-full ring-1 ring-black/10" style="background:{warna.kode_hex}"></span>
+                <p class="text-sm font-semibold text-gray-800">{warna.nama_warna}</p>
+              </div>
+              <div class="grid grid-cols-3 gap-3 sm:grid-cols-5">
+                {#each selectedModel.ukuran_tersedia as ukuran}
+                  <div class="flex flex-col items-center gap-1.5">
+                    <span class="flex h-8 w-8 items-center justify-center rounded-full bg-blue-100 text-sm font-bold text-blue-700">
+                      {ukuran}
+                    </span>
+                    <Input
+                      type="number"
+                      min="0"
+                      placeholder="0"
+                      class="text-center"
+                      value={jumlahTambahWarna(warna.warna_id, ukuran)}
+                      oninput={(e) => {
+                        const v = parseInt((e.target as HTMLInputElement).value) || 0;
+                        setJumlahTambahWarna(warna.warna_id, ukuran, v);
+                      }}
+                    />
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {/each}
+          {#if totalInputTambah > 0}
+            <p class="text-xs text-gray-500">
+              Total: <span class="font-semibold text-gray-800">{totalInputTambah} pcs</span>
+            </p>
+          {/if}
+        </div>
+      {/if}
     </div>
 
     <Dialog.Footer class="gap-2">
@@ -928,8 +1013,8 @@
         onclick={submitTambah}
         disabled={savingTambah ||
           !selectedModel ||
-          (modelHasWarna && !selectedWarna) ||
-          Object.values(fJumlahPerUkuran).every((v) => !v || v <= 0)}
+          (modelHasWarna && selectedWarnaList.length === 0) ||
+          totalInputTambah <= 0}
       >
         {savingTambah ? "Menyimpan..." : "Simpan Stok Awal"}
       </Button>
