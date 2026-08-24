@@ -401,6 +401,26 @@ let fJumlah = $state(0);
     return "";
   }
 
+  function infoWarnaRiwayat(r: RiwayatBarangJadi) {
+    if (r.nama_warna) {
+      return { nama_warna: r.nama_warna, kode_hex_warna: r.kode_hex_warna };
+    }
+    if (r.batch_id && batchWarnaCache[r.batch_id]) {
+      return batchWarnaCache[r.batch_id];
+    }
+
+    const nama = warnaRiwayat(r);
+    const stokWarna = stokList.find(
+      (stok) => stok.ukuran === r.ukuran && stok.nama_warna === nama,
+    );
+    return stokWarna
+      ? {
+          nama_warna: stokWarna.nama_warna,
+          kode_hex_warna: stokWarna.kode_hex_warna,
+        }
+      : null;
+  }
+
   let riwayatMasukUntukWarna = $derived.by(() => {
     if (!selectedColor) return riwayatMasuk;
     return riwayatMasuk.filter((r) => warnaRiwayat(r) === selectedColor);
@@ -1113,19 +1133,20 @@ let fJumlah = $state(0);
           {@const isBatch = group.tipe === "masuk_produksi" && !!group.batch_id}
           {@const isExpanded = expandedBatchId === group.key}
           {@const first = group.items[0]}
+          {@const warnaInfo = infoWarnaRiwayat(first)}
           {@const cuttingNama = group.batch_id
             ? batchNamaCache[group.batch_id]
             : undefined}
 
           <div
-            class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm"
+            class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm dark:border-white/10 dark:bg-slate-900"
           >
             <!-- Header card: bisa diklik untuk expand kalau ini hasil produksi (punya batch) -->
             <button
               onclick={() => toggleExpand(group)}
               disabled={!isBatch}
               class="flex w-full items-center gap-4 px-5 py-3.5 text-left transition {isBatch
-                ? 'hover:bg-gray-50'
+                ? 'hover:bg-gray-50 dark:hover:bg-white/5'
                 : 'cursor-default'}"
             >
               <span
@@ -1137,7 +1158,8 @@ let fJumlah = $state(0);
               </span>
 
               <div class="min-w-0 flex-1">
-                <p class="truncate text-sm font-medium text-gray-800">
+                <div class="flex min-w-0 flex-wrap items-center gap-2">
+                <p class="truncate text-sm font-medium text-gray-800 dark:text-slate-100">
                   {#if isBatch}
                     {cuttingNama === undefined
                       ? "Memuat…"
@@ -1148,6 +1170,15 @@ let fJumlah = $state(0);
                       "Penyesuaian Stok"}
                   {/if}
                 </p>
+                {#if !selectedColor && warnaInfo?.nama_warna}
+                  <span class="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] font-semibold text-gray-600 dark:border-white/10 dark:bg-white/10 dark:text-slate-200">
+                    {#if warnaInfo.kode_hex_warna}
+                      <span class="h-2 w-2 rounded-full ring-1 ring-black/10 dark:ring-white/60" style="background-color: {warnaInfo.kode_hex_warna}"></span>
+                    {/if}
+                    {warnaInfo.nama_warna}
+                  </span>
+                {/if}
+                </div>
                 <p class="truncate text-xs text-gray-400">
                   {isBatch
                     ? "Tukang Cutting · klik untuk lihat proses lengkap"
@@ -1158,9 +1189,13 @@ let fJumlah = $state(0);
               <!-- Ringkasan ukuran dalam grup -->
               <div class="hidden flex-wrap justify-end gap-1 sm:flex">
                 {#each group.items as it}
+                  {@const itemWarna = !selectedColor ? infoWarnaRiwayat(it) : null}
                   <span
-                    class="rounded-md border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] font-semibold text-gray-700"
+                    class="inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] font-semibold text-gray-700 dark:border-white/10 dark:bg-white/10 dark:text-slate-200"
                   >
+                    {#if itemWarna?.kode_hex_warna}
+                      <span class="h-1.5 w-1.5 rounded-full ring-1 ring-black/10 dark:ring-white/60" style="background-color: {itemWarna.kode_hex_warna}"></span>
+                    {/if}
                     {it.ukuran} ×{it.jumlah}
                   </span>
                 {/each}
@@ -1169,8 +1204,8 @@ let fJumlah = $state(0);
               <div class="w-20 shrink-0 text-right">
                 <span
                   class="text-sm font-semibold {isTipeMasuk(group.tipe)
-                    ? 'text-teal-700'
-                    : 'text-red-600'}"
+                    ? 'text-teal-700 dark:text-teal-300'
+                    : 'text-red-600 dark:text-red-300'}"
                 >
                   {isTipeMasuk(group.tipe) ? "+" : "−"}{group.totalJumlah} pcs
                 </span>
@@ -1194,7 +1229,7 @@ let fJumlah = $state(0);
             <!-- Detail timeline proses (cutting → jahit → steam → selesai) -->
             {#if isBatch && isExpanded}
               {@const detail = batchDetailCache[group.batch_id!]}
-              <div class="border-t border-gray-100 bg-gray-50 px-5 py-4">
+              <div class="border-t border-gray-100 bg-gray-50 px-5 py-4 dark:border-white/10 dark:bg-slate-950/50">
                 {#if loadingBatchId === group.batch_id}
                   <div
                     class="flex items-center gap-2 py-2 text-xs text-gray-400"

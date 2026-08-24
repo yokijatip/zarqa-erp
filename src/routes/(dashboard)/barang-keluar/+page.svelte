@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { goto } from "$app/navigation";
   import {
     catatBarangKeluar,
     getRiwayatBarangKeluarByPeriod,
@@ -1047,7 +1048,7 @@
         <UploadIcon class="h-4 w-4 {importParsing ? 'animate-pulse' : ''}" />
         {importParsing ? "Membaca..." : "Import List"}
       </Button>
-      <Button href="/barang-keluar/catat">
+      <Button onclick={() => goto("/barang-keluar/catat")}>
         <svg
           class="h-4 w-4"
           xmlns="http://www.w3.org/2000/svg"
@@ -1246,7 +1247,7 @@
           Mulai dengan mencatat pengiriman pertama
         </p>
         {#if canCatat}
-          <Button href="/barang-keluar/catat" class="mt-1">+ Catat Keluar</Button>
+          <Button onclick={() => goto("/barang-keluar/catat")} class="mt-1">+ Catat Keluar</Button>
         {/if}
       {/if}
     </div>
