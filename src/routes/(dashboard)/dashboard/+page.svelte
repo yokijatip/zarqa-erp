@@ -9,6 +9,7 @@
     BarangKeluarItem,
     ModelBaju,
     StatusBatch,
+    TransaksiKeuangan,
   } from "$lib/types";
   import { STATUS_LABEL } from "$lib/types";
   import {
@@ -20,10 +21,12 @@
   } from "$lib/stores/data-cache.svelte";
   import { type DateRange, filterByRange, getPeriodRange } from "$lib/period";
   import PeriodSelector from "$lib/components/period-selector.svelte";
+  import { getTransaksiKeuangan } from "$lib/firebase/keuangan";
+  import { getPembayaranGajiPeriode, type PembayaranGajiRecord } from "$lib/firebase/penggajian";
 
   Chart.register(...registerables);
 
-  // ── Helpers ──────────────────────────────────────────────────────
+  // Helpers
   function formatRupiah(val: number): string {
     return new Intl.NumberFormat("id-ID", {
       style: "currency",
@@ -32,25 +35,32 @@
     }).format(val);
   }
 
-  // ── Real Data State ────────────────────────────────────────
+  // Real Data State
   let batches = $state<BatchProduksi[]>([]);
   let stokKain = $state<StokKain[]>([]);
   let barangJadi = $state<StokBarangJadi[]>([]);
   let barangKeluar = $state<BarangKeluar[]>([]);
   let modelBaju = $state<ModelBaju[]>([]);
+  let transaksiKeuangan = $state<TransaksiKeuangan[]>([]);
+  let pembayaranGaji = $state<PembayaranGajiRecord[]>([]);
   let loading = $state(false);
   let lastLoaded = $state<Date | null>(null);
   let errorMsg = $state<string | null>(null);
+  let financeRangeKey = $state("");
 
-  // ── Date Range State ──────────────────────────────────────────────
+  // Date Range State
   let dateRange = $state<DateRange>(getPeriodRange('bulan_ini'));
 
-  // ── Derived: filtered by date range ──────────────────────────────
+  // Derived: filtered by date range
   let keluarFiltered = $derived(
     filterByRange(barangKeluar, dateRange, (k) => k.tanggal_keluar)
   );
 
-  // ── Derived KPIs ─────────────────────────────────────────────────
+  let transaksiFiltered = $derived(
+    filterByRange(transaksiKeuangan, dateRange, (t) => t.tanggal)
+  );
+
+  // Derived KPIs
   let batchAktif = $derived(
     batches.filter((b) => b.status !== "COMPLETED"),
   );
@@ -65,6 +75,9 @@
   );
   let modelMap = $derived(new Map(modelBaju.map((m) => [m.id, m])));
   let modelNameMap = $derived(new Map(modelBaju.map((m) => [m.nama_model, m])));
+
+  const KRITIS_BARANG_JADI = 10;
+  const KRITIS_KAIN = 100;
 
   function fulfilledKeluarItems(k: BarangKeluar): BarangKeluarItem[] {
     return k.items && k.items.length > 0
@@ -88,8 +101,18 @@
   let totalKeluarPcs = $derived(
     keluarItemsFiltered.reduce((s, item) => s + item.total_pcs, 0),
   );
+  let totalListKeluar = $derived(keluarFiltered.length);
+  let pendingKeluarPcs = $derived(
+    keluarFiltered.reduce((s, item) => s + (item.total_pending_pcs ?? 0), 0),
+  );
+  let pendingKeluarList = $derived(
+    keluarFiltered.filter((item) => (item.total_pending_pcs ?? 0) > 0 || item.status === "pending").length,
+  );
   let stokKainKritis = $derived(
-    stokKain.filter((k) => k.stok_tersedia < 100),
+    stokKain.filter((k) => k.stok_tersedia < KRITIS_KAIN),
+  );
+  let stokBarangJadiKritis = $derived(
+    barangJadi.filter((item) => item.stok_tersedia > 0 && item.stok_tersedia <= KRITIS_BARANG_JADI),
   );
   let stokKainRingkas = $derived.by(() =>
     [...stokKain]
@@ -102,13 +125,99 @@
       .slice(0, 5),
   );
 
+  let totalPemasukan = $derived(
+    transaksiFiltered
+      .filter((item) => item.tipe === "pemasukan")
+      .reduce((s, item) => s + item.nominal, 0),
+  );
+  let totalPengeluaran = $derived(
+    transaksiFiltered
+      .filter((item) => item.tipe === "pengeluaran")
+      .reduce((s, item) => s + item.nominal, 0),
+  );
+  let kasBersih = $derived(totalPemasukan - totalPengeluaran);
+  let totalGajiTerbayar = $derived(
+    pembayaranGaji.reduce((s, item) => s + (item.total_gaji ?? 0), 0),
+  );
+  let nilaiGudangProduksi = $derived.by(() =>
+    barangJadi.reduce((sum, item) => {
+      const model = modelMap.get(item.model_id) ?? modelNameMap.get(item.nama_model);
+      return sum + item.stok_tersedia * (model?.harga_produksi ?? 0);
+    }, 0),
+  );
+
+  const PIPELINE_GROUPS: Array<{ label: string; statuses: StatusBatch[]; href: string }> = [
+    { label: "Butuh Kain", statuses: ["PENDING_KAIN"], href: "/produksi/cutting" },
+    { label: "Siap Cutting", statuses: ["PENDING_CUTTING"], href: "/produksi/cutting" },
+    { label: "Proses Cutting", statuses: ["CUTTING_IN_PROGRESS"], href: "/produksi/cutting" },
+    { label: "Siap Jahit", statuses: ["CUTTING_DONE"], href: "/produksi/jahit" },
+    { label: "Proses Jahit", statuses: ["JAHIT_IN_PROGRESS"], href: "/produksi/jahit" },
+    { label: "Siap Steam", statuses: ["JAHIT_DONE"], href: "/produksi/steam" },
+    { label: "Proses Steam", statuses: ["STEAM_IN_PROGRESS", "STEAM_DONE"], href: "/produksi/steam" },
+  ];
+
+  let pipelineSummary = $derived.by(() =>
+    PIPELINE_GROUPS.map((group) => {
+      const items = batchAktif.filter((batch) => group.statuses.includes(batch.status));
+      return {
+        ...group,
+        count: items.length,
+        pcs: items.reduce((sum, item) => sum + item.total_pcs, 0),
+      };
+    }),
+  );
+
+  let butuhTindakan = $derived.by(() => {
+    const items: Array<{ label: string; value: string; href: string; tone: string }> = [];
+    if (pendingKeluarPcs > 0) {
+      items.push({
+        label: "Pending barang keluar",
+        value: `${pendingKeluarPcs.toLocaleString("id-ID")} pcs`,
+        href: "/barang-keluar",
+        tone: "text-red-700 bg-red-50 border-red-100",
+      });
+    }
+    if (stokKainKritis.length > 0) {
+      items.push({
+        label: "Kain perlu restock",
+        value: `${stokKainKritis.length} item`,
+        href: "/stok-kain",
+        tone: "text-amber-700 bg-amber-50 border-amber-100",
+      });
+    }
+    if (stokBarangJadiKritis.length > 0) {
+      items.push({
+        label: "Barang jadi kritis",
+        value: `${stokBarangJadiKritis.length} ukuran`,
+        href: "/barang-jadi",
+        tone: "text-rose-700 bg-rose-50 border-rose-100",
+      });
+    }
+    const siapJahit = pipelineSummary.find((item) => item.label === "Siap Jahit")?.count ?? 0;
+    const siapSteam = pipelineSummary.find((item) => item.label === "Siap Steam")?.count ?? 0;
+    if (siapJahit + siapSteam > 0) {
+      items.push({
+        label: "Menunggu penugasan",
+        value: `${siapJahit + siapSteam} batch`,
+        href: "/monitor-produksi",
+        tone: "text-blue-700 bg-blue-50 border-blue-100",
+      });
+    }
+    return items.slice(0, 4);
+  });
+
   function stokKainLabel(kain: StokKain): string {
     return kain.nama_warna
       ? `${kain.nama_kain} - ${kain.nama_warna}`
       : kain.nama_kain;
   }
 
-  // ── Derived: Estimasi Keuangan (Demo) ────────────────────────────
+  function formatQty(value: number): string {
+    const rounded = Math.round((Number(value) || 0) * 10) / 10;
+    return rounded.toLocaleString("id-ID", { maximumFractionDigits: 1 });
+  }
+
+  // Derived: Estimasi Keuangan (Demo)
   let estimasiKeuangan = $derived.by(() => {
     let pendapatan = 0;
     let biayaProduksi = 0;
@@ -171,7 +280,7 @@
     return Math.round(((totalKeluarPcs - prevKeluarPcs) / prevKeluarPcs) * 100);
   });
 
-  // ── Chart Canvas Refs ─────────────────────────────────────────────
+  // Chart Canvas Refs
   let canvasStatus = $state<HTMLCanvasElement | undefined>(undefined);
   let canvasModel = $state<HTMLCanvasElement | undefined>(undefined);
   let canvasTrend = $state<HTMLCanvasElement | undefined>(undefined);
@@ -179,7 +288,7 @@
   let chartModel: Chart | null = null;
   let chartTrend: Chart | null = null;
 
-  // ── Chart Config ─────────────────────────────────────────────────
+  // Chart Config
   const STATUS_CHART_COLORS: Record<StatusBatch, string> = {
     PENDING_KAIN: "#67e8f9",
     PENDING_CUTTING: "#e2e8f0",
@@ -273,7 +382,7 @@
     return { labels, data };
   }
 
-  // ── Chart Builders ────────────────────────────────────────────────
+  // Chart Builders
   function buildStatusChart() {
     chartStatus?.destroy();
     chartStatus = null;
@@ -417,13 +526,33 @@
     });
   }
 
+  async function loadFinanceForRange(range: DateRange) {
+    const key = range ? `${range.start.toISOString()}|${range.end.toISOString()}` : "all";
+    financeRangeKey = key;
+    const [transaksi, gaji] = await Promise.all([
+      getTransaksiKeuangan(range),
+      getPembayaranGajiPeriode(range),
+    ]);
+    if (financeRangeKey !== key) return;
+    transaksiKeuangan = transaksi;
+    pembayaranGaji = gaji;
+  }
+
   // Rebuild only the date-filtered chart when range changes
   $effect(() => {
     const filtered = keluarFiltered; // track dependency
     if (canvasModel && !loading) buildModelChart(filtered);
   });
 
-  // ── Data Loading ──────────────────────────────────────────────────
+  $effect(() => {
+    const range = dateRange;
+    if (!lastLoaded) return;
+    loadFinanceForRange(range).catch(() => {
+      errorMsg = "Gagal memuat data keuangan.";
+    });
+  });
+
+  // Data Loading
   async function load(force = false) {
     // Kalau semua cache masih fresh dan bukan force refresh, pakai data cache
     const allFresh =
@@ -434,12 +563,13 @@
       modelBajuCache.isFresh();
 
     if (!force && allFresh) {
-      // Ambil dari cache tanpa loading state — instan
+      // Ambil dari cache tanpa loading state - instan
       batches = batchCache.data ?? [];
       stokKain = stokKainCache.data ?? [];
       barangJadi = barangJadiCache.data ?? [];
       barangKeluar = barangKeluarCache.data ?? [];
       modelBaju = modelBajuCache.data ?? [];
+      await loadFinanceForRange(dateRange);
       lastLoaded = batchCache.fetchedAt ? new Date(batchCache.fetchedAt) : lastLoaded;
       await tick();
       buildStatusChart();
@@ -451,13 +581,16 @@
     loading = true;
     errorMsg = null;
     try {
-      [batches, stokKain, barangJadi, barangKeluar, modelBaju] = await Promise.all([
+      [batches, stokKain, barangJadi, barangKeluar, modelBaju, transaksiKeuangan, pembayaranGaji] = await Promise.all([
         batchCache.get(force),
         stokKainCache.get(force),
         barangJadiCache.get(force),
         barangKeluarCache.get(force),
         modelBajuCache.get(force),
+        getTransaksiKeuangan(dateRange),
+        getPembayaranGajiPeriode(dateRange),
       ]);
+      financeRangeKey = dateRange ? `${dateRange.start.toISOString()}|${dateRange.end.toISOString()}` : "all";
       lastLoaded = new Date();
       await tick();
       buildStatusChart();
@@ -481,7 +614,7 @@
   });
 </script>
 
-<!-- ── Page Header ────────────────────────────────────────────────── -->
+<!-- Page Header -->
 <div class="mb-5 flex flex-wrap items-start justify-between gap-4">
   <div>
     <h1 class="text-xl font-semibold text-gray-900">Dashboard Utama</h1>
@@ -521,7 +654,7 @@
   </div>
 </div>
 
-<!-- ── Error ─────────────────────────────────────────────────────── -->
+<!-- Error -->
 {#if errorMsg}
   <div
     class="mb-4 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
@@ -542,12 +675,35 @@
   </div>
 {/if}
 
-<!-- ── Period Selector ────────────────────────────────────────────── -->
+<!-- Period Selector -->
 <div class="mb-5">
   <PeriodSelector bind:dateRange defaultPeriod="bulan_ini" />
 </div>
 
-<!-- ── KPI Cards ──────────────────────────────────────────────────── -->
+{#if butuhTindakan.length > 0}
+  <div class="mb-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+    <div class="mb-3 flex items-center justify-between gap-3">
+      <div>
+        <h2 class="text-sm font-semibold text-gray-900">Butuh Tindakan</h2>
+        <p class="text-xs text-gray-500">Prioritas operasional yang perlu dicek hari ini.</p>
+      </div>
+      <a href="/laporan" class="text-xs font-medium text-blue-600 hover:underline">Lihat laporan</a>
+    </div>
+    <div class="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+      {#each butuhTindakan as item}
+        <a
+          href={item.href}
+          class="flex items-center justify-between rounded-lg border px-3 py-2.5 text-sm transition hover:-translate-y-0.5 hover:shadow-sm {item.tone}"
+        >
+          <span class="font-medium">{item.label}</span>
+          <span class="font-bold">{item.value}</span>
+        </a>
+      {/each}
+    </div>
+  </div>
+{/if}
+
+<!-- KPI Cards -->
 {#if loading && batches.length === 0}
   <div class="mb-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
     {#each Array(4) as _}
@@ -564,7 +720,7 @@
   <div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
     <div class="flex items-start justify-between">
       <p class="text-xs font-medium uppercase tracking-wider text-gray-400">
-        Batch Aktif
+        Produksi Aktif
       </p>
       <span
         class="flex h-7 w-7 items-center justify-center rounded-lg bg-orange-50"
@@ -587,7 +743,7 @@
     <p class="mt-3 text-3xl font-bold tracking-tight text-gray-900">
       {batchAktif.length}
     </p>
-    <p class="mt-0.5 text-xs text-gray-500">Dalam proses produksi</p>
+    <p class="mt-0.5 text-xs text-gray-500">batch belum selesai</p>
     <div class="mt-3 h-1 w-full rounded-full bg-gray-100">
       <div
         class="h-1 rounded-full bg-orange-400"
@@ -596,13 +752,13 @@
           : 0}%"
       ></div>
     </div>
-    <p class="mt-1 text-xs text-gray-400">{batchSelesai} batch selesai</p>
+    <p class="mt-1 text-xs text-gray-400">{pipelineSummary.find((p) => p.label === "Siap Jahit")?.count ?? 0} siap jahit</p>
   </div>
 
   <div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
     <div class="flex items-start justify-between">
       <p class="text-xs font-medium uppercase tracking-wider text-gray-400">
-        Stok Barang Jadi
+        Stok Siap Jual
       </p>
       <span
         class="flex h-7 w-7 items-center justify-center rounded-lg bg-green-50"
@@ -625,16 +781,16 @@
     <p class="mt-3 text-3xl font-bold tracking-tight text-gray-900">
       {totalStokPcs.toLocaleString("id-ID")}
     </p>
-    <p class="mt-0.5 text-xs text-gray-500">pcs tersedia di gudang</p>
+    <p class="mt-0.5 text-xs text-gray-500">pcs siap kirim</p>
     <p class="mt-3 text-xs text-gray-400">
-      {barangJadi.length} varian model &amp; ukuran
+      Nilai produksi {formatRupiah(nilaiGudangProduksi)}
     </p>
   </div>
 
   <div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
     <div class="flex items-start justify-between">
       <p class="text-xs font-medium uppercase tracking-wider text-gray-400">
-        Stok Kain
+        Kas Periode
       </p>
       <span
         class="flex h-7 w-7 items-center justify-center rounded-lg {stokKainKritis.length >
@@ -660,24 +816,18 @@
       </span>
     </div>
     <p class="mt-3 text-3xl font-bold tracking-tight text-gray-900">
-      {totalKainYard.toLocaleString("id-ID")}
+      {formatRupiah(kasBersih)}
     </p>
-    <p class="mt-0.5 text-xs text-gray-500">yard tersedia</p>
-    {#if stokKainKritis.length > 0}
-      <p class="mt-3 text-xs font-semibold text-amber-600">
-        ⚠ {stokKainKritis.length} jenis kain kritis
-      </p>
-    {:else}
-      <p class="mt-3 text-xs text-gray-400">
-        {stokKain.length} jenis kain
-      </p>
-    {/if}
+    <p class="mt-0.5 text-xs text-gray-500">masuk - keluar</p>
+    <p class="mt-3 text-xs text-gray-400">
+      Masuk {formatRupiah(totalPemasukan)} / Keluar {formatRupiah(totalPengeluaran)}
+    </p>
   </div>
 
   <div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
     <div class="flex items-start justify-between">
       <p class="text-xs font-medium uppercase tracking-wider text-gray-400">
-        Keluar (Periode)
+        Barang Keluar
       </p>
       <span
         class="flex h-7 w-7 items-center justify-center rounded-lg bg-violet-50"
@@ -700,99 +850,80 @@
     <p class="mt-3 text-3xl font-bold tracking-tight text-gray-900">
       {totalKeluarPcs.toLocaleString("id-ID")}
     </p>
-    <p class="mt-0.5 text-xs text-gray-500">pcs dikirimkan</p>
-    {#if growthPersen !== null}
-      <p
-        class="mt-3 text-xs font-medium {growthPersen >= 0
-          ? 'text-green-600'
-          : 'text-red-500'}"
-      >
-        {growthPersen >= 0 ? "↑" : "↓"}
-        {Math.abs(growthPersen)}% vs periode sebelumnya
+    <p class="mt-0.5 text-xs text-gray-500">pcs keluar periode ini</p>
+    {#if pendingKeluarPcs > 0}
+      <p class="mt-3 text-xs font-semibold text-red-600">
+        {pendingKeluarPcs.toLocaleString("id-ID")} pcs pending
       </p>
     {:else}
       <p class="mt-3 text-xs text-gray-400">
-        {keluarFiltered.length} transaksi
+        {totalListKeluar} list barang keluar
       </p>
     {/if}
   </div>
 </div>
 {/if}
 
-<!-- ── Keuangan Summary ────────────────────────────────────────────── -->
-<div class="mb-4 rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
-  <div class="mb-4 flex items-center gap-3">
-    <div>
-      <div class="flex items-center gap-2">
-        <h2 class="text-sm font-semibold text-gray-800">Ringkasan Keuangan</h2>
-        <span
-          class="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-600"
-          >ESTIMASI</span
-        >
+<!-- Keuangan Summary -->
+<div class="mb-4 grid grid-cols-1 gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+  <div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
+    <div class="mb-4 flex items-center justify-between gap-3">
+      <div>
+        <h2 class="text-sm font-semibold text-gray-800">Alur Produksi</h2>
+        <p class="text-xs text-gray-400">Status aktif berdasarkan tahap terakhir tiap batch.</p>
       </div>
-      <p class="text-xs text-gray-400">
-        Berdasarkan barang keluar selesai dan harga di master model baju
-      </p>
+      <a href="/monitor-produksi" class="text-xs font-medium text-blue-600 hover:underline">Monitor</a>
     </div>
-    <a
-      href="/keuangan"
-      class="ml-auto text-xs font-medium text-blue-600 hover:underline"
-    >
-      Lihat Laporan →
-    </a>
+    <div class="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+      {#each pipelineSummary as step}
+        <a href={step.href} class="rounded-lg border border-gray-100 bg-gray-50 px-3 py-3 transition hover:border-blue-200 hover:bg-blue-50">
+          <p class="text-xs font-medium text-gray-500">{step.label}</p>
+          <p class="mt-1 text-xl font-bold text-gray-900">{step.count}</p>
+          <p class="text-xs text-gray-400">{step.pcs.toLocaleString("id-ID")} pcs</p>
+        </a>
+      {/each}
+    </div>
   </div>
 
-  <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
-    <div class="rounded-lg border border-gray-100 bg-gray-50 p-4">
-      <p class="text-xs font-medium text-gray-500">Est. Pendapatan</p>
-      <p class="mt-1.5 text-xl font-bold text-gray-900">
-        {formatRupiah(estPendapatan)}
-      </p>
-      <p class="mt-0.5 text-xs text-gray-400">
-        {totalKeluarPcs.toLocaleString("id-ID")} pcs terkirim
-        {#if estimasiKeuangan.pcsTanpaHargaJual > 0}
-          · {estimasiKeuangan.pcsTanpaHargaJual.toLocaleString("id-ID")} pcs tanpa harga jual
-        {/if}
-      </p>
-    </div>
-    <div class="rounded-lg border border-gray-100 bg-gray-50 p-4">
-      <p class="text-xs font-medium text-gray-500">Est. Biaya Produksi</p>
-      <p class="mt-1.5 text-xl font-bold text-gray-900">
-        {formatRupiah(estBiaya)}
-      </p>
-      <p class="mt-0.5 text-xs text-gray-400">
-        Harga produksi model
-        {#if estimasiKeuangan.pcsTanpaHargaProduksi > 0}
-          · {estimasiKeuangan.pcsTanpaHargaProduksi.toLocaleString("id-ID")} pcs belum lengkap
-        {/if}
-      </p>
-    </div>
-    <div class="rounded-lg border border-gray-100 bg-gray-50 p-4">
-      <p class="text-xs font-medium text-gray-500">Est. Laba Kotor</p>
-      <p class="mt-1.5 text-xl font-bold text-gray-900">
-        {formatRupiah(estLabaKotor)}
-      </p>
-      <p class="mt-0.5 text-xs text-gray-400">Pendapatan - biaya produksi</p>
-    </div>
-    <div class="rounded-lg border border-gray-100 bg-gray-50 p-4">
-      <p class="text-xs font-medium text-gray-500">Est. Laba Bersih</p>
-      <p class="mt-1.5 text-xl font-bold text-gray-900">
-        {formatRupiah(estLabaBersih)}
-      </p>
-      <div class="mt-1.5 h-1.5 w-full rounded-full bg-gray-200">
-        <div
-          class="h-1.5 rounded-full bg-emerald-500"
-          style="width: {Math.min(Math.max(marginPersen, 0), 100)}%"
-        ></div>
+  <div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
+    <div class="mb-4 flex items-center justify-between gap-3">
+      <div>
+        <h2 class="text-sm font-semibold text-gray-800">Ringkas Periode</h2>
+        <p class="text-xs text-gray-400">Data kas, gaji, dan pengiriman.</p>
       </div>
-      <p class="mt-0.5 text-xs text-gray-400">
-        Margin kotor {marginPersen}%, belum dikurangi pengeluaran umum
-      </p>
+      <a href="/keuangan" class="text-xs font-medium text-blue-600 hover:underline">Keuangan</a>
+    </div>
+    <div class="space-y-3">
+      <div class="flex items-center justify-between gap-3">
+        <span class="text-sm text-gray-500">Pemasukan</span>
+        <strong class="text-sm text-emerald-700">{formatRupiah(totalPemasukan)}</strong>
+      </div>
+      <div class="flex items-center justify-between gap-3">
+        <span class="text-sm text-gray-500">Pengeluaran</span>
+        <strong class="text-sm text-red-600">{formatRupiah(totalPengeluaran)}</strong>
+      </div>
+      <div class="flex items-center justify-between gap-3 border-t border-gray-100 pt-3">
+        <span class="text-sm font-medium text-gray-700">Kas bersih</span>
+        <strong class="text-base {kasBersih >= 0 ? 'text-gray-900' : 'text-red-600'}">{formatRupiah(kasBersih)}</strong>
+      </div>
+      <div class="flex items-center justify-between gap-3">
+        <span class="text-sm text-gray-500">Gaji terbayar</span>
+        <strong class="text-sm text-gray-900">{formatRupiah(totalGajiTerbayar)}</strong>
+      </div>
+      <div class="flex items-center justify-between gap-3">
+        <span class="text-sm text-gray-500">List barang keluar</span>
+        <strong class="text-sm text-gray-900">{totalListKeluar} list</strong>
+      </div>
+      {#if pendingKeluarList > 0}
+        <div class="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs font-medium text-red-700">
+          {pendingKeluarList} list masih pending.
+        </div>
+      {/if}
     </div>
   </div>
 </div>
 
-<!-- ── Charts Row ─────────────────────────────────────────────────── -->
+<!-- Charts Row -->
 <div class="mb-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
   <!-- Doughnut: Status Batch (always current state) -->
   <div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
@@ -800,7 +931,7 @@
       Distribusi Status Produksi
     </h2>
     <p class="mb-4 text-xs text-gray-400">
-      {batches.length} batch total — status saat ini
+      {batches.length} batch total - status saat ini
     </p>
     <div class="relative h-64">
       <canvas bind:this={canvasStatus}></canvas>
@@ -825,13 +956,13 @@
   </div>
 </div>
 
-<!-- ── Trend Line (always 6 months) ──────────────────────────────── -->
+<!-- Trend Line (always 6 months) -->
 <div class="mb-4 rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
   <div class="mb-4 flex items-center justify-between">
     <div>
       <h2 class="text-sm font-semibold text-gray-800">Tren Barang Keluar</h2>
       <p class="text-xs text-gray-400">
-        6 bulan terakhir — total pcs dikirimkan (tampilan tetap)
+        6 bulan terakhir - total pcs dikirimkan
       </p>
     </div>
   </div>
@@ -840,7 +971,7 @@
   </div>
 </div>
 
-<!-- ── Bottom Row ─────────────────────────────────────────────────── -->
+<!-- Bottom Row -->
 <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
   <!-- Batch Aktif -->
   <div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
@@ -852,7 +983,7 @@
       <a
         href="/monitor-produksi"
         class="text-xs font-medium text-blue-600 hover:underline"
-        >Lihat semua →</a
+        >Lihat semua</a
       >
     </div>
 
@@ -899,7 +1030,7 @@
       <a
         href="/stok-kain"
         class="text-xs font-medium text-blue-600 hover:underline"
-        >Lihat semua →</a
+        >Lihat semua</a
       >
     </div>
     <div class="space-y-3">
@@ -918,7 +1049,7 @@
                 ? 'font-semibold text-amber-600'
                 : 'text-gray-500'}"
             >
-              {kain.stok_tersedia.toLocaleString("id-ID")} {kain.satuan}{kritis || menipis
+              {formatQty(kain.stok_tersedia)} {kain.satuan}{kritis || menipis
                 ? " !"
                 : ""}
             </span>
