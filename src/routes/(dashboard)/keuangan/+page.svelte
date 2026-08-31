@@ -855,7 +855,7 @@
   {/if}
 
   {#if pageMode === "ringkasan"}
-    <div class="mb-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
+    <div class="mb-5 grid grid-cols-1 items-start gap-4 lg:grid-cols-3">
       <section class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm lg:col-span-2">
         <div class="flex items-start justify-between gap-3">
           <div>
@@ -892,7 +892,7 @@
         {/if}
       </section>
 
-      <section class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
+      <section class="h-fit rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
         <h2 class="text-sm font-semibold text-gray-800">Komposisi Nilai</h2>
         <div class="mt-5 space-y-4">
           {#each [["Kas", summary.kasTercatat, "bg-blue-500"], ["Aset", summary.totalAset, "bg-violet-500"], ["Gudang", summary.gudangProduksi, "bg-teal-500"]] as item}
@@ -913,7 +913,7 @@
   {/if}
 
   {#if pageMode === "ringkasan"}
-  <div class="mb-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
+  <div class="mb-5 grid grid-cols-1 items-start gap-4 lg:grid-cols-3">
     <section class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm lg:col-span-2">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div>
@@ -966,7 +966,7 @@
       </div>
     </section>
 
-    <section class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
+    <section class="h-fit rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
       <h2 class="text-sm font-semibold text-gray-800">Pengeluaran Terbesar</h2>
       {#if expenseBreakdown.length === 0}
         <div class="py-10 text-center text-sm text-gray-400">Belum ada pengeluaran manual.</div>
@@ -1131,25 +1131,27 @@
   {/if}
 
   {#if pageMode === "ringkasan"}
-    <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
-      <div class="flex flex-wrap items-center gap-2">
-        {#each [["transaksi", "Transaksi"], ["aset", "Aset"], ["gudang", "Tabungan Gudang"]] as panel}
-          <Button
-            size="sm"
-            variant={activePanel === panel[0] ? "default" : "outline"}
-            onclick={() => (activePanel = panel[0] as typeof activePanel)}
-          >
-            {panel[1]}
+    <section class="mb-4 rounded-xl border border-gray-100 bg-white p-3 shadow-sm">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div class="flex flex-wrap items-center gap-2">
+          {#each [["transaksi", "Transaksi"], ["aset", "Aset"], ["gudang", "Tabungan Gudang"]] as panel}
+            <Button
+              size="sm"
+              variant={activePanel === panel[0] ? "default" : "outline"}
+              onclick={() => (activePanel = panel[0] as typeof activePanel)}
+            >
+              {panel[1]}
+            </Button>
+          {/each}
+        </div>
+        {#if activePanel === "aset"}
+          <Button onclick={openTambahAset}>
+            <PlusIcon class="h-4 w-4" />
+            Tambah Aset
           </Button>
-        {/each}
+        {/if}
       </div>
-      {#if activePanel === "aset"}
-        <Button onclick={openTambahAset}>
-          <PlusIcon class="h-4 w-4" />
-          Tambah Aset
-        </Button>
-      {/if}
-    </div>
+    </section>
   {/if}
 
   {#if pageMode !== "ringkasan" || activePanel === "transaksi"}

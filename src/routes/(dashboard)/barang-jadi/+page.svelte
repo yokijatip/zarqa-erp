@@ -13,6 +13,7 @@
   import ShirtIcon from "@lucide/svelte/icons/shirt";
   import PackageIcon from "@lucide/svelte/icons/package";
   import PackageCheckIcon from "@lucide/svelte/icons/package-check";
+  import AlertTriangleIcon from "@lucide/svelte/icons/triangle-alert";
 
   // Threshold stok kritis per ukuran
   const KRITIS_THRESHOLD = 5;
@@ -211,12 +212,17 @@
   let totalTersedia = $derived(
     stokList.reduce((s, i) => s + i.stok_tersedia, 0),
   );
-  let totalMasuk = $derived(stokList.reduce((s, i) => s + i.total_masuk, 0));
   let modelKosong = $derived(
     grouped.filter((m) => getModelStatus(m) === "kosong").length,
   );
   let modelKritis = $derived(
     grouped.filter((m) => getModelStatus(m) === "kritis").length,
+  );
+  let ukuranKritis = $derived(
+    stokList.filter((i) => i.stok_tersedia > 0 && i.stok_tersedia <= KRITIS_THRESHOLD).length,
+  );
+  let ukuranMenipis = $derived(
+    stokList.filter((i) => i.stok_tersedia > KRITIS_THRESHOLD && i.stok_tersedia <= LOW_THRESHOLD).length,
   );
 
   // ── Helpers ────────────────────────────────────────────────────────
@@ -502,10 +508,20 @@
       valueClass="text-teal-700"
     />
     <StatCard
-      title="Total Masuk"
-      value={totalMasuk.toLocaleString("id-ID")}
+      title="Ukuran Kritis"
+      value={ukuranKritis}
+      icon={AlertTriangleIcon}
+      footerSubtext={`<= ${KRITIS_THRESHOLD} pcs per ukuran`}
+      class="border-red-100 bg-red-50"
+      valueClass="text-red-600"
+    />
+    <StatCard
+      title="Ukuran Menipis"
+      value={ukuranMenipis}
       icon={PackageIcon}
-      footerSubtext="pcs dari produksi"
+      footerSubtext={`${KRITIS_THRESHOLD + 1}-${LOW_THRESHOLD} pcs per ukuran`}
+      class="border-amber-100 bg-amber-50"
+      valueClass="text-amber-600"
     />
   {/if}
 </div>

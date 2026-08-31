@@ -10,12 +10,15 @@
 import { collectionGroup, getDocs, getDoc, doc, collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from './config';
 import { consumeSumberCuttingLots } from './batch-produksi';
+import { getKaryawanList } from './karyawan';
 import type {
   RiwayatProses,
   StatusBatch,
   BatchProduksi,
   DivisiProduksi,
   PenggajianSumberLot,
+  UserProfile,
+  UserRole,
 } from '$lib/types';
 
 // Status yang menandai pcs "diterima/selesai" pada masing-masing divisi.
@@ -24,6 +27,12 @@ const STATUS_DIVISI: Partial<Record<StatusBatch, DivisiProduksi>> = {
   JAHIT_DONE: 'Jahit',
   STEAM_DONE: 'Steam',
   COMPLETED: 'Steam',
+};
+
+const DIVISI_ROLE: Record<DivisiProduksi, UserRole> = {
+  Cutting: 'kepala_cutting',
+  Jahit: 'kepala_jahit',
+  Steam: 'kepala_steam',
 };
 
 interface RiwayatEvent {
@@ -195,7 +204,11 @@ export async function getPenggajianPeriode(
   const events = await getRiwayatEvents(range);
   if (events.length === 0) return [];
 
-  const batchMap = await getBatchMap(events.map((e) => e.batchId));
+  const [batchMap, karyawanList] = await Promise.all([
+    getBatchMap(events.map((e) => e.batchId)),
+    getKaryawanList(),
+  ]);
+  const karyawanMap = new Map(karyawanList.map((k) => [k.uid, k]));
 
   const map = new Map<string, PenggajianData>();
 
@@ -227,6 +240,13 @@ export async function getPenggajianPeriode(
     return { uid: ev.uid, nama: ev.nama };
   }
 
+  function isValidProductionWorker(worker: { uid: string; nama: string }, divisi: DivisiProduksi): UserProfile | null {
+    const profile = karyawanMap.get(worker.uid);
+    if (!profile) return null;
+    if (profile.status_kerja === 'nonaktif') return null;
+    return profile.role === DIVISI_ROLE[divisi] ? profile : null;
+  }
+
   function formatTanggal(date: Date | null): string {
     if (!date) return "—";
     return date.toLocaleDateString("id-ID", {
@@ -245,8 +265,10 @@ export async function getPenggajianPeriode(
 
     const payrollWorker = workerForPayroll(ev, batch);
     if (!payrollWorker?.uid) continue;
+    const payrollProfile = isValidProductionWorker(payrollWorker, ev.divisi);
+    if (!payrollProfile) continue;
 
-    const entry = getOrCreate(payrollWorker.uid, payrollWorker.nama, ev.divisi);
+    const entry = getOrCreate(payrollProfile.uid, payrollProfile.name, ev.divisi);
     entry.total_pcs += ev.pcsBerhasil;
     entry.jumlah_batch += 1;
 

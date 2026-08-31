@@ -4,7 +4,6 @@
   import { subscribeStokKain } from "$lib/firebase/stok-kain";
   import { getStokBarangJadi } from "$lib/firebase/barang-jadi";
   import type { BatchProduksi, StokKain, StokBarangJadi, StatusBatch } from "$lib/types";
-  import { STATUS_LABEL } from "$lib/types";
   import StatCard from "$lib/components/StatCard.svelte";
   import { getPerformaPerDivisi, type PerformaKaryawan, type DivisiKey } from "$lib/firebase/performa";
   import ListIcon from "@lucide/svelte/icons/list";
@@ -18,6 +17,18 @@
     status: StatusBatch;
     label: string;
     short: string;
+    dot: string;
+    ring: string;
+    textActive: string;
+    bgActive: string;
+    borderActive: string;
+  };
+
+  type PipelineGroup = {
+    key: string;
+    label: string;
+    hint: string;
+    statuses: StatusBatch[];
     dot: string;
     ring: string;
     textActive: string;
@@ -122,6 +133,86 @@
     STAGES.map((s) => [s.status, s]),
   ) as Record<StatusBatch, StageConf>;
 
+  const PIPELINE_GROUPS: PipelineGroup[] = [
+    {
+      key: "kain",
+      label: "Butuh Kain",
+      hint: "isi pembagian",
+      statuses: ["PENDING_KAIN"],
+      dot: "bg-cyan-500",
+      ring: "ring-cyan-300",
+      textActive: "text-cyan-700",
+      bgActive: "bg-cyan-50",
+      borderActive: "border-cyan-200",
+    },
+    {
+      key: "siap_cutting",
+      label: "Siap Cutting",
+      hint: "menunggu potong",
+      statuses: ["PENDING_CUTTING"],
+      dot: "bg-slate-500",
+      ring: "ring-slate-300",
+      textActive: "text-slate-700",
+      bgActive: "bg-slate-50",
+      borderActive: "border-slate-200",
+    },
+    {
+      key: "proses_cutting",
+      label: "Proses Cutting",
+      hint: "sedang dipotong",
+      statuses: ["CUTTING_IN_PROGRESS"],
+      dot: "bg-orange-500",
+      ring: "ring-orange-300",
+      textActive: "text-orange-700",
+      bgActive: "bg-orange-50",
+      borderActive: "border-orange-200",
+    },
+    {
+      key: "siap_jahit",
+      label: "Siap Jahit",
+      hint: "hasil cutting",
+      statuses: ["CUTTING_DONE"],
+      dot: "bg-yellow-500",
+      ring: "ring-yellow-300",
+      textActive: "text-yellow-700",
+      bgActive: "bg-yellow-50",
+      borderActive: "border-yellow-200",
+    },
+    {
+      key: "proses_jahit",
+      label: "Proses Jahit",
+      hint: "sedang dijahit",
+      statuses: ["JAHIT_IN_PROGRESS"],
+      dot: "bg-blue-500",
+      ring: "ring-blue-300",
+      textActive: "text-blue-700",
+      bgActive: "bg-blue-50",
+      borderActive: "border-blue-200",
+    },
+    {
+      key: "siap_steam",
+      label: "Siap Steam",
+      hint: "hasil jahit",
+      statuses: ["JAHIT_DONE"],
+      dot: "bg-teal-500",
+      ring: "ring-teal-300",
+      textActive: "text-teal-700",
+      bgActive: "bg-teal-50",
+      borderActive: "border-teal-200",
+    },
+    {
+      key: "proses_steam",
+      label: "Proses Steam",
+      hint: "finishing",
+      statuses: ["STEAM_IN_PROGRESS", "STEAM_DONE"],
+      dot: "bg-purple-500",
+      ring: "ring-purple-300",
+      textActive: "text-purple-700",
+      bgActive: "bg-purple-50",
+      borderActive: "border-purple-200",
+    },
+  ];
+
   // ── Quick actions ─────────────────────────────────────────────────
   const ACTIONS: {
     title: string;
@@ -177,7 +268,7 @@
   let loadingKain = $state(true);
   let loadingBarangJadi = $state(true);
   let loadingPerforma = $state(true);
-  let selectedStage = $state<StatusBatch | null>(null);
+  let selectedPipeline = $state<string | null>(null);
   let lastUpdated = $state<Date | null>(null);
 
   // ── Derived ────────────────────────────────────────────────────────
@@ -212,7 +303,8 @@
 
   let filteredBatch = $derived.by(() => {
     let list = batchPeriod;
-    if (selectedStage) list = list.filter((b) => b.status === selectedStage);
+    const group = PIPELINE_GROUPS.find((g) => g.key === selectedPipeline);
+    if (group) list = list.filter((b) => group.statuses.includes(b.status));
     return [...list].sort(
       (a, b) => hitungHari(b.createdAt) - hitungHari(a.createdAt),
     );
@@ -227,6 +319,20 @@
     return batchPeriod
       .filter((b) => b.status === status)
       .reduce((s, b) => s + b.total_pcs, 0);
+  }
+
+  function countGroup(group: PipelineGroup): number {
+    return batchPeriod.filter((b) => group.statuses.includes(b.status)).length;
+  }
+
+  function pcsGroup(group: PipelineGroup): number {
+    return batchPeriod
+      .filter((b) => group.statuses.includes(b.status))
+      .reduce((s, b) => s + b.total_pcs, 0);
+  }
+
+  function selectedPipelineLabel(): string {
+    return PIPELINE_GROUPS.find((g) => g.key === selectedPipeline)?.label ?? "Semua Batch Aktif";
   }
 
   function hitungHari(createdAt: any): number {
@@ -246,6 +352,14 @@
 
   function labelKain(kain: StokKain): string {
     return kain.nama_warna ? `${kain.nama_kain} - ${kain.nama_warna}` : kain.nama_kain;
+  }
+
+  function formatQty(value: number): string {
+    const rounded = Math.round(value * 10) / 10;
+    return rounded.toLocaleString("id-ID", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 1,
+    });
   }
 
   function formatLastUpdated(d: Date): string {
@@ -317,7 +431,7 @@
 </div>
 
 <!-- ── Alert Banners ───────────────────────────────────────────────── -->
-{#if !loadingKain && kainKritis.length > 0}
+{#if !loadingKain && kainKritis.some((k) => k.stok_tersedia > 0)}
   <div
     class="mb-4 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4"
   >
@@ -339,7 +453,8 @@
       </p>
       <p class="mt-0.5 text-xs text-amber-700">
         {kainKritis
-          .map((k) => `${k.nama_kain} (${k.stok_tersedia} ${k.satuan})`)
+          .filter((k) => k.stok_tersedia > 0)
+          .map((k) => `${k.nama_kain} (${formatQty(k.stok_tersedia)} ${k.satuan})`)
           .join(" · ")}
       </p>
     </div>
@@ -468,7 +583,7 @@
 
 <!-- ── Pipeline Produksi ───────────────────────────────────────────── -->
 <div class="mb-4 rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
-  <div class="mb-4 flex items-center justify-between">
+  <div class="mb-4 flex flex-wrap items-start justify-between gap-3">
     <div>
       <h2 class="text-sm font-semibold text-gray-800">Pipeline Produksi</h2>
       <p class="text-xs text-gray-400">
@@ -482,9 +597,9 @@
         {/if}
       </p>
     </div>
-    {#if selectedStage}
+    {#if selectedPipeline}
       <button
-        onclick={() => (selectedStage = null)}
+        onclick={() => (selectedPipeline = null)}
         class="flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline"
       >
         <svg
@@ -506,48 +621,43 @@
     {/if}
   </div>
 
-  <!-- Stage tiles -->
-  <div class="grid grid-cols-4 gap-2 lg:grid-cols-8">
-    {#each STAGES as stage}
-      {@const count = countStatus(stage.status)}
-      {@const pcs = pcsStatus(stage.status)}
+  <div class="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-7">
+    {#each PIPELINE_GROUPS as group}
+      {@const count = countGroup(group)}
+      {@const pcs = pcsGroup(group)}
       {@const active = count > 0}
-      {@const sel = selectedStage === stage.status}
+      {@const sel = selectedPipeline === group.key}
 
       <button
         onclick={() => {
-          if (active) selectedStage = sel ? null : stage.status;
+          if (active) selectedPipeline = sel ? null : group.key;
         }}
         disabled={loadingBatch}
-        class="flex flex-col items-center gap-1.5 rounded-xl border p-3 text-center transition
+        class="min-h-[92px] rounded-xl border p-3 text-left transition
           {sel
-          ? `${stage.bgActive} ${stage.borderActive} ring-2 ${stage.ring} ring-offset-1`
+          ? `${group.bgActive} ${group.borderActive} ring-2 ${group.ring} ring-offset-1`
           : active
-            ? `${stage.bgActive} ${stage.borderActive} cursor-pointer hover:shadow-sm`
-            : 'cursor-default border-gray-100 bg-gray-50 opacity-30'}"
+            ? `${group.bgActive} ${group.borderActive} cursor-pointer hover:shadow-sm`
+            : 'cursor-default border-gray-100 bg-gray-50 opacity-45'}"
       >
         {#if loadingBatch}
-          <div class="h-8 w-8 animate-pulse rounded-full bg-gray-200"></div>
-          <div class="h-2.5 w-10 animate-pulse rounded bg-gray-200"></div>
+          <div class="h-7 w-7 animate-pulse rounded-full bg-gray-200"></div>
+          <div class="mt-3 h-3 w-20 animate-pulse rounded bg-gray-200"></div>
+          <div class="mt-2 h-2.5 w-14 animate-pulse rounded bg-gray-200"></div>
         {:else}
-          <span
-            class="flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold text-white
-            {active ? stage.dot : 'bg-gray-300'}"
-          >
-            {count}
-          </span>
-          <span
-            class="text-[11px] font-medium leading-tight {active
-              ? stage.textActive
-              : 'text-gray-400'}"
-          >
-            {stage.short}
-          </span>
-          {#if active}
-            <span class="text-[10px] opacity-70 {stage.textActive}"
-              >{pcs} pcs</span
+          <div class="flex items-start justify-between gap-2">
+            <span class="text-xs font-semibold {active ? group.textActive : 'text-gray-400'}">{group.label}</span>
+            <span
+              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white
+              {active ? group.dot : 'bg-gray-300'}"
             >
-          {/if}
+              {count}
+            </span>
+          </div>
+          <p class="mt-2 text-[11px] leading-tight text-gray-400">{group.hint}</p>
+          <p class="mt-2 text-[11px] font-medium {active ? group.textActive : 'text-gray-400'}">
+            {active ? `${pcs.toLocaleString("id-ID")} pcs` : "kosong"}
+          </p>
         {/if}
       </button>
     {/each}
@@ -558,7 +668,7 @@
   <!-- Batch list -->
   <div>
     <p class="mb-2.5 text-xs font-medium text-gray-500">
-      {selectedStage ? STATUS_LABEL[selectedStage] : "Semua Batch Aktif"}
+      {selectedPipelineLabel()}
       {#if !loadingBatch}
         <span class="ml-1 text-gray-400">· {filteredBatch.length} batch</span>
       {/if}
@@ -596,11 +706,11 @@
           />
         </svg>
         <p class="text-sm text-gray-400">
-          {selectedStage
+          {selectedPipeline
             ? "Tidak ada batch pada tahap ini"
             : "Belum ada batch produksi aktif"}
         </p>
-        {#if !selectedStage}
+        {#if !selectedPipeline}
           <a
             href="/monitor-produksi"
             class="mt-1 rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
@@ -616,7 +726,7 @@
           {@const hari = hitungHari(batch.createdAt)}
           {@const lambat = hari > 5}
           <div
-            class="flex items-center justify-between rounded-lg border border-gray-100 bg-gray-50/60 px-3 py-2.5"
+            class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-100 bg-gray-50/60 px-3 py-2.5"
           >
             <div class="flex min-w-0 items-center gap-3">
               <span class="h-2 w-2 shrink-0 rounded-full {s.dot}"></span>
@@ -625,6 +735,7 @@
                   {batch.nama_model}
                 </p>
                 <p class="text-[11px] text-gray-400">
+                  {batch.nama_warna || "Tanpa warna"} -
                   {batch.detail_ukuran
                     .map((d) => `${d.ukuran}:${d.jumlah_pcs}`)
                     .join(" · ")}
@@ -899,7 +1010,7 @@
                   ? 'font-semibold text-amber-600'
                   : 'text-gray-500'}"
               >
-                {kain.stok_tersedia.toLocaleString("id-ID")} {kain.satuan}{kritis || menipis
+                {formatQty(kain.stok_tersedia)} {kain.satuan}{kritis || menipis
                   ? " ⚠"
                   : ""}
               </span>

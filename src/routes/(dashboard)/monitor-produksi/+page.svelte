@@ -70,6 +70,13 @@
     COMPLETED:           'bg-green-100 text-green-700',
   };
 
+  const DISPLAY_STATUS_LABEL: Record<StatusBatch, string> = {
+    ...STATUS_LABEL,
+    CUTTING_DONE: 'Siap Jahit',
+    JAHIT_DONE: 'Siap Steam',
+    STEAM_DONE: 'Siap Masuk Gudang',
+  };
+
   // ── State ──────────────────────────────────────────────────────────
   let batchList = $state<BatchProduksi[]>([]);
   let loading = $state(true);
@@ -203,6 +210,13 @@
   // ── Utility ────────────────────────────────────────────────────────
   function getBatchesForStage(stages: StatusBatch[]): BatchProduksi[] {
     return filteredBatches.filter((b) => stages.includes(b.status));
+  }
+
+  function currentWorkerName(batch: BatchProduksi): string {
+    if (CUTTING_STAGES.includes(batch.status)) return batch.penugasan?.cutting?.nama ?? '';
+    if (JAHIT_STAGES.includes(batch.status)) return batch.penugasan?.jahit?.nama ?? '';
+    if (STEAM_STAGES.includes(batch.status)) return batch.penugasan?.steam?.nama ?? '';
+    return '';
   }
 
   function hitungHari(createdAt: any): number {
@@ -597,7 +611,7 @@
     {#each groupsByKepala as group}
       {@const belumDitugaskan = group.label.startsWith('—')}
       {@const byStatus = group.batches.reduce<Record<string, BatchProduksi[]>>((acc, b) => {
-        const lbl = STATUS_LABEL[b.status];
+        const lbl = DISPLAY_STATUS_LABEL[b.status];
         if (!acc[lbl]) acc[lbl] = [];
         acc[lbl].push(b);
         return acc;
@@ -661,7 +675,7 @@
                 <th class="px-5 py-2.5 text-left text-xs font-semibold text-gray-400">Warna</th>
                 <th class="px-5 py-2.5 text-left text-xs font-semibold text-gray-400">Ukuran</th>
                 <th class="px-5 py-2.5 text-right text-xs font-semibold text-gray-400">PCS</th>
-                <th class="px-5 py-2.5 text-left text-xs font-semibold text-gray-400">Kepala Jahit</th>
+                <th class="px-5 py-2.5 text-left text-xs font-semibold text-gray-400">Petugas</th>
                 <th class="px-5 py-2.5 text-left text-xs font-semibold text-gray-400">Tanggal</th>
               </tr>
             </thead>
@@ -675,7 +689,7 @@
                 >
                   <td class="px-5 py-3">
                     <span class="inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold {STATUS_STYLE[batch.status]}">
-                      {STATUS_LABEL[batch.status]}
+                      {DISPLAY_STATUS_LABEL[batch.status]}
                     </span>
                   </td>
                   <td class="px-5 py-3">
@@ -706,8 +720,8 @@
                     {/if}
                   </td>
                   <td class="px-5 py-3 text-xs text-gray-600">
-                    {#if batch.penugasan?.jahit?.nama}
-                      {batch.penugasan.jahit.nama}
+                    {#if currentWorkerName(batch)}
+                      {currentWorkerName(batch)}
                     {:else}
                       <span class="text-gray-300">—</span>
                     {/if}
@@ -753,14 +767,14 @@
 
     <!-- Status badge -->
     <span class="mb-2 inline-block self-start rounded-full px-2 py-0.5 text-[10px] font-semibold {STATUS_STYLE[batch.status]}">
-      {STATUS_LABEL[batch.status]}
+      {DISPLAY_STATUS_LABEL[batch.status]}
     </span>
 
     <!-- Kepala jahit -->
-    {#if batch.penugasan?.jahit?.nama}
+    {#if currentWorkerName(batch)}
       <p class="mb-2 text-[11px] text-gray-400">
         <UsersIcon class="inline h-2.5 w-2.5" />
-        <span class="ml-0.5 font-medium text-gray-500">{batch.penugasan.jahit.nama}</span>
+        <span class="ml-0.5 font-medium text-gray-500">{currentWorkerName(batch)}</span>
       </p>
     {/if}
 

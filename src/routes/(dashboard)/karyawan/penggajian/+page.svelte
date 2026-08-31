@@ -79,6 +79,16 @@
   let modelBajuMap = $derived(new Map(modelBajuList.map(m => [m.nama_model, m])));
 
   const PRODUKSI_ROLES = new Set(["kepala_cutting", "kepala_jahit", "kepala_steam"]);
+  const DIVISI_ROLE: Record<DivisiProduksi, UserProfile["role"]> = {
+    Cutting: "kepala_cutting",
+    Jahit: "kepala_jahit",
+    Steam: "kepala_steam",
+  };
+
+  function isProduksiPayrollRow(row: Awaited<ReturnType<typeof getPenggajianPeriode>>[number], employeeMap: Map<string, UserProfile>): boolean {
+    const employee = employeeMap.get(row.uid);
+    return !!employee && employee.status_kerja !== "nonaktif" && employee.role === DIVISI_ROLE[row.divisi];
+  }
 
   let karyawanReguler = $derived.by(() =>
     karyawanList
@@ -151,6 +161,8 @@
       karyawanList = karyawan;
       pembayaranList = pembayaran;
       modelBajuList = models;
+      const employeeMap = new Map(karyawan.map((k) => [k.uid, k]));
+      data = penggajian.filter((row) => isProduksiPayrollRow(row, employeeMap));
 
       const paidSet = new Set<string>();
       for (const p of pembayaran) {
