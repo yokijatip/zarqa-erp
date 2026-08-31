@@ -36,6 +36,12 @@
     total_stok: number;
   };
 
+  type DraftBarangKeluarItem = BarangKeluarItem & {
+    tujuan: string;
+    nama_reseller?: string;
+    keterangan?: string;
+  };
+
   let loading = $state(true);
   let saving = $state(false);
   let errorMsg = $state<string | null>(null);
@@ -50,7 +56,7 @@
   let fModelKey = $state("");
   let fWarnaKeys = $state<string[]>([]);
   let fJumlahByWarna = $state<Record<string, Partial<Record<UkuranBaju, number>>>>({});
-  let draftItems = $state<BarangKeluarItem[]>([]);
+  let draftItems = $state<DraftBarangKeluarItem[]>([]);
 
   let modelOptions = $derived.by<ModelOption[]>(() => {
     const map = new Map<string, ModelOption>();
@@ -189,8 +195,8 @@
       .reduce((sum, item) => sum + item.total_pcs, 0),
   );
 
-  let canAdd = $derived(!!selectedModel && selectedWarnaList.length > 0 && inputTotal > 0);
-  let canSubmit = $derived(fTujuan.trim() !== "" && draftItems.length > 0);
+  let canAdd = $derived(!!selectedModel && selectedWarnaList.length > 0 && inputTotal > 0 && fTujuan.trim() !== "");
+  let canSubmit = $derived(draftItems.length > 0);
 
   function itemSummary(item: BarangKeluarItem): string {
     return item.detail_keluar.map((d) => `${d.ukuran}: ${d.jumlah_pcs}`).join(", ");
@@ -204,8 +210,11 @@
 
   function tambahKeDaftar() {
     if (!selectedModel || !canAdd) return;
-    const keluarItems: BarangKeluarItem[] = [];
-    const pendingItems: BarangKeluarItem[] = [];
+    const tujuanSnapshot = fTujuan.trim();
+    const resellerSnapshot = fNamaReseller.trim();
+    const keteranganSnapshot = fKeterangan.trim();
+    const keluarItems: DraftBarangKeluarItem[] = [];
+    const pendingItems: DraftBarangKeluarItem[] = [];
 
     for (const warna of selectedWarnaList) {
       const detailKeluar: BarangKeluarItem["detail_keluar"] = [];
@@ -231,6 +240,9 @@
         nama_model: selectedModel.nama_model,
         ...(warna.nama_warna ? { nama_warna: warna.nama_warna } : {}),
         ...(warna.kode_hex_warna ? { kode_hex_warna: warna.kode_hex_warna } : {}),
+        tujuan: tujuanSnapshot,
+        ...(resellerSnapshot ? { nama_reseller: resellerSnapshot } : {}),
+        ...(keteranganSnapshot ? { keterangan: keteranganSnapshot } : {}),
       };
 
       if (detailKeluar.length > 0) {
@@ -263,29 +275,37 @@
 
   async function submit() {
     if (!canSubmit || !$currentUser) return;
-    const itemPertama = draftItems[0];
     saving = true;
     errorMsg = null;
     try {
-      await catatBarangKeluar(
-        {
-          model_id: itemPertama.model_id,
-          nama_model:
-            draftItems.length > 1 ? `${draftItems.length} barang` : itemPertama.nama_model,
-          ...(draftItems.length === 1 && itemPertama.nama_warna
-            ? { nama_warna: itemPertama.nama_warna }
-            : {}),
-          ...(draftItems.length === 1 && itemPertama.kode_hex_warna
-            ? { kode_hex_warna: itemPertama.kode_hex_warna }
-            : {}),
-          detail_keluar: itemPertama.detail_keluar,
-          items: draftItems,
-          tujuan: fTujuan.trim(),
-          ...(fNamaReseller.trim() ? { nama_reseller: fNamaReseller.trim() } : {}),
-          ...(fKeterangan.trim() ? { keterangan: fKeterangan.trim() } : {}),
-        },
-        $currentUser.uid,
-      );
+      const groups = new Map<string, DraftBarangKeluarItem[]>();
+      for (const item of draftItems) {
+        const key = [item.tujuan, item.nama_reseller ?? "", item.keterangan ?? ""].join("||");
+        groups.set(key, [...(groups.get(key) ?? []), item]);
+      }
+
+      for (const groupItems of groups.values()) {
+        const itemPertama = groupItems[0];
+        await catatBarangKeluar(
+          {
+            model_id: itemPertama.model_id,
+            nama_model:
+              groupItems.length > 1 ? `${groupItems.length} barang` : itemPertama.nama_model,
+            ...(groupItems.length === 1 && itemPertama.nama_warna
+              ? { nama_warna: itemPertama.nama_warna }
+              : {}),
+            ...(groupItems.length === 1 && itemPertama.kode_hex_warna
+              ? { kode_hex_warna: itemPertama.kode_hex_warna }
+              : {}),
+            detail_keluar: itemPertama.detail_keluar,
+            items: groupItems,
+            tujuan: itemPertama.tujuan,
+            ...(itemPertama.nama_reseller ? { nama_reseller: itemPertama.nama_reseller } : {}),
+            ...(itemPertama.keterangan ? { keterangan: itemPertama.keterangan } : {}),
+          },
+          $currentUser.uid,
+        );
+      }
       barangJadiCache.invalidate();
       barangKeluarCache.invalidate();
       successMsg = "List barang keluar berhasil disimpan.";
@@ -571,6 +591,9 @@
                     </div>
                     <p class="mt-1 text-xs text-gray-500">
                       {itemSummary(item)} · {item.total_pcs} pcs
+                    </p>
+                    <p class="mt-0.5 text-xs text-gray-400">
+                      {item.tujuan}{item.nama_reseller ? ` · ${item.nama_reseller}` : ""}
                     </p>
                   </div>
                   <button

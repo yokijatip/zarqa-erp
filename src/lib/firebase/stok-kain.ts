@@ -1,14 +1,41 @@
 // src/lib/firebase/stok-kain.ts
 import {
   collection, doc, getDocs, getDoc,
-  addDoc, updateDoc, deleteDoc, serverTimestamp, runTransaction,
-  query, orderBy, limit, onSnapshot, deleteField,
+  updateDoc, deleteDoc, serverTimestamp, runTransaction,
+  query, orderBy, limit, onSnapshot, deleteField, Timestamp,
   type Unsubscribe,
 } from 'firebase/firestore';
 import { db } from './config';
 import type { StokKain, StokKainInput, Warna, RiwayatStokKain } from '$lib/types';
 
 const COL = 'stok_kain';
+const COL_KEUANGAN = 'transaksi_keuangan';
+
+type PembelianKainKeuangan = {
+  tanggal: Date;
+  nominal: number;
+  deskripsi: string;
+  referensi?: string;
+  catatan?: string;
+  dibuat_oleh_uid?: string;
+  dibuat_oleh_nama?: string;
+};
+
+function transaksiBahanBakuPayload(data: PembelianKainKeuangan) {
+  return {
+    tipe: 'pengeluaran',
+    kategori: 'bahan_baku',
+    tanggal: Timestamp.fromDate(data.tanggal),
+    nominal: Math.max(0, Number(data.nominal) || 0),
+    deskripsi: data.deskripsi.trim(),
+    ...(data.referensi?.trim() ? { referensi: data.referensi.trim() } : {}),
+    ...(data.catatan?.trim() ? { catatan: data.catatan.trim() } : {}),
+    ...(data.dibuat_oleh_uid ? { dibuat_oleh_uid: data.dibuat_oleh_uid } : {}),
+    ...(data.dibuat_oleh_nama ? { dibuat_oleh_nama: data.dibuat_oleh_nama } : {}),
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+}
 
 // Ambil semua stok kain (sekali fetch)
 export async function getStokKainList(): Promise<StokKain[]> {
@@ -25,12 +52,30 @@ export async function getStokKainById(id: string): Promise<StokKain | null> {
 }
 
 // Tambah jenis kain baru
-export async function addStokKain(data: StokKainInput): Promise<string> {
-  const ref = await addDoc(collection(db, COL), {
-    ...data,
-    stok_terpakai: 0,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
+export async function addStokKain(
+  data: StokKainInput,
+  options?: { pembelianKeuangan?: PembelianKainKeuangan },
+): Promise<string> {
+  const ref = doc(collection(db, COL));
+  const transaksiRef =
+    options?.pembelianKeuangan && options.pembelianKeuangan.nominal > 0
+      ? doc(collection(db, COL_KEUANGAN))
+      : null;
+
+  await runTransaction(db, async (transaction) => {
+    transaction.set(ref, {
+      ...data,
+      stok_terpakai: 0,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+
+    if (transaksiRef && options?.pembelianKeuangan) {
+      transaction.set(transaksiRef, transaksiBahanBakuPayload({
+        ...options.pembelianKeuangan,
+        referensi: options.pembelianKeuangan.referensi ?? `stok_kain:${ref.id}`,
+      }));
+    }
   });
   return ref.id;
 }
@@ -60,10 +105,15 @@ export async function restockKain(
     tanggal_beli?: string;
     supplier?: string;
     harga_per_unit?: number;
+    pembelianKeuangan?: PembelianKainKeuangan;
   },
 ): Promise<void> {
   const ref = doc(db, COL, id);
   const riwayatRef = doc(collection(db, COL, id, 'riwayat'));
+  const transaksiRef =
+    options?.pembelianKeuangan && options.pembelianKeuangan.nominal > 0
+      ? doc(collection(db, COL_KEUANGAN))
+      : null;
   const catatan = options?.catatan;
   const tanggalBeli = options?.tanggal_beli;
   const supplier = options?.supplier;
@@ -93,6 +143,13 @@ export async function restockKain(
       ...(hargaPerUnit != null && hargaPerUnit > 0 ? { harga_per_unit: hargaPerUnit } : {}),
       timestamp: serverTimestamp(),
     });
+
+    if (transaksiRef && options?.pembelianKeuangan) {
+      transaction.set(transaksiRef, transaksiBahanBakuPayload({
+        ...options.pembelianKeuangan,
+        referensi: options.pembelianKeuangan.referensi ?? `restock_kain:${id}:${riwayatRef.id}`,
+      }));
+    }
   });
 }
 

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { afterNavigate } from "$app/navigation";
+  import { currentUser } from "$lib/stores/auth.store";
   import {
     addMasterKain,
   } from "$lib/firebase/master-kain";
@@ -424,12 +425,14 @@
   // ── Actions ─────────────────────────────────────────────────────────
   async function submitTambah() {
     const selectedMasterKain = getSelectedMasterKain(fMasterKainId);
+    const stokAwal = Number(fStok);
+    const hargaPerUnit = Number(fHargaPerUnit);
     if (
       !selectedMasterKain ||
       fStok === "" ||
-      Number(fStok) <= 0 ||
+      stokAwal <= 0 ||
       fHargaPerUnit === "" ||
-      Number(fHargaPerUnit) <= 0
+      hargaPerUnit <= 0
     )
       return;
     saving = true;
@@ -446,9 +449,18 @@
             }
           : {}),
         satuan: fSatuan,
-        harga_per_unit: Number(fHargaPerUnit),
-        stok_tersedia: Number(fStok),
+        harga_per_unit: hargaPerUnit,
+        stok_tersedia: stokAwal,
         ...(fCatatan.trim() ? { catatan: fCatatan.trim() } : {}),
+      }, {
+        pembelianKeuangan: {
+          tanggal: new Date(),
+          nominal: stokAwal * hargaPerUnit,
+          deskripsi: `Pembelian bahan baku: ${selectedMasterKain.nama_kain}${selectedWarna ? ` - ${selectedWarna.nama_warna}` : ""}`,
+          catatan: fCatatan.trim() || undefined,
+          dibuat_oleh_uid: $currentUser?.uid,
+          dibuat_oleh_nama: $currentUser?.name || $currentUser?.email,
+        },
       });
       const namaKain = selectedMasterKain.nama_kain;
       await load(true);
@@ -471,15 +483,29 @@
     if (!selectedKain || rJumlah === "" || Number(rJumlah) <= 0) return;
     saving = true;
     try {
+      const jumlah = Number(rJumlah);
+      const hargaPerUnit = rHargaPerUnit !== "" ? Number(rHargaPerUnit) : (selectedKain.harga_per_unit ?? 0);
+      const tanggalBeli = rTanggalBeli ? new Date(`${rTanggalBeli}T00:00:00`) : new Date();
       await restockKain(selectedKain.id, Number(rJumlah), {
         catatan: rCatatan.trim() || undefined,
         tanggal_beli: rTanggalBeli || undefined,
         supplier: rSupplier.trim() || undefined,
         harga_per_unit: rHargaPerUnit !== "" ? Number(rHargaPerUnit) : undefined,
+        ...(hargaPerUnit > 0
+          ? {
+              pembelianKeuangan: {
+                tanggal: tanggalBeli,
+                nominal: jumlah * hargaPerUnit,
+                deskripsi: `Restock bahan baku: ${selectedKain.nama_kain}${selectedKain.nama_warna ? ` - ${selectedKain.nama_warna}` : ""}`,
+                catatan: [rSupplier.trim() ? `Supplier: ${rSupplier.trim()}` : "", rCatatan.trim()].filter(Boolean).join(" - ") || undefined,
+                dibuat_oleh_uid: $currentUser?.uid,
+                dibuat_oleh_nama: $currentUser?.name || $currentUser?.email,
+              },
+            }
+          : {}),
       });
       const nama = selectedKain.nama_kain;
       const satuan = selectedKain.satuan;
-      const jumlah = Number(rJumlah);
       await load(true);
       openRestock = false;
       selectedKain = null;

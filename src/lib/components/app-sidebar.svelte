@@ -2,7 +2,6 @@
   import LayoutDashboardIcon from "@lucide/svelte/icons/layout-dashboard";
   import PackageIcon from "@lucide/svelte/icons/package";
   import ShirtIcon from "@lucide/svelte/icons/shirt";
-  import TruckIcon from "@lucide/svelte/icons/truck";
   import WalletIcon from "@lucide/svelte/icons/wallet";
   import UsersIcon from "@lucide/svelte/icons/users";
   import BarChartIcon from "@lucide/svelte/icons/bar-chart-2";
@@ -88,35 +87,23 @@
       ],
     },
     {
-      title: "Pengiriman",
-      url: "#",
-      icon: TruckIcon,
-      comingSoon: true,
-      items: [
-        { title: "Jadwal Kirim", url: "#" },
-        { title: "Tracking", url: "#" },
-      ],
-    },
-    {
       title: "Keuangan",
-      url: "#",
+      url: "/keuangan",
       icon: WalletIcon,
-      comingSoon: true,
       items: [
-        { title: "Pemasukan", url: "#" },
-        { title: "Pengeluaran", url: "#" },
-        { title: "Laporan Laba Rugi", url: "#" },
+        { title: "Ringkasan Keuangan", url: "/keuangan" },
+        { title: "Pemasukan", url: "/keuangan?tipe=pemasukan" },
+        { title: "Pengeluaran", url: "/keuangan?tipe=pengeluaran" },
       ],
     },
     {
       title: "Laporan",
-      url: "#",
+      url: "/laporan",
       icon: BarChartIcon,
-      comingSoon: true,
       items: [
-        { title: "Laporan Produksi", url: "#" },
-        { title: "Laporan Penjualan", url: "#" },
-        { title: "Laporan Keuangan", url: "#" },
+        { title: "Ringkasan Laporan", url: "/laporan" },
+        { title: "Laporan Keuangan", url: "/keuangan" },
+        { title: "Laporan Gaji", url: "/karyawan/penggajian" },
       ],
     },
   ];

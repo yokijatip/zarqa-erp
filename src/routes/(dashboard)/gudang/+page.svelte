@@ -27,6 +27,16 @@
 
   const STAGES: StageConf[] = [
     {
+      status: "PENDING_KAIN",
+      label: "Menunggu Kain",
+      short: "Kain",
+      dot: "bg-cyan-500",
+      ring: "ring-cyan-300",
+      textActive: "text-cyan-700",
+      bgActive: "bg-cyan-50",
+      borderActive: "border-cyan-200",
+    },
+    {
       status: "PENDING_CUTTING",
       label: "Antri Cutting",
       short: "Antri",

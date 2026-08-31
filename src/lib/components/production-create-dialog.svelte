@@ -253,7 +253,7 @@
   // Detail ukuran: 1 entry untuk cutting, array multi-ukuran untuk jahit
   let detailUkuran = $derived(
     mode === "cutting"
-      ? fUkuran !== "" && jumlahJadi() > 0
+      ? fUkuran !== ""
         ? [{ ukuran: fUkuran as UkuranBaju, jumlah_pcs: jumlahJadi() }]
         : []
       : selectedNamaModel
@@ -284,13 +284,9 @@
   let canSubmit = $derived(
     (mode === "jahit" ? !!selectedPotonganGroup : fModelId !== "") &&
       (mode === "jahit" || fUkuran !== "") &&
-      (mode === "jahit" || perKainEstimasi.length > 0) &&
-      (mode === "jahit" ? totalPcs > 0 : jumlahJadi() > 0) &&
+      (mode === "jahit" ? totalPcs > 0 : true) &&
       // Kain mentah hanya wajib diisi untuk mode cutting — jahit memakai stok
       // potongan (hasil cutting), bukan kain mentah, jadi tidak butuh input ini.
-      (mode === "jahit" ||
-        (kainDibutuhkan.length > 0 &&
-          kainDibutuhkan.every((k) => k.kain_id !== ""))) &&
       (mode !== "jahit" ||
         detailUkuran.every((item) => {
           const stok = stokPotonganFiltered.find(
@@ -465,7 +461,8 @@
             }
           : {}),
         detail_ukuran: detailUkuran,
-        kain_digunakan: kainDibutuhkan,
+        kain_digunakan:
+          mode === "cutting" && jumlahJadi() <= 0 ? [] : kainDibutuhkan,
         ...(sumberCutting.length > 0 ? { sumber_cutting: sumberCutting } : {}),
         penugasan: {
           [mode]: {
@@ -740,7 +737,10 @@
               <p
                 class="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-600"
               >
-                Kain yang Digunakan
+                Pembagian Kain (opsional)
+              </p>
+              <p class="mb-2 text-xs text-gray-500">
+                Kosongkan dulu jika total yard baru diketahui saat kain dibagikan.
               </p>
               <div class="space-y-2">
                 {#each fKain as kainEntry, i}

@@ -4,6 +4,7 @@ import type { Timestamp } from 'firebase/firestore';
 // ─── USER ────────────────────────────────────────────────────────
 
 export type UserRole =
+  | 'staff'
   | 'admin_gudang'
   | 'admin_hr'
   | 'admin_keuangan'
@@ -22,15 +23,28 @@ export interface UserProfile {
   email: string;
   role: UserRole;
   photoURL?: string;
+  kode_karyawan?: string;
+  no_hp?: string;
+  alamat?: string;
+  jabatan?: string;
+  divisi?: string;
+  tanggal_masuk?: string;
+  status_kerja?: 'aktif' | 'cuti' | 'nonaktif';
+  kontak_darurat?: string;
+  catatan_hr?: string;
   tipe_akun?: 'permanent' | 'temporary';
   tanggal_expired?: Timestamp;
   // Tipe penggajian: harian (borongan/hari), mingguan (per pcs/minggu), bulanan/tahunan (gaji tetap)
   tipe_penggajian?: TipePenggajian;
+  // Nominal gaji tetap sesuai tipe_penggajian. Untuk karyawan produksi,
+  // tarif_per_pcs tetap dipakai sebagai basis kerja borongan.
+  gaji_pokok?: number;
   // Tarif upah per pcs (Rp) untuk karyawan divisi produksi (Cutting/Jahit/Steam).
   // Dipakai untuk menghitung Penggajian mingguan — hanya relevan untuk role
   // kepala_cutting / kepala_jahit / kepala_steam.
   tarif_per_pcs?: number;
   createdAt?: Timestamp;
+  updatedAt?: Timestamp;
 }
 
 // ─── WARNA ───────────────────────────────────────────────────────
@@ -133,6 +147,7 @@ export type ModelBajuInput = Omit<ModelBaju, 'id' | 'aktif' | 'createdAt' | 'upd
 // ─── BATCH PRODUKSI ──────────────────────────────────────────────
 
 export type StatusBatch =
+  | 'PENDING_KAIN'
   | 'PENDING_CUTTING'
   | 'CUTTING_IN_PROGRESS'
   | 'CUTTING_DONE'
@@ -375,6 +390,9 @@ export interface BarangKeluarItem {
   detail_keluar: DetailKeluar[];
   total_pcs: number;
   status: StatusBarangKeluarItem;
+  tujuan?: string;
+  nama_reseller?: string;
+  keterangan?: string;
   alasan_pending?: string;
 }
 
@@ -414,6 +432,94 @@ export interface BarangKeluar {
 }
 
 export type BarangKeluarInput = Omit<BarangKeluar, 'id' | 'total_pcs' | 'dicatat_oleh' | 'tanggal_keluar'>;
+
+// KEUANGAN
+
+export type TipeTransaksiKeuangan = 'pemasukan' | 'pengeluaran';
+
+export type KategoriPemasukan =
+  | 'penjualan_manual'
+  | 'modal'
+  | 'piutang_tertagih'
+  | 'refund'
+  | 'lainnya';
+
+export type KategoriPengeluaran =
+  | 'aset'
+  | 'bahan_baku'
+  | 'gaji'
+  | 'operasional'
+  | 'transport'
+  | 'sewa'
+  | 'utilitas'
+  | 'marketing'
+  | 'maintenance'
+  | 'lainnya';
+
+export type KategoriTransaksiKeuangan = KategoriPemasukan | KategoriPengeluaran;
+
+export interface TransaksiKeuangan {
+  id: string;
+  tipe: TipeTransaksiKeuangan;
+  kategori: KategoriTransaksiKeuangan;
+  tanggal: Timestamp;
+  nominal: number;
+  deskripsi: string;
+  metode?: 'cash' | 'transfer' | 'e-wallet' | 'lainnya';
+  referensi?: string;
+  catatan?: string;
+  dibuat_oleh_uid?: string;
+  dibuat_oleh_nama?: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export type TransaksiKeuanganInput = Omit<
+  TransaksiKeuangan,
+  'id' | 'tanggal' | 'createdAt' | 'updatedAt'
+> & {
+  tanggal: Date | Timestamp;
+};
+
+export type KategoriAset =
+  | 'peralatan'
+  | 'komputer'
+  | 'mesin'
+  | 'kendaraan'
+  | 'furnitur'
+  | 'inventaris'
+  | 'lainnya';
+
+export type KondisiAset = 'baik' | 'perlu_perbaikan' | 'rusak' | 'dijual' | 'hilang';
+
+export interface AsetPerusahaan {
+  id: string;
+  nama_aset: string;
+  kategori: KategoriAset;
+  tanggal_beli: Timestamp;
+  jumlah: number;
+  harga_satuan: number;
+  total_harga: number;
+  nilai_saat_ini?: number;
+  lokasi?: string;
+  supplier?: string;
+  metode_pembayaran?: 'cash' | 'transfer' | 'e-wallet' | 'lainnya';
+  nomor_invoice?: string;
+  kondisi: KondisiAset;
+  catatan?: string;
+  transaksi_id?: string;
+  dibuat_oleh_uid?: string;
+  dibuat_oleh_nama?: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export type AsetPerusahaanInput = Omit<
+  AsetPerusahaan,
+  'id' | 'tanggal_beli' | 'total_harga' | 'createdAt' | 'updatedAt'
+> & {
+  tanggal_beli: Date | Timestamp;
+};
 
 // ─── PENGGAJIAN ──────────────────────────────────────────────────
 // Gaji karyawan produksi (Cutting/Jahit/Steam) dihitung per pcs baju yang
@@ -456,6 +562,7 @@ export interface PenggajianKaryawan {
 
 // Label readable untuk tiap status batch
 export const STATUS_LABEL: Record<StatusBatch, string> = {
+  PENDING_KAIN: 'Menunggu Kain',
   PENDING_CUTTING: 'Menunggu Cutting',
   CUTTING_IN_PROGRESS: 'Sedang Cutting',
   CUTTING_DONE: 'Cutting Selesai',
@@ -468,6 +575,7 @@ export const STATUS_LABEL: Record<StatusBatch, string> = {
 
 // Warna badge per status (untuk shadcn Badge variant)
 export const STATUS_COLOR: Record<StatusBatch, string> = {
+  PENDING_KAIN: 'secondary',
   PENDING_CUTTING: 'secondary',
   CUTTING_IN_PROGRESS: 'warning',
   CUTTING_DONE: 'outline',

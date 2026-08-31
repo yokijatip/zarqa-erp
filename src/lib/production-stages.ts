@@ -38,10 +38,10 @@ export const PRODUCTION_STAGE_CONFIG: Record<ProductionStageKey, ProductionStage
     description: "Kelola antrean cutting dan pantau hasil potongan yang sudah selesai.",
     createMode: "cutting",
     createButtonLabel: "Buat Order Cutting",
-    readyLabel: "Siap Cutting",
-    workingLabel: "Sedang Cutting",
-    readyStatuses: ["PENDING_CUTTING"],
-    activeStatuses: ["PENDING_CUTTING", "CUTTING_IN_PROGRESS", "CUTTING_DONE"],
+    readyLabel: "Menunggu Kain",
+    workingLabel: "Siap / Sedang Cutting",
+    readyStatuses: ["PENDING_KAIN"],
+    activeStatuses: ["PENDING_KAIN", "PENDING_CUTTING", "CUTTING_IN_PROGRESS", "CUTTING_DONE"],
     // Hanya tampilkan CUTTING_DONE dari batch cutting original (bukan dari_potongan/jahit)
     extraFilter: (batch) => batch.status !== "CUTTING_DONE" || !batch.dari_potongan,
     doneStatuses: ["CUTTING_DONE"],
@@ -92,6 +92,7 @@ export const PRODUCTION_STAGE_CONFIG: Record<ProductionStageKey, ProductionStage
 };
 
 export const STATUS_STYLE: Record<StatusBatch, string> = {
+  PENDING_KAIN: "bg-cyan-100 text-cyan-700",
   PENDING_CUTTING: "bg-slate-100 text-slate-700",
   CUTTING_IN_PROGRESS: "bg-orange-100 text-orange-700",
   CUTTING_DONE: "bg-yellow-100 text-yellow-700",

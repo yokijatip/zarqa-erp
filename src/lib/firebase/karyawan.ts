@@ -1,6 +1,6 @@
 // src/lib/firebase/karyawan.ts
 import {
-  collection, doc, getDocs, updateDoc,
+  collection, doc, getDoc, getDocs, updateDoc,
   deleteDoc, setDoc, serverTimestamp, query, orderBy,
   Timestamp, deleteField,
 } from 'firebase/firestore';
@@ -12,6 +12,7 @@ const COL = 'users';
 
 // Label readable per role (untuk ditampilkan di tabel)
 export const ROLE_LABEL: Record<UserRole, string> = {
+  staff: 'Staff',
   admin_gudang: 'Admin Gudang',
   admin_hr: 'Admin HR',
   admin_keuangan: 'Admin Keuangan',
@@ -24,6 +25,7 @@ export const ROLE_LABEL: Record<UserRole, string> = {
 
 // Role yang bisa dipilih saat buat akun karyawan
 export const ROLE_KARYAWAN: UserRole[] = [
+  'staff',
   'kepala_cutting',
   'kepala_jahit',
   'kepala_steam',
@@ -41,9 +43,43 @@ export interface CreateAkunInput {
   password: string;
   name: string;
   role: UserRole;
+  kode_karyawan?: string;
+  no_hp?: string;
+  alamat?: string;
+  jabatan?: string;
+  divisi?: string;
+  tanggal_masuk?: string;
+  status_kerja?: 'aktif' | 'cuti' | 'nonaktif';
+  kontak_darurat?: string;
+  catatan_hr?: string;
   tipe_akun: 'permanent' | 'temporary';
   tanggal_expired?: Date | null;
   tipe_penggajian?: TipePenggajian;
+  gaji_pokok?: number;
+}
+
+function optionalText(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function employeeMetadata(data: Partial<CreateAkunInput>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const key of [
+    'kode_karyawan',
+    'no_hp',
+    'alamat',
+    'jabatan',
+    'divisi',
+    'tanggal_masuk',
+    'kontak_darurat',
+    'catatan_hr',
+  ] as const) {
+    const value = optionalText(data[key]);
+    if (value !== undefined) result[key] = value;
+  }
+  if (data.status_kerja) result.status_kerja = data.status_kerja;
+  return result;
 }
 
 // Buat akun Firebase Auth + profil Firestore
@@ -81,8 +117,10 @@ export async function createAkunKaryawan(data: CreateAkunInput): Promise<string>
     name: data.name,
     email: data.email,
     role: data.role,
+    status_kerja: data.status_kerja ?? 'aktif',
     tipe_akun: data.tipe_akun,
     createdAt: serverTimestamp(),
+    ...employeeMetadata(data),
   };
 
   if (data.tipe_akun === 'temporary' && data.tanggal_expired) {
@@ -91,6 +129,9 @@ export async function createAkunKaryawan(data: CreateAkunInput): Promise<string>
 
   if (data.tipe_penggajian) {
     profileData.tipe_penggajian = data.tipe_penggajian;
+  }
+  if (data.gaji_pokok !== undefined) {
+    profileData.gaji_pokok = Math.max(0, Number(data.gaji_pokok) || 0);
   }
 
   await setDoc(doc(db, COL, uid), profileData);
@@ -107,22 +148,56 @@ export async function getKaryawanList(): Promise<UserProfile[]> {
     .filter((u) => u.role !== 'developer');
 }
 
+export async function getKaryawanById(uid: string): Promise<UserProfile | null> {
+  const snap = await getDoc(doc(db, COL, uid));
+  if (!snap.exists()) return null;
+  const data = { uid: snap.id, ...snap.data() } as UserProfile;
+  return data.role === 'developer' ? null : data;
+}
+
 export interface UpdateKaryawanInput {
   name?: string;
   role?: UserRole;
+  kode_karyawan?: string;
+  no_hp?: string;
+  alamat?: string;
+  jabatan?: string;
+  divisi?: string;
+  tanggal_masuk?: string;
+  status_kerja?: 'aktif' | 'cuti' | 'nonaktif';
+  kontak_darurat?: string;
+  catatan_hr?: string;
   tipe_akun?: 'permanent' | 'temporary';
   tanggal_expired?: Date | null;
   tipe_penggajian?: TipePenggajian;
+  gaji_pokok?: number;
 }
 
 export async function updateKaryawan(uid: string, data: UpdateKaryawanInput): Promise<void> {
   const updateData: Record<string, unknown> = {
     ...(data.name !== undefined ? { name: data.name } : {}),
     ...(data.role !== undefined ? { role: data.role } : {}),
+    ...employeeMetadata(data),
     ...(data.tipe_akun !== undefined ? { tipe_akun: data.tipe_akun } : {}),
     ...(data.tipe_penggajian !== undefined ? { tipe_penggajian: data.tipe_penggajian } : {}),
+    ...(data.gaji_pokok !== undefined ? { gaji_pokok: Math.max(0, Number(data.gaji_pokok) || 0) } : {}),
     updatedAt: serverTimestamp(),
   };
+
+  for (const key of [
+    'kode_karyawan',
+    'no_hp',
+    'alamat',
+    'jabatan',
+    'divisi',
+    'tanggal_masuk',
+    'kontak_darurat',
+    'catatan_hr',
+  ] as const) {
+    if (data[key] !== undefined && optionalText(data[key]) === undefined) {
+      updateData[key] = deleteField();
+    }
+  }
 
   // Tangani tanggal_expired: set atau hapus
   if (data.tipe_akun === 'temporary' && data.tanggal_expired) {

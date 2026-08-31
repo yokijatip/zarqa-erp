@@ -240,6 +240,7 @@
 
   function getPrimaryAction(batch: BatchProduksi): string {
     if (config.key === "cutting") {
+      if (batch.status === "PENDING_KAIN") return "Input Kain";
       return batch.status === "PENDING_CUTTING"
         ? "Mulai Cutting"
         : "Selesaikan Cutting";
@@ -568,11 +569,16 @@
                 class="cursor-pointer {isDone
                   ? 'opacity-60 bg-gray-50/50'
                   : ''}"
-                onclick={() => goto(`/monitor-produksi/${batch.id}`)}
+                onclick={() =>
+                  batch.status === "PENDING_KAIN"
+                    ? goto(`/produksi/cutting/${batch.id}/kain`)
+                    : goto(`/monitor-produksi/${batch.id}`)}
                 tabindex={0}
                 onkeydown={(event) =>
                   event.key === "Enter" &&
-                  goto(`/monitor-produksi/${batch.id}`)}
+                  (batch.status === "PENDING_KAIN"
+                    ? goto(`/produksi/cutting/${batch.id}/kain`)
+                    : goto(`/monitor-produksi/${batch.id}`))}
               >
                 <Table.Cell>
                   <div class="space-y-1">
@@ -597,7 +603,7 @@
                         <span
                           class="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-500"
                         >
-                          {ukuran.ukuran}: {ukuran.jumlah_pcs}
+                          {ukuran.ukuran}: {batch.status === "PENDING_KAIN" ? "estimasi nanti" : ukuran.jumlah_pcs}
                         </span>
                       {/each}
                     </div>
@@ -619,9 +625,13 @@
                 </Table.Cell>
                 <Table.Cell class="text-center">
                   <p class="text-sm font-semibold text-gray-800">
-                    {batch.pcs_saat_ini ?? batch.total_pcs}
+                    {batch.status === "PENDING_KAIN"
+                      ? "Belum dihitung"
+                      : batch.pcs_saat_ini ?? batch.total_pcs}
                   </p>
-                  <p class="text-xs text-gray-400">pcs</p>
+                  <p class="text-xs text-gray-400">
+                    {batch.status === "PENDING_KAIN" ? "estimasi" : "pcs"}
+                  </p>
                 </Table.Cell>
                 <Table.Cell>
                   <p class="text-xs text-gray-600">
@@ -629,6 +639,18 @@
                   </p>
                 </Table.Cell>
                 <Table.Cell class="text-right">
+                  {#if batch.status === "PENDING_KAIN"}
+                    <Button
+                      variant="default"
+                      size="sm"
+                      onclick={(e: MouseEvent) => {
+                        e.stopPropagation();
+                        goto(`/produksi/cutting/${batch.id}/kain`);
+                      }}
+                    >
+                      Input Kain
+                    </Button>
+                  {/if}
                   {#if useQuick}
                     <Button
                       variant="default"

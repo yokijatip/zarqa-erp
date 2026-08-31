@@ -31,7 +31,7 @@
   const STAGE_GROUPS: StageGroup[] = [
     {
       label: 'Divisi Cutting',
-      stages: ['PENDING_CUTTING', 'CUTTING_IN_PROGRESS', 'CUTTING_DONE'],
+      stages: ['PENDING_KAIN', 'PENDING_CUTTING', 'CUTTING_IN_PROGRESS', 'CUTTING_DONE'],
       dotColor: 'bg-gray-400',
       bgColor: 'bg-gray-50',
       borderColor: 'border-gray-200',
@@ -59,6 +59,7 @@
   ];
 
   const STATUS_STYLE: Record<StatusBatch, string> = {
+    PENDING_KAIN:        'bg-cyan-100 text-cyan-700',
     PENDING_CUTTING:     'bg-slate-100 text-slate-600',
     CUTTING_IN_PROGRESS: 'bg-orange-100 text-orange-700',
     CUTTING_DONE:        'bg-yellow-100 text-yellow-700',
@@ -111,7 +112,7 @@
   });
 
   // ── Stats per stage ────────────────────────────────────────────────
-  const CUTTING_STAGES: StatusBatch[] = ['PENDING_CUTTING', 'CUTTING_IN_PROGRESS', 'CUTTING_DONE'];
+  const CUTTING_STAGES: StatusBatch[] = ['PENDING_KAIN', 'PENDING_CUTTING', 'CUTTING_IN_PROGRESS', 'CUTTING_DONE'];
   const JAHIT_STAGES:   StatusBatch[] = ['JAHIT_IN_PROGRESS', 'JAHIT_DONE'];
   const STEAM_STAGES:   StatusBatch[] = ['STEAM_IN_PROGRESS', 'STEAM_DONE'];
 

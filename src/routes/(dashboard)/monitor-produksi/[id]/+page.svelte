@@ -47,6 +47,7 @@
   import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
 
   const STATUS_STYLE: Record<StatusBatch, string> = {
+    PENDING_KAIN: "bg-cyan-100 text-cyan-700",
     PENDING_CUTTING: "bg-slate-100 text-slate-600",
     CUTTING_IN_PROGRESS: "bg-orange-100 text-orange-700",
     CUTTING_DONE: "bg-yellow-100 text-yellow-700",
@@ -59,6 +60,7 @@
 
   // Urutan stage untuk progress bar
   const STAGES: StatusBatch[] = [
+    "PENDING_KAIN",
     "PENDING_CUTTING",
     "CUTTING_IN_PROGRESS",
     "CUTTING_DONE",
@@ -73,6 +75,7 @@
     {
       label: "Cutting",
       statuses: [
+        "PENDING_KAIN",
         "PENDING_CUTTING",
         "CUTTING_IN_PROGRESS",
         "CUTTING_DONE",
@@ -256,6 +259,11 @@
   function openDeleteDialog() {
     deleteError = null;
     deleteOpen = true;
+  }
+
+  function goToInputKain() {
+    if (!batch) return;
+    goto(`/produksi/cutting/${batch.id}/kain`);
   }
 
   async function submitDelete() {
@@ -1054,6 +1062,11 @@
         </svg>
         Refresh
       </Button>
+      {#if canManage && batch && batch.status === "PENDING_KAIN"}
+        <Button onclick={goToInputKain} class="shrink-0">
+          Input Kain
+        </Button>
+      {/if}
       {#if canAction && currentAction}
         <Button onclick={openActionDialog} class="shrink-0">
           {currentAction.label}

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { goto } from "$app/navigation";
   import {
     getKaryawanList,
     createAkunKaryawan,
@@ -13,8 +14,13 @@
   import * as Dialog from "$lib/components/ui/dialog";
   import * as Table from "$lib/components/ui/table";
   import * as Select from "$lib/components/ui/select/index.js";
+  import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
+  import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
+  import EyeIcon from "@lucide/svelte/icons/eye";
+  import PencilIcon from "@lucide/svelte/icons/pencil";
+  import Trash2Icon from "@lucide/svelte/icons/trash-2";
 
   // ── State ──────────────────────────────────────────────────────────
   let karyawanList = $state<UserProfile[]>([]);
@@ -36,16 +42,36 @@
   let fEmail = $state("");
   let fPassword = $state("");
   let fRole = $state<UserRole>("kepala_jahit");
+  let fKode = $state("");
+  let fNoHp = $state("");
+  let fJabatan = $state("");
+  let fDivisi = $state("");
+  let fTanggalMasuk = $state("");
+  let fStatusKerja = $state<"aktif" | "cuti" | "nonaktif">("aktif");
+  let fAlamat = $state("");
+  let fKontakDarurat = $state("");
+  let fCatatanHr = $state("");
   let fTipe = $state<"permanent" | "temporary">("permanent");
   let fExpired = $state("");
   let fTipePenggajian = $state<TipePenggajian>("bulanan");
+  let fGajiPokok = $state("");
 
   // Form: edit
   let eNama = $state("");
   let eRole = $state<UserRole>("kepala_jahit");
+  let eKode = $state("");
+  let eNoHp = $state("");
+  let eJabatan = $state("");
+  let eDivisi = $state("");
+  let eTanggalMasuk = $state("");
+  let eStatusKerja = $state<"aktif" | "cuti" | "nonaktif">("aktif");
+  let eAlamat = $state("");
+  let eKontakDarurat = $state("");
+  let eCatatanHr = $state("");
   let eTipe = $state<"permanent" | "temporary">("permanent");
   let eExpired = $state("");
   let eTipePenggajian = $state<TipePenggajian>("bulanan");
+  let eGajiPokok = $state("");
 
   // ── Derived ────────────────────────────────────────────────────────
   let filteredList = $derived.by(() => {
@@ -56,7 +82,12 @@
       const q = searchQuery.toLowerCase().trim();
       list = list.filter(
         (k) =>
-          k.name.toLowerCase().includes(q) || k.email.toLowerCase().includes(q),
+          k.name.toLowerCase().includes(q) ||
+          k.email.toLowerCase().includes(q) ||
+          (k.kode_karyawan ?? "").toLowerCase().includes(q) ||
+          (k.no_hp ?? "").toLowerCase().includes(q) ||
+          (k.divisi ?? "").toLowerCase().includes(q) ||
+          (k.jabatan ?? "").toLowerCase().includes(q),
       );
     }
     return list;
@@ -83,6 +114,16 @@
     "mingguan",
     "bulanan",
     "tahunan",
+  ];
+  const STATUS_KERJA_LABEL: Record<"aktif" | "cuti" | "nonaktif", string> = {
+    aktif: "Aktif",
+    cuti: "Cuti",
+    nonaktif: "Nonaktif",
+  };
+  const STATUS_KERJA_OPTIONS: Array<"aktif" | "cuti" | "nonaktif"> = [
+    "aktif",
+    "cuti",
+    "nonaktif",
   ];
 
   // ── Helpers ────────────────────────────────────────────────────────
@@ -132,18 +173,38 @@
     fEmail = "";
     fPassword = "";
     fRole = "kepala_jahit";
+    fKode = "";
+    fNoHp = "";
+    fJabatan = "";
+    fDivisi = "";
+    fTanggalMasuk = "";
+    fStatusKerja = "aktif";
+    fAlamat = "";
+    fKontakDarurat = "";
+    fCatatanHr = "";
     fTipe = "permanent";
     fExpired = "";
     fTipePenggajian = "bulanan";
+    fGajiPokok = "";
     openTambah = true;
   }
   function bukaEdit(k: UserProfile) {
     selectedKaryawan = k;
     eNama = k.name;
     eRole = k.role;
+    eKode = k.kode_karyawan ?? "";
+    eNoHp = k.no_hp ?? "";
+    eJabatan = k.jabatan ?? "";
+    eDivisi = k.divisi ?? "";
+    eTanggalMasuk = k.tanggal_masuk ?? "";
+    eStatusKerja = k.status_kerja ?? "aktif";
+    eAlamat = k.alamat ?? "";
+    eKontakDarurat = k.kontak_darurat ?? "";
+    eCatatanHr = k.catatan_hr ?? "";
     eTipe = k.tipe_akun ?? "permanent";
     eExpired = tsToInputDate(k.tanggal_expired);
     eTipePenggajian = k.tipe_penggajian ?? "bulanan";
+    eGajiPokok = k.gaji_pokok ? String(k.gaji_pokok) : "";
     openEdit = true;
   }
   function bukaHapus(k: UserProfile) {
@@ -161,10 +222,20 @@
         password: fPassword,
         name: fNama.trim(),
         role: fRole,
+        kode_karyawan: fKode,
+        no_hp: fNoHp,
+        jabatan: fJabatan,
+        divisi: fDivisi,
+        tanggal_masuk: fTanggalMasuk,
+        status_kerja: fStatusKerja,
+        alamat: fAlamat,
+        kontak_darurat: fKontakDarurat,
+        catatan_hr: fCatatanHr,
         tipe_akun: fTipe,
         tanggal_expired:
           fTipe === "temporary" && fExpired ? new Date(fExpired) : null,
         tipe_penggajian: fTipePenggajian,
+        gaji_pokok: Number(fGajiPokok) || 0,
       });
       openTambah = false;
       showSuccess(`Akun "${fNama.trim()}" berhasil dibuat.`);
@@ -183,10 +254,20 @@
       await updateKaryawan(selectedKaryawan.uid, {
         name: eNama.trim(),
         role: eRole,
+        kode_karyawan: eKode,
+        no_hp: eNoHp,
+        jabatan: eJabatan,
+        divisi: eDivisi,
+        tanggal_masuk: eTanggalMasuk,
+        status_kerja: eStatusKerja,
+        alamat: eAlamat,
+        kontak_darurat: eKontakDarurat,
+        catatan_hr: eCatatanHr,
         tipe_akun: eTipe,
         tanggal_expired:
           eTipe === "temporary" && eExpired ? new Date(eExpired) : null,
         tipe_penggajian: eTipePenggajian,
+        gaji_pokok: Number(eGajiPokok) || 0,
       });
       openEdit = false;
       showSuccess("Data karyawan berhasil diperbarui.");
@@ -343,7 +424,7 @@
       </svg>
       <input
         type="text"
-        placeholder="Cari nama atau email..."
+        placeholder="Cari nama, email, kode, divisi..."
         bind:value={searchQuery}
         class="w-full rounded-lg border border-gray-200 bg-white py-2 pl-9 pr-4 text-sm text-gray-700 placeholder:text-gray-400 focus:outline-none"
       />
@@ -446,12 +527,13 @@
       <Table.Root class="table-fixed">
         <Table.Header>
           <Table.Row class="bg-gray-50 hover:bg-gray-50">
-            <Table.Head class="w-[32%]">Karyawan</Table.Head>
+            <Table.Head class="w-[30%]">Karyawan</Table.Head>
             <Table.Head class="w-[16%]">Role</Table.Head>
-            <Table.Head class="w-[13%] text-center">Tipe</Table.Head>
+            <Table.Head class="w-[15%]">Info Kerja</Table.Head>
+            <Table.Head class="w-[12%] text-center">Tipe</Table.Head>
             <Table.Head class="w-[14%] text-center">Penggajian</Table.Head>
             <Table.Head class="w-[10%]">Expired</Table.Head>
-            <Table.Head class="w-[15%]"></Table.Head>
+            <Table.Head class="w-[13%]"></Table.Head>
           </Table.Row>
         </Table.Header>
         <Table.Body>
@@ -466,6 +548,11 @@
                   <p class="mt-0.5 truncate text-xs text-gray-500" title={k.email}>
                     {k.email}
                   </p>
+                  {#if k.kode_karyawan}
+                    <p class="mt-1 text-[11px] font-medium text-gray-400">
+                      ID: {k.kode_karyawan}
+                    </p>
+                  {/if}
                 </div>
               </Table.Cell>
               <Table.Cell>
@@ -474,6 +561,22 @@
                 >
                   {ROLE_LABEL[k.role] ?? k.role}
                 </span>
+              </Table.Cell>
+              <Table.Cell>
+                <div class="space-y-1">
+                  <p class="truncate text-xs font-medium text-gray-700" title={k.jabatan || k.divisi || "-"}>
+                    {k.jabatan || k.divisi || "-"}
+                  </p>
+                  <span
+                    class="inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold {k.status_kerja === 'cuti'
+                      ? 'bg-amber-100 text-amber-700'
+                      : k.status_kerja === 'nonaktif'
+                        ? 'bg-red-100 text-red-700'
+                        : 'bg-green-100 text-green-700'}"
+                  >
+                    {STATUS_KERJA_LABEL[k.status_kerja ?? "aktif"]}
+                  </span>
+                </div>
               </Table.Cell>
               <Table.Cell class="text-center">
                 {#if k.tipe_akun === "temporary"}
@@ -511,49 +614,39 @@
                 {/if}
               </Table.Cell>
               <Table.Cell class="text-right">
-                <div class="flex justify-end gap-2 whitespace-nowrap">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onclick={() => bukaEdit(k)}
-                  >
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke-width="2"
-                      stroke="currentColor"
+                <DropdownMenu.Root>
+                  <DropdownMenu.Trigger>
+                    {#snippet child({ props })}
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        class="h-8 w-8"
+                        aria-label={`Aksi ${k.name}`}
+                        {...props}
+                      >
+                        <MoreHorizontalIcon class="h-4 w-4" />
+                      </Button>
+                    {/snippet}
+                  </DropdownMenu.Trigger>
+                  <DropdownMenu.Content align="end" class="w-44">
+                    <DropdownMenu.Item onclick={() => goto(`/karyawan/data/${k.uid}`)}>
+                      <EyeIcon class="mr-2 h-4 w-4" />
+                      Lihat Detail
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Item onclick={() => bukaEdit(k)}>
+                      <PencilIcon class="mr-2 h-4 w-4" />
+                      Edit Data
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Separator />
+                    <DropdownMenu.Item
+                      class="text-red-600 focus:bg-red-50 focus:text-red-700"
+                      onclick={() => bukaHapus(k)}
                     >
-                      <path
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125"
-                      />
-                    </svg>
-                    Edit
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    class="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
-                    onclick={() => bukaHapus(k)}
-                  >
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke-width="2"
-                      stroke="currentColor"
-                    >
-                      <path
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0"
-                      />
-                    </svg>
-                    Hapus
-                  </Button>
-                </div>
+                      <Trash2Icon class="mr-2 h-4 w-4" />
+                      Hapus Akun
+                    </DropdownMenu.Item>
+                  </DropdownMenu.Content>
+                </DropdownMenu.Root>
               </Table.Cell>
             </Table.Row>
           {/each}
@@ -573,7 +666,7 @@
 
 <!-- ── Dialog: Tambah Akun ────────────────────────────────────────── -->
 <Dialog.Root bind:open={openTambah}>
-  <Dialog.Content class="max-w-md">
+  <Dialog.Content class="max-h-[92vh] max-w-2xl overflow-y-auto">
     <Dialog.Header>
       <Dialog.Title>Tambah Akun Karyawan</Dialog.Title>
       <Dialog.Description
@@ -640,6 +733,88 @@
             {/each}
           </Select.Content>
         </Select.Root>
+      </div>
+      <div class="grid gap-3 sm:grid-cols-2">
+        <div class="space-y-1.5">
+          <label class="mb-1.5 block text-sm font-medium text-gray-700" for="t-kode">
+            Kode Karyawan
+          </label>
+          <Input id="t-kode" placeholder="cth: EMP-001" bind:value={fKode} />
+        </div>
+        <div class="space-y-1.5">
+          <label class="mb-1.5 block text-sm font-medium text-gray-700" for="t-hp">
+            No. HP
+          </label>
+          <Input id="t-hp" placeholder="08xx..." bind:value={fNoHp} />
+        </div>
+        <div class="space-y-1.5">
+          <label class="mb-1.5 block text-sm font-medium text-gray-700" for="t-jabatan">
+            Jabatan
+          </label>
+          <Input id="t-jabatan" placeholder="cth: Kepala Jahit" bind:value={fJabatan} />
+        </div>
+        <div class="space-y-1.5">
+          <label class="mb-1.5 block text-sm font-medium text-gray-700" for="t-divisi">
+            Divisi
+          </label>
+          <Input id="t-divisi" placeholder="cth: Produksi" bind:value={fDivisi} />
+        </div>
+        <div class="space-y-1.5">
+          <label class="mb-1.5 block text-sm font-medium text-gray-700" for="t-masuk">
+            Tanggal Masuk
+          </label>
+          <input
+            id="t-masuk"
+            type="date"
+            bind:value={fTanggalMasuk}
+            class="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
+          />
+        </div>
+        <div class="space-y-1.5">
+          <label class="mb-1.5 block text-sm font-medium text-gray-700">
+            Status Kerja
+          </label>
+          <Select.Root
+            type="single"
+            value={fStatusKerja}
+            onValueChange={(val) => val && (fStatusKerja = val as "aktif" | "cuti" | "nonaktif")}
+          >
+            <Select.Trigger class="w-full">
+              <span>{STATUS_KERJA_LABEL[fStatusKerja]}</span>
+            </Select.Trigger>
+            <Select.Content preventScroll={false}>
+              {#each STATUS_KERJA_OPTIONS as status}
+                <Select.Item value={status}>{STATUS_KERJA_LABEL[status]}</Select.Item>
+              {/each}
+            </Select.Content>
+          </Select.Root>
+        </div>
+      </div>
+      <div class="space-y-1.5">
+        <label class="mb-1.5 block text-sm font-medium text-gray-700" for="t-alamat">
+          Alamat
+        </label>
+        <textarea
+          id="t-alamat"
+          rows="2"
+          placeholder="Alamat karyawan..."
+          bind:value={fAlamat}
+          class="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 placeholder:text-gray-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
+        ></textarea>
+      </div>
+      <div class="grid gap-3 sm:grid-cols-2">
+        <div class="space-y-1.5">
+          <label class="mb-1.5 block text-sm font-medium text-gray-700" for="t-darurat">
+            Kontak Darurat
+          </label>
+          <Input id="t-darurat" placeholder="Nama / nomor keluarga" bind:value={fKontakDarurat} />
+        </div>
+        <div class="space-y-1.5">
+          <label class="mb-1.5 block text-sm font-medium text-gray-700" for="t-catatan">
+            Catatan HR
+          </label>
+          <Input id="t-catatan" placeholder="Catatan internal" bind:value={fCatatanHr} />
+        </div>
       </div>
       <div class="space-y-1.5">
         <label class="mb-1.5 block text-sm font-medium text-gray-700">
@@ -712,6 +887,16 @@
           {/if}
         </p>
       </div>
+      <div class="space-y-1.5">
+        <label class="mb-1.5 block text-sm font-medium text-gray-700" for="t-gaji-pokok">
+          Gaji Tetap
+          <span class="text-xs font-normal text-gray-400">(opsional)</span>
+        </label>
+        <Input id="t-gaji-pokok" type="number" min="0" placeholder="0" bind:value={fGajiPokok} />
+        <p class="text-xs text-gray-400">
+          Dipakai ke estimasi keuangan untuk staff/admin reguler. Produksi tetap memakai tarif per pcs.
+        </p>
+      </div>
     </div>
 
     <Dialog.Footer class="gap-2">
@@ -727,7 +912,7 @@
 
 <!-- ── Dialog: Edit Karyawan ─────────────────────────────────────── -->
 <Dialog.Root bind:open={openEdit}>
-  <Dialog.Content class="max-w-md">
+  <Dialog.Content class="max-h-[92vh] max-w-2xl overflow-y-auto">
     <Dialog.Header>
       <Dialog.Title>Edit Data Karyawan</Dialog.Title>
       <Dialog.Description
@@ -770,6 +955,88 @@
               {/each}
             </Select.Content>
           </Select.Root>
+        </div>
+        <div class="grid gap-3 sm:grid-cols-2">
+          <div class="space-y-1.5">
+            <label class="mb-1.5 block text-sm font-medium text-gray-700" for="e-kode">
+              Kode Karyawan
+            </label>
+            <Input id="e-kode" placeholder="cth: EMP-001" bind:value={eKode} />
+          </div>
+          <div class="space-y-1.5">
+            <label class="mb-1.5 block text-sm font-medium text-gray-700" for="e-hp">
+              No. HP
+            </label>
+            <Input id="e-hp" placeholder="08xx..." bind:value={eNoHp} />
+          </div>
+          <div class="space-y-1.5">
+            <label class="mb-1.5 block text-sm font-medium text-gray-700" for="e-jabatan">
+              Jabatan
+            </label>
+            <Input id="e-jabatan" placeholder="cth: Kepala Jahit" bind:value={eJabatan} />
+          </div>
+          <div class="space-y-1.5">
+            <label class="mb-1.5 block text-sm font-medium text-gray-700" for="e-divisi">
+              Divisi
+            </label>
+            <Input id="e-divisi" placeholder="cth: Produksi" bind:value={eDivisi} />
+          </div>
+          <div class="space-y-1.5">
+            <label class="mb-1.5 block text-sm font-medium text-gray-700" for="e-masuk">
+              Tanggal Masuk
+            </label>
+            <input
+              id="e-masuk"
+              type="date"
+              bind:value={eTanggalMasuk}
+              class="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
+            />
+          </div>
+          <div class="space-y-1.5">
+            <label class="mb-1.5 block text-sm font-medium text-gray-700">
+              Status Kerja
+            </label>
+            <Select.Root
+              type="single"
+              value={eStatusKerja}
+              onValueChange={(val) => val && (eStatusKerja = val as "aktif" | "cuti" | "nonaktif")}
+            >
+              <Select.Trigger class="w-full">
+                <span>{STATUS_KERJA_LABEL[eStatusKerja]}</span>
+              </Select.Trigger>
+              <Select.Content preventScroll={false}>
+                {#each STATUS_KERJA_OPTIONS as status}
+                  <Select.Item value={status}>{STATUS_KERJA_LABEL[status]}</Select.Item>
+                {/each}
+              </Select.Content>
+            </Select.Root>
+          </div>
+        </div>
+        <div class="space-y-1.5">
+          <label class="mb-1.5 block text-sm font-medium text-gray-700" for="e-alamat">
+            Alamat
+          </label>
+          <textarea
+            id="e-alamat"
+            rows="2"
+            placeholder="Alamat karyawan..."
+            bind:value={eAlamat}
+            class="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 placeholder:text-gray-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
+          ></textarea>
+        </div>
+        <div class="grid gap-3 sm:grid-cols-2">
+          <div class="space-y-1.5">
+            <label class="mb-1.5 block text-sm font-medium text-gray-700" for="e-darurat">
+              Kontak Darurat
+            </label>
+            <Input id="e-darurat" placeholder="Nama / nomor keluarga" bind:value={eKontakDarurat} />
+          </div>
+          <div class="space-y-1.5">
+            <label class="mb-1.5 block text-sm font-medium text-gray-700" for="e-catatan">
+              Catatan HR
+            </label>
+            <Input id="e-catatan" placeholder="Catatan internal" bind:value={eCatatanHr} />
+          </div>
         </div>
         <div class="space-y-1.5">
           <label class="mb-1.5 block text-sm font-medium text-gray-700"
@@ -830,6 +1097,16 @@
               </button>
             {/each}
           </div>
+        </div>
+        <div class="space-y-1.5">
+          <label class="mb-1.5 block text-sm font-medium text-gray-700" for="e-gaji-pokok">
+            Gaji Tetap
+            <span class="text-xs font-normal text-gray-400">(opsional)</span>
+          </label>
+          <Input id="e-gaji-pokok" type="number" min="0" placeholder="0" bind:value={eGajiPokok} />
+          <p class="text-xs text-gray-400">
+            Dipakai ke estimasi keuangan untuk staff/admin reguler. Produksi tetap memakai tarif per pcs.
+          </p>
         </div>
       </div>
     {/if}

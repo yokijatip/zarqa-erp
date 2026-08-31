@@ -107,15 +107,44 @@ const STATUSES_KAIN_SUDAH_DIPOTONG = new Set<StatusBatch>([
   // COMPLETED tidak ada di sini karena batch COMPLETED tidak bisa dihapus
 ]);
 
-// Buat order produksi baru
-// Stok kain BELUM dikurangi di sini — pengurangan terjadi saat CUTTING_IN_PROGRESS
+function totalDetailUkuran(detail: DetailUkuran[]): number {
+  return detail.reduce((sum, u) => sum + (u.jumlah_pcs ?? 0), 0);
+}
+
+function stokKainRiwayatPayload(
+  batchId: string,
+  data: Pick<BatchProduksiInput, 'model_id' | 'nama_model' | 'nama_warna' | 'detail_ukuran'>,
+  kain: KainDigunakan,
+  stokSebelum: number,
+) {
+  return {
+    tipe: 'pemakaian_produksi',
+    jumlah: kain.jumlah_dipakai,
+    stok_sebelum: stokSebelum,
+    stok_sesudah: stokSebelum - kain.jumlah_dipakai,
+    batch_id: batchId,
+    model_id: data.model_id,
+    nama_model: data.nama_model,
+    nama_warna: data.nama_warna,
+    detail_ukuran: data.detail_ukuran.map((du) => ({
+      ukuran: du.ukuran,
+      pcs: du.jumlah_pcs,
+    })),
+    catatan: `Order cutting: ${data.nama_model}`,
+    timestamp: serverTimestamp(),
+  };
+}
+
+// Buat order produksi baru. Jika kain/detail pcs belum lengkap, batch masuk
+// PENDING_KAIN dulu dan stok kain belum dipotong.
 export async function createBatchProduksi(
   data: BatchProduksiInput,
   dibuatOlehUid: string
 ): Promise<string> {
-  const totalPcs = data.detail_ukuran.reduce((sum, u) => sum + u.jumlah_pcs, 0);
+  const totalPcs = totalDetailUkuran(data.detail_ukuran);
   const ref = doc(collection(db, COL));
   const kainList = (data.kain_digunakan ?? []).filter((kain) => (kain.jumlah_dipakai ?? 0) > 0);
+  const siapCutting = totalPcs > 0 && kainList.length > 0;
 
   await runTransaction(db, async (transaction) => {
     const kainEntries: Array<{
@@ -124,7 +153,7 @@ export async function createBatchProduksi(
       kainSnap: DocumentSnapshot<DocumentData>;
       riwayatRef: ReturnType<typeof doc>;
     }> = [];
-    for (const kain of kainList) {
+    for (const kain of siapCutting ? kainList : []) {
       const kainRef = doc(db, 'stok_kain', kain.kain_id);
       const kainSnap = await transaction.get(kainRef);
       if (!kainSnap.exists()) throw new Error(`Kain "${kain.nama_kain}" tidak ditemukan (id: ${kain.kain_id})`);
@@ -144,9 +173,10 @@ export async function createBatchProduksi(
 
     transaction.set(ref, {
       ...data,
+      kain_digunakan: siapCutting ? kainList : [],
       total_pcs: totalPcs,
       pcs_saat_ini: totalPcs,
-      status: 'PENDING_CUTTING' as StatusBatch,
+      status: (siapCutting ? 'PENDING_CUTTING' : 'PENDING_KAIN') as StatusBatch,
       stok_kain_dipotong: kainEntries.length > 0,
       dibuat_oleh: dibuatOlehUid,
       createdAt: serverTimestamp(),
@@ -162,24 +192,107 @@ export async function createBatchProduksi(
         updatedAt: serverTimestamp(),
       });
       transaction.set(riwayatRef, {
-        tipe: 'pemakaian_produksi',
-        jumlah: kain.jumlah_dipakai,
-        stok_sebelum: stok.stok_tersedia,
-        stok_sesudah: stokBaru,
-        batch_id: ref.id,
-        model_id: data.model_id,
-        nama_model: data.nama_model,
-        nama_warna: data.nama_warna,
-        detail_ukuran: data.detail_ukuran.map((du) => ({
-          ukuran: du.ukuran,
-          pcs: du.jumlah_pcs,
-        })),
-        catatan: `Order cutting: ${data.nama_model}`,
-        timestamp: serverTimestamp(),
+        ...stokKainRiwayatPayload(ref.id, data, kain, stok.stok_tersedia),
       });
     }
   });
   return ref.id;
+}
+
+export async function lengkapiKainBatchCutting(
+  batchId: string,
+  detailUkuran: DetailUkuran[],
+  kainDigunakan: KainDigunakan[],
+  updatedByUid: string,
+  updatedByNama: string,
+  catatan?: string,
+): Promise<void> {
+  const batchRef = doc(db, COL, batchId);
+  const riwayatRef = doc(collection(db, COL, batchId, 'riwayat_proses'));
+  const totalPcs = totalDetailUkuran(detailUkuran);
+  const kainList = kainDigunakan.filter((kain) => kain.kain_id && (kain.jumlah_dipakai ?? 0) > 0);
+
+  if (totalPcs <= 0) throw new Error('Estimasi pcs harus lebih dari 0');
+  if (kainList.length === 0) throw new Error('Isi minimal satu kain yang dipakai');
+
+  await runTransaction(db, async (transaction) => {
+    const batchSnap = await transaction.get(batchRef);
+    if (!batchSnap.exists()) throw new Error('Batch tidak ditemukan');
+
+    const batch = { id: batchSnap.id, ...batchSnap.data() } as BatchProduksi;
+    if (batch.status !== 'PENDING_KAIN') {
+      throw new Error('Pembagian kain hanya bisa diisi untuk batch yang masih menunggu kain');
+    }
+    if (batch.dari_potongan) throw new Error('Batch dari stok potongan tidak memakai pembagian kain');
+
+    const kainEntries: Array<{
+      kain: KainDigunakan;
+      kainRef: ReturnType<typeof doc>;
+      kainSnap: DocumentSnapshot<DocumentData>;
+      riwayatRef: ReturnType<typeof doc>;
+    }> = [];
+
+    for (const kain of kainList) {
+      const kainRef = doc(db, 'stok_kain', kain.kain_id);
+      const kainSnap = await transaction.get(kainRef);
+      if (!kainSnap.exists()) throw new Error(`Kain "${kain.nama_kain}" tidak ditemukan`);
+
+      const stok = kainSnap.data() as { nama_kain: string; stok_tersedia: number; stok_terpakai?: number };
+      if ((stok.stok_tersedia ?? 0) < kain.jumlah_dipakai) {
+        throw new Error(`Stok kain "${stok.nama_kain}" tidak mencukupi (tersedia: ${stok.stok_tersedia}, dibutuhkan: ${kain.jumlah_dipakai})`);
+      }
+
+      kainEntries.push({
+        kain,
+        kainRef,
+        kainSnap,
+        riwayatRef: doc(collection(db, 'stok_kain', kain.kain_id, 'riwayat')),
+      });
+    }
+
+    const dataForRiwayat = {
+      model_id: batch.model_id,
+      nama_model: batch.nama_model,
+      nama_warna: batch.nama_warna,
+      detail_ukuran: detailUkuran,
+    };
+
+    transaction.update(batchRef, {
+      detail_ukuran: detailUkuran,
+      kain_digunakan: kainList,
+      total_pcs: totalPcs,
+      pcs_saat_ini: totalPcs,
+      status: 'PENDING_CUTTING' as StatusBatch,
+      stok_kain_dipotong: true,
+      updatedAt: serverTimestamp(),
+    });
+
+    transaction.set(riwayatRef, {
+      tipe: 'status_update',
+      status_dari: batch.status,
+      status_ke: 'PENDING_CUTTING' as StatusBatch,
+      updated_by_uid: updatedByUid,
+      updated_by_nama: updatedByNama,
+      pcs_berhasil: totalPcs,
+      pcs_reject: 0,
+      detail_ukuran: detailUkuran,
+      catatan: catatan?.trim() || 'Pembagian kain produksi dilengkapi',
+      timestamp: serverTimestamp(),
+    });
+
+    for (const { kain, kainRef, kainSnap, riwayatRef } of kainEntries) {
+      const stok = kainSnap.data() as { stok_tersedia: number; stok_terpakai?: number };
+      const stokBaru = stok.stok_tersedia - kain.jumlah_dipakai;
+      transaction.update(kainRef, {
+        stok_tersedia: stokBaru,
+        stok_terpakai: (stok.stok_terpakai ?? 0) + kain.jumlah_dipakai,
+        updatedAt: serverTimestamp(),
+      });
+      transaction.set(riwayatRef, {
+        ...stokKainRiwayatPayload(batch.id, dataForRiwayat, kain, stok.stok_tersedia),
+      });
+    }
+  });
 }
 
 // Buat order produksi dari stok potongan kain (kain sudah dipotong sebelumnya)
@@ -306,6 +419,9 @@ export async function updateStatusBatch(
     const batch = { id: batchSnap.id, ...batchSnap.data() } as BatchProduksi;
     if (batch.status === statusBaru) {
       throw new Error('Status batch sudah diperbarui oleh pengguna lain');
+    }
+    if (batch.status === 'PENDING_KAIN' && statusBaru === 'CUTTING_IN_PROGRESS') {
+      throw new Error('Lengkapi pembagian kain sebelum mulai cutting.');
     }
 
     // Batch baru sudah memotong kain saat order dibuat. Ini fallback untuk data lama.
@@ -1057,7 +1173,7 @@ export async function getBatchListByDateRange(from: Date, to: Date): Promise<Bat
 // Real-time listener semua batch aktif (untuk monitor produksi)
 export function subscribeBatchAktif(callback: (data: BatchProduksi[]) => void): Unsubscribe {
   const statusAktif: StatusBatch[] = [
-    'PENDING_CUTTING', 'CUTTING_IN_PROGRESS', 'CUTTING_DONE',
+    'PENDING_KAIN', 'PENDING_CUTTING', 'CUTTING_IN_PROGRESS', 'CUTTING_DONE',
     'JAHIT_IN_PROGRESS', 'JAHIT_DONE',
     'STEAM_IN_PROGRESS', 'STEAM_DONE',
   ];

@@ -181,6 +181,7 @@
 
   // ── Chart Config ─────────────────────────────────────────────────
   const STATUS_CHART_COLORS: Record<StatusBatch, string> = {
+    PENDING_KAIN: "#67e8f9",
     PENDING_CUTTING: "#e2e8f0",
     CUTTING_IN_PROGRESS: "#fb923c",
     CUTTING_DONE: "#fbbf24",
@@ -192,6 +193,7 @@
   };
 
   const BADGE_COLOR: Record<StatusBatch, string> = {
+    PENDING_KAIN: "bg-cyan-100 text-cyan-700",
     PENDING_CUTTING: "bg-slate-100 text-slate-600",
     CUTTING_IN_PROGRESS: "bg-orange-100 text-orange-700",
     CUTTING_DONE: "bg-yellow-100 text-yellow-700",
@@ -732,12 +734,12 @@
         Berdasarkan barang keluar selesai dan harga di master model baju
       </p>
     </div>
-    <span
-      class="ml-auto text-xs text-gray-300 cursor-not-allowed"
-      title="Modul keuangan belum tersedia"
+    <a
+      href="/keuangan"
+      class="ml-auto text-xs font-medium text-blue-600 hover:underline"
     >
       Lihat Laporan →
-    </span>
+    </a>
   </div>
 
   <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
