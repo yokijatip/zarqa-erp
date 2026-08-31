@@ -68,7 +68,7 @@
     referensi?: string;
   };
 
-  let dateRange = $state<DateRange>(getPeriodRange("bulan_ini"));
+  let dateRange = $state<DateRange>(getPeriodRange("hari_ini"));
   let barangKeluar = $state<BarangKeluar[]>([]);
   let modelList = $state<ModelBaju[]>([]);
   let transaksiManual = $state<TransaksiKeuangan[]>([]);
@@ -920,7 +920,7 @@
           <h2 class="text-sm font-semibold text-gray-800">Laporan Laba Rugi</h2>
           <p class="mt-0.5 text-xs text-gray-400">Format ringkas sesuai praktik dasar perusahaan.</p>
         </div>
-        <PeriodSelector bind:dateRange defaultPeriod="bulan_ini" />
+        <PeriodSelector bind:dateRange defaultPeriod="hari_ini" />
       </div>
       <div class="mt-4 divide-y divide-gray-100 rounded-lg border border-gray-100">
         <div class="flex items-center justify-between px-4 py-3">
@@ -1015,7 +1015,7 @@
             <h2 class="text-sm font-semibold text-gray-800">Sumber Pemasukan</h2>
             <p class="mt-0.5 text-xs text-gray-400">Penjualan otomatis dan pemasukan manual pada periode ini.</p>
           </div>
-          <PeriodSelector bind:dateRange defaultPeriod="bulan_ini" />
+          <PeriodSelector bind:dateRange defaultPeriod="hari_ini" />
         </div>
         <div class="mt-5 grid gap-3 sm:grid-cols-3">
           <div class="rounded-xl bg-green-50 p-4">
@@ -1071,7 +1071,7 @@
             <h2 class="text-sm font-semibold text-gray-800">Kontrol Pengeluaran</h2>
             <p class="mt-0.5 text-xs text-gray-400">Beban operasional, gaji, dan pembelian aset perusahaan.</p>
           </div>
-          <PeriodSelector bind:dateRange defaultPeriod="bulan_ini" />
+          <PeriodSelector bind:dateRange defaultPeriod="hari_ini" />
         </div>
         <div class="mt-5 grid gap-3 sm:grid-cols-4">
           <div class="rounded-xl bg-red-50 p-4">
@@ -1153,11 +1153,12 @@
   {/if}
 
   {#if pageMode !== "ringkasan" || activePanel === "transaksi"}
-  <section class="rounded-xl border border-gray-100 bg-white shadow-sm">
+  <section class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
     <div class="flex flex-wrap items-center gap-3 border-b border-gray-100 p-4">
-      <div class="relative min-w-64 flex-1">
+      <div class="min-w-[220px] flex-1">
         <Input placeholder="Cari transaksi, kategori, referensi..." bind:value={searchQuery} />
       </div>
+      <PeriodSelector bind:dateRange defaultPeriod="hari_ini" />
       {#if pageMode === "ringkasan"}
         <div class="flex items-center gap-2">
           {#each [["semua", "Semua"], ["pemasukan", "Pemasukan"], ["pengeluaran", "Pengeluaran"]] as tab}
@@ -1194,34 +1195,34 @@
     {:else if filteredLines.length === 0}
       <div class="py-16 text-center text-sm text-gray-400">Belum ada transaksi pada filter ini.</div>
     {:else}
-      <Table.Root class="table-fixed">
+      <Table.Root>
         <Table.Header>
           <Table.Row class="bg-gray-50 hover:bg-gray-50">
-            <Table.Head class="w-[12%]">Tanggal</Table.Head>
-            <Table.Head class="w-[12%]">Tipe</Table.Head>
-            <Table.Head class="w-[16%]">Kategori</Table.Head>
-            <Table.Head>Deskripsi</Table.Head>
-            <Table.Head class="w-[15%] text-right">Nominal</Table.Head>
-            <Table.Head class="w-[12%] text-right">Aksi</Table.Head>
+            <Table.Head class="w-[120px]">Tanggal</Table.Head>
+            <Table.Head>Transaksi</Table.Head>
+            <Table.Head class="w-[150px] text-right">Masuk</Table.Head>
+            <Table.Head class="w-[150px] text-right">Keluar</Table.Head>
+            <Table.Head class="w-[130px] text-right">Laba Kotor</Table.Head>
+            <Table.Head class="w-[90px] text-right">Aksi</Table.Head>
           </Table.Row>
         </Table.Header>
         <Table.Body>
           {#each filteredLines as line}
             <Table.Row>
-              <Table.Cell class="text-sm text-gray-500">{formatDate(line.tanggal)}</Table.Cell>
-              <Table.Cell>
-                <span
-                  class="rounded-full px-2.5 py-0.5 text-xs font-semibold {line.tipe === 'pemasukan'
-                    ? 'bg-green-100 text-green-700'
-                    : 'bg-red-100 text-red-700'}"
-                >
-                  {line.tipe === "pemasukan" ? "Pemasukan" : "Pengeluaran"}
-                </span>
-              </Table.Cell>
-              <Table.Cell class="text-sm text-gray-600">{line.kategori}</Table.Cell>
+              <Table.Cell class="align-top text-sm text-gray-500">{formatDate(line.tanggal)}</Table.Cell>
               <Table.Cell>
                 <div class="min-w-0">
-                  <p class="truncate text-sm font-medium text-gray-800">{line.deskripsi}</p>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span
+                      class="rounded-full px-2.5 py-0.5 text-xs font-semibold {line.tipe === 'pemasukan'
+                        ? 'bg-green-100 text-green-700'
+                        : 'bg-red-100 text-red-700'}"
+                    >
+                      {line.tipe === "pemasukan" ? "Pemasukan" : "Pengeluaran"}
+                    </span>
+                    <span class="text-xs font-medium text-gray-500">{line.kategori}</span>
+                  </div>
+                  <p class="mt-1 text-sm font-medium text-gray-800">{line.deskripsi}</p>
                   {#if line.source === "penjualan"}
                     <p class="text-xs text-gray-400">
                       Otomatis barang keluar · HPP {rupiah(line.hpp ?? 0)} · laba kotor {rupiah(line.labaKotor ?? 0)}
@@ -1231,10 +1232,16 @@
                   {/if}
                 </div>
               </Table.Cell>
-              <Table.Cell class="text-right font-semibold {line.tipe === 'pemasukan' ? 'text-green-700' : 'text-red-700'}">
-                {line.tipe === "pemasukan" ? "+" : "-"}{rupiah(line.nominal)}
+              <Table.Cell class="text-right align-top font-semibold text-green-700">
+                {line.tipe === "pemasukan" ? rupiah(line.nominal) : "-"}
               </Table.Cell>
-              <Table.Cell class="text-right">
+              <Table.Cell class="text-right align-top font-semibold text-red-700">
+                {line.tipe === "pengeluaran" ? rupiah(line.nominal) : "-"}
+              </Table.Cell>
+              <Table.Cell class="text-right align-top font-semibold {line.labaKotor !== undefined && line.labaKotor < 0 ? 'text-red-700' : 'text-gray-700'}">
+                {line.labaKotor !== undefined ? rupiah(line.labaKotor) : "-"}
+              </Table.Cell>
+              <Table.Cell class="text-right align-top">
                 {#if line.source === "manual"}
                   {@const trx = transaksiManual.find((item) => item.id === line.id)}
                   {#if trx}

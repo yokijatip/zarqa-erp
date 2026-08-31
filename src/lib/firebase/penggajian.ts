@@ -409,7 +409,7 @@ export interface PembayaranGajiRecord {
   id?: string;
   karyawan_uid: string;
   karyawan_nama: string;
-  divisi: DivisiProduksi;
+  divisi: DivisiProduksi | string;
   periode_start: string;
   periode_end: string;
   total_pcs: number;

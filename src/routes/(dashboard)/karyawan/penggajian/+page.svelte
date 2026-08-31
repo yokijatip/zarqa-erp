@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from "svelte";
   import {
     getPenggajianPeriode,
     hitungGajiKaryawan,
@@ -27,7 +26,6 @@
   import PrinterIcon from "@lucide/svelte/icons/printer";
   import CheckIcon from "@lucide/svelte/icons/check";
   import AlertTriangleIcon from "@lucide/svelte/icons/triangle-alert";
-  import CalendarIcon from "@lucide/svelte/icons/calendar";
 
   // ── State ──────────────────────────────────────────────────────────
   let dateRange = $state<DateRange>(getPeriodRange("minggu_ini"));
@@ -39,6 +37,7 @@
   let errorMsg = $state<string | null>(null);
   let exportingPdf = $state(false);
   let exportingRekap = $state(false);
+  let payrollMode = $state<"produksi" | "reguler">("produksi");
 
   // Filter tabs
   let activeTab = $state<TipePenggajian | "all">("all");
@@ -46,6 +45,10 @@
   // Dialog cetak
   let cetakDialogOpen = $state(false);
   let selectedKaryawan = $state<(typeof data)[0] | null>(null);
+  let regulerDialogOpen = $state(false);
+  let selectedReguler = $state<UserProfile | null>(null);
+  let nominalReguler = $state("");
+  let catatanReguler = $state("");
   let tarifInputs = $state<Array<{ nama_model: string; tarif: string }>>([]);
   let calculatedSalary = $state<ReturnType<typeof hitungGajiKaryawan> | null>(null);
 
@@ -75,6 +78,19 @@
   let karyawanMap = $derived(new Map(karyawanList.map(k => [k.uid, k])));
   let modelBajuMap = $derived(new Map(modelBajuList.map(m => [m.nama_model, m])));
 
+  const PRODUKSI_ROLES = new Set(["kepala_cutting", "kepala_jahit", "kepala_steam"]);
+
+  let karyawanReguler = $derived.by(() =>
+    karyawanList
+      .filter((k) =>
+        k.status_kerja !== "nonaktif" &&
+        !PRODUKSI_ROLES.has(k.role) &&
+        k.role !== "developer" &&
+        k.role !== "owner"
+      )
+      .sort((a, b) => a.name.localeCompare(b.name)),
+  );
+
   let filteredData = $derived.by(() => {
     if (activeTab === "all") return data;
     return data.filter(d => {
@@ -96,6 +112,13 @@
     const totalKaryawan = new Set(data.map(d => d.uid)).size;
     const belumDicetak = data.filter(d => !printedSet.has(d.uid)).length;
     return { totalPcs, totalKaryawan, belumDicetak };
+  });
+
+  let regulerStats = $derived.by(() => {
+    const totalKaryawan = karyawanReguler.length;
+    const totalGaji = karyawanReguler.reduce((sum, k) => sum + (k.gaji_pokok ?? 0), 0);
+    const belumDicetak = karyawanReguler.filter((k) => !printedSet.has(k.uid)).length;
+    return { totalKaryawan, totalGaji, belumDicetak };
   });
 
   let periodeLabel = $derived.by(() => {
@@ -170,6 +193,13 @@
     });
     calculatedSalary = null;
     cetakDialogOpen = true;
+  }
+
+  function bukaDialogReguler(k: UserProfile) {
+    selectedReguler = k;
+    nominalReguler = String(k.gaji_pokok ?? 0);
+    catatanReguler = "";
+    regulerDialogOpen = true;
   }
 
   function hitungTotal() {
@@ -346,6 +376,81 @@
     }
   }
 
+  async function exportRegulerPdf() {
+    if (!selectedReguler) return;
+    const nominal = Number(nominalReguler) || 0;
+    if (nominal <= 0) {
+      errorMsg = "Nominal gaji reguler harus lebih dari 0.";
+      return;
+    }
+
+    exportingPdf = true;
+    try {
+      const { jsPDF } = await import("jspdf");
+      const autoTable = (await import("jspdf-autotable")).default;
+      const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const marginX = 14;
+
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(14);
+      doc.text("Zarqa - Slip Gaji Karyawan Reguler", marginX, 18);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      doc.text(`Periode: ${periodeLabel}`, marginX, 28);
+      doc.text(`Dicetak: ${new Date().toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" })}`, pageWidth - marginX, 28, { align: "right" });
+
+      autoTable(doc, {
+        startY: 38,
+        head: [["Komponen", "Keterangan"]],
+        body: [
+          ["Nama", selectedReguler.name],
+          ["Email", selectedReguler.email],
+          ["Role", selectedReguler.role.replaceAll("_", " ")],
+          ["Divisi/Jabatan", selectedReguler.divisi || selectedReguler.jabatan || "-"],
+          ["Tipe Penggajian", selectedReguler.tipe_penggajian ? TIPE_LABEL[selectedReguler.tipe_penggajian] : "Reguler"],
+          ["Catatan", catatanReguler || "-"],
+          ["Total Gaji", rupiah(nominal)],
+        ],
+        theme: "grid",
+        styles: { fontSize: 9, cellPadding: 3 },
+        headStyles: { fillColor: [17, 24, 39] },
+      });
+
+      doc.text("Penerima,", pageWidth - marginX - 45, 105);
+      doc.text("(....................)", pageWidth - marginX - 45, 125);
+
+      const tanggal = new Date().toISOString().slice(0, 10);
+      doc.save(`gaji-reguler-${selectedReguler.name.replace(/\s+/g, "-")}-${tanggal}.pdf`);
+
+      let activeUser: any = null;
+      const unsub = currentUser.subscribe(u => (activeUser = u));
+      unsub();
+
+      await simpanPembayaranGaji({
+        karyawan_uid: selectedReguler.uid,
+        karyawan_nama: selectedReguler.name,
+        divisi: selectedReguler.divisi || selectedReguler.jabatan || "Staff",
+        periode_start: dateRange ? dateRange.start.toISOString() : new Date().toISOString(),
+        periode_end: dateRange ? dateRange.end.toISOString() : new Date().toISOString(),
+        total_pcs: 0,
+        total_gaji: nominal,
+        detail_per_model: [],
+        created_by_uid: activeUser?.uid,
+        created_by_nama: activeUser?.displayName || activeUser?.nama || activeUser?.email || "Admin",
+      });
+
+      printedSet.add(selectedReguler.uid);
+      printedSet = new Set(printedSet);
+      regulerDialogOpen = false;
+    } catch (e) {
+      console.error("Gagal membuat PDF reguler:", e);
+      errorMsg = "Gagal membuat PDF gaji reguler.";
+    } finally {
+      exportingPdf = false;
+    }
+  }
+
   // ── Export PDF Rekap Keseluruhan ───────────────────────────────────
   async function exportRekapKeseluruhanPdf() {
     if (data.length === 0) return;
@@ -512,9 +617,11 @@
 <!-- ── Header ─────────────────────────────────────────────────────── -->
 <div class="mb-5 flex flex-wrap items-start justify-between gap-4">
   <div>
-    <h1 class="text-xl font-semibold text-gray-900">Penggajian Produksi</h1>
+    <h1 class="text-xl font-semibold text-gray-900">Penggajian</h1>
     <p class="mt-0.5 text-sm text-gray-500">
-      Daftar karyawan yang menyelesaikan pcs pada periode: {periodeLabel}
+      {payrollMode === "produksi"
+        ? `Karyawan produksi berbasis hasil pcs pada periode: ${periodeLabel}`
+        : `Karyawan reguler/staff berbasis gaji pokok pada periode: ${periodeLabel}`}
     </p>
   </div>
   <div class="flex items-center gap-2 flex-wrap">
@@ -522,7 +629,7 @@
       variant="default"
       class="bg-indigo-600 hover:bg-indigo-700 text-white"
       onclick={exportRekapKeseluruhanPdf}
-      disabled={exportingRekap || data.length === 0}
+      disabled={payrollMode !== "produksi" || exportingRekap || data.length === 0}
     >
       <PrinterIcon class="h-4 w-4" />
       {exportingRekap ? "Memproses PDF..." : "Cetak Rekap Gaji Keseluruhan"}
@@ -541,22 +648,52 @@
   <div class="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{errorMsg}</div>
 {/if}
 
+<div class="mb-5 flex flex-wrap gap-2 rounded-xl border border-gray-100 bg-white p-2 shadow-sm sm:w-fit">
+  <Button
+    variant={payrollMode === "produksi" ? "default" : "ghost"}
+    onclick={() => (payrollMode = "produksi")}
+  >
+    Produksi / Borongan
+  </Button>
+  <Button
+    variant={payrollMode === "reguler" ? "default" : "ghost"}
+    onclick={() => (payrollMode = "reguler")}
+  >
+    Reguler / Staff
+  </Button>
+</div>
+
 <!-- ── Stats ──────────────────────────────────────────────────────── -->
 <div class="mb-5 grid grid-cols-2 gap-4 sm:grid-cols-3">
-  <StatCard title="Total Pcs" value={stats.totalPcs} icon={PackageIcon} {loading} footerSubtext="pcs diselesaikan" />
-  <StatCard title="Karyawan Aktif" value={stats.totalKaryawan} icon={BanknoteIcon} {loading} footerSubtext="dalam periode ini" />
-  <StatCard
-    title="Belum Dibayar"
-    value={stats.belumDicetak}
-    icon={AlertTriangleIcon}
-    {loading}
-    footerSubtext={stats.belumDicetak > 0 ? "klik cetak untuk bayar" : "semua sudah dibayar"}
-    class={stats.belumDicetak > 0 ? "border-amber-100 bg-amber-50" : "border-green-100 bg-green-50"}
-    valueClass={stats.belumDicetak > 0 ? "text-amber-600" : "text-green-700"}
-  />
+  {#if payrollMode === "produksi"}
+    <StatCard title="Total Pcs" value={stats.totalPcs} icon={PackageIcon} {loading} footerSubtext="pcs diselesaikan" />
+    <StatCard title="Karyawan Produksi" value={stats.totalKaryawan} icon={BanknoteIcon} {loading} footerSubtext="dalam periode ini" />
+    <StatCard
+      title="Belum Dibayar"
+      value={stats.belumDicetak}
+      icon={AlertTriangleIcon}
+      {loading}
+      footerSubtext={stats.belumDicetak > 0 ? "klik cetak untuk bayar" : "semua sudah dibayar"}
+      class={stats.belumDicetak > 0 ? "border-amber-100 bg-amber-50" : "border-green-100 bg-green-50"}
+      valueClass={stats.belumDicetak > 0 ? "text-amber-600" : "text-green-700"}
+    />
+  {:else}
+    <StatCard title="Karyawan Reguler" value={regulerStats.totalKaryawan} icon={BanknoteIcon} {loading} footerSubtext="staff aktif" />
+    <StatCard title="Estimasi Gaji" value={rupiah(regulerStats.totalGaji)} icon={PackageIcon} {loading} footerSubtext="dari gaji pokok" />
+    <StatCard
+      title="Belum Dibayar"
+      value={regulerStats.belumDicetak}
+      icon={AlertTriangleIcon}
+      {loading}
+      footerSubtext={regulerStats.belumDicetak > 0 ? "klik bayar untuk proses" : "semua sudah dibayar"}
+      class={regulerStats.belumDicetak > 0 ? "border-amber-100 bg-amber-50" : "border-green-100 bg-green-50"}
+      valueClass={regulerStats.belumDicetak > 0 ? "text-amber-600" : "text-green-700"}
+    />
+  {/if}
 </div>
 
 <!-- ── Filter Tabs ─────────────────────────────────────────────────── -->
+{#if payrollMode === "produksi"}
 <div class="mb-4 flex items-center gap-2 border-b border-gray-200">
   <button
     onclick={() => (activeTab = "all")}
@@ -681,6 +818,84 @@
   </div>
 {/if}
 
+{:else}
+{#if loading}
+  <div class="rounded-xl border border-gray-100 bg-white p-8">
+    <div class="space-y-3">
+      {#each Array(3) as _}
+        <div class="h-12 w-full animate-pulse rounded bg-gray-100"></div>
+      {/each}
+    </div>
+  </div>
+{:else if karyawanReguler.length === 0}
+  <div class="flex flex-col items-center justify-center gap-3 rounded-xl border border-gray-100 bg-white py-16">
+    <div class="flex h-14 w-14 items-center justify-center rounded-full bg-gray-100">
+      <BanknoteIcon class="h-7 w-7 text-gray-300" />
+    </div>
+    <p class="text-sm font-medium text-gray-500">Belum ada karyawan reguler atau staff aktif</p>
+    <p class="text-xs text-gray-400">atur role dan gaji pokok dari data karyawan</p>
+  </div>
+{:else}
+  <div class="rounded-xl border border-gray-100 bg-white shadow-sm">
+    <Table.Root>
+      <Table.Header>
+        <Table.Row class="bg-gray-50">
+          <Table.Head>Karyawan</Table.Head>
+          <Table.Head>Role</Table.Head>
+          <Table.Head>Info Kerja</Table.Head>
+          <Table.Head>Tipe</Table.Head>
+          <Table.Head class="text-right">Gaji Pokok</Table.Head>
+          <Table.Head>Status</Table.Head>
+          <Table.Head class="text-right">Aksi</Table.Head>
+        </Table.Row>
+      </Table.Header>
+      <Table.Body>
+        {#each karyawanReguler as k}
+          {@const sudahDicetak = printedSet.has(k.uid)}
+          <Table.Row class={sudahDicetak ? "bg-green-50/70" : ""}>
+            <Table.Cell>
+              <div>
+                <p class="font-semibold text-gray-900">{k.name}</p>
+                <p class="text-xs text-gray-500">{k.email}</p>
+              </div>
+            </Table.Cell>
+            <Table.Cell>
+              <span class="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
+                {k.role.replaceAll("_", " ")}
+              </span>
+            </Table.Cell>
+            <Table.Cell class="text-sm text-gray-600">
+              {k.divisi || k.jabatan || "-"}
+            </Table.Cell>
+            <Table.Cell>
+              <span class="rounded-full bg-purple-50 px-2 py-0.5 text-xs font-medium text-purple-700">
+                {k.tipe_penggajian ? TIPE_LABEL[k.tipe_penggajian] : "Reguler"}
+              </span>
+            </Table.Cell>
+            <Table.Cell class="text-right font-semibold">
+              {rupiah(k.gaji_pokok ?? 0)}
+            </Table.Cell>
+            <Table.Cell>
+              {#if sudahDicetak}
+                <span class="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">Sudah Dibayar</span>
+              {:else}
+                <span class="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">Belum Dibayar</span>
+              {/if}
+            </Table.Cell>
+            <Table.Cell class="text-right">
+              <Button size="sm" variant={sudahDicetak ? "outline" : "default"} onclick={() => bukaDialogReguler(k)}>
+                <DownloadIcon class="h-4 w-4" />
+                {sudahDicetak ? "Cetak Ulang" : "Bayar"}
+              </Button>
+            </Table.Cell>
+          </Table.Row>
+        {/each}
+      </Table.Body>
+    </Table.Root>
+  </div>
+{/if}
+{/if}
+
 {/if}
 
 <!-- ── Dialog: Cetak Gaji ─────────────────────────────────────────── -->
@@ -798,6 +1013,79 @@
     <Dialog.Footer class="gap-2">
       <Button variant="outline" onclick={() => (cetakDialogOpen = false)}>Batal</Button>
       <Button onclick={exportPdf} disabled={exportingPdf || !calculatedSalary || calculatedSalary.total_gaji === 0}>
+        <DownloadIcon class="h-4 w-4" />
+        {exportingPdf ? "Membuat PDF..." : "Cetak & Bayar"}
+      </Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
+
+<Dialog.Root bind:open={regulerDialogOpen}>
+  <Dialog.Content class="max-w-lg">
+    <Dialog.Header>
+      <Dialog.Title>
+        Bayar Gaji Reguler: {selectedReguler?.name}
+      </Dialog.Title>
+      <Dialog.Description>
+        Gaji reguler memakai nominal tetap dari data karyawan dan tidak dihitung dari hasil pcs.
+      </Dialog.Description>
+    </Dialog.Header>
+
+    {#if selectedReguler}
+      <div class="space-y-4">
+        <div class="rounded-lg bg-gray-50 p-3 text-sm">
+          <div class="flex justify-between gap-4">
+            <span class="text-gray-500">Karyawan</span>
+            <span class="text-right font-medium">{selectedReguler.name}</span>
+          </div>
+          <div class="mt-2 flex justify-between gap-4">
+            <span class="text-gray-500">Role</span>
+            <span class="text-right font-medium">{selectedReguler.role.replaceAll("_", " ")}</span>
+          </div>
+          <div class="mt-2 flex justify-between gap-4">
+            <span class="text-gray-500">Periode</span>
+            <span class="text-right font-medium">{periodeLabel}</span>
+          </div>
+        </div>
+
+        <div>
+          <label for="nominal-reguler" class="mb-1 block text-sm font-medium text-gray-700">Nominal Gaji</label>
+          <div class="relative">
+            <span class="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400">Rp</span>
+            <Input
+              id="nominal-reguler"
+              type="number"
+              min="0"
+              bind:value={nominalReguler}
+              class="pl-8"
+              placeholder="0"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label for="catatan-reguler" class="mb-1 block text-sm font-medium text-gray-700">Catatan</label>
+          <textarea
+            id="catatan-reguler"
+            bind:value={catatanReguler}
+            rows="3"
+            class="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            placeholder="Opsional"
+          ></textarea>
+        </div>
+
+        <div class="rounded-lg border border-green-200 bg-green-50 p-4">
+          <div class="flex items-center justify-between">
+            <span class="font-semibold text-gray-800">Total Dibayar</span>
+            <span class="text-xl font-bold text-green-700">{rupiah(Number(nominalReguler) || 0)}</span>
+          </div>
+        </div>
+      </div>
+    {/if}
+
+    <Dialog.Footer class="gap-2">
+      <Button variant="outline" onclick={() => (regulerDialogOpen = false)}>Batal</Button>
+      <Button onclick={exportRegulerPdf} disabled={exportingPdf || (Number(nominalReguler) || 0) <= 0}>
         <DownloadIcon class="h-4 w-4" />
         {exportingPdf ? "Membuat PDF..." : "Cetak & Bayar"}
       </Button>

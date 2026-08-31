@@ -19,7 +19,7 @@
   type FlushTarget = {
     collection: string;
     label: string;
-    subcollection?: string;
+    subcollections?: string[];
     warning?: string; // Warning khusus untuk koleksi sensitif
   };
 
@@ -27,14 +27,34 @@
     {
       collection: "batch_produksi",
       label: "Batch Produksi",
-      subcollection: "riwayat_proses",
+      subcollections: ["riwayat_proses"],
       warning: "Semua riwayat produksi & kinerja karyawan akan dihapus.",
     },
-    { collection: "stok_kain", label: "Stok Kain" },
+    {
+      collection: "stok_kain",
+      label: "Stok Kain",
+      subcollections: ["riwayat"],
+      warning: "Stok kain dan riwayat restock/pemakaian kain akan dihapus.",
+    },
+    { collection: "master_kain", label: "Master Kain" },
     { collection: "model_baju", label: "Model Baju" },
     { collection: "stok_potongan", label: "Stok Potongan" },
     { collection: "stok_barang_jadi", label: "Stok Barang Jadi" },
+    { collection: "riwayat_barang_jadi", label: "Riwayat Barang Jadi" },
     { collection: "barang_keluar", label: "Barang Keluar" },
+    {
+      collection: "reject_items",
+      label: "Data Reject",
+      subcollections: ["riwayat_resolusi"],
+      warning: "Semua pending reject dan riwayat penanganannya akan dihapus.",
+    },
+    {
+      collection: "transaksi_keuangan",
+      label: "Transaksi Keuangan",
+      warning: "Pemasukan, pengeluaran, dan catatan pembelian bahan baku akan dihapus.",
+    },
+    { collection: "aset_perusahaan", label: "Aset Perusahaan" },
+    { collection: "pembayaran_gaji", label: "Pembayaran Gaji" },
   ];
 
   // Koleksi yang dilindungi — tidak pernah dihapus
@@ -98,18 +118,20 @@
     }
   }
 
-  async function deleteWithSubcollection(colName: string, subCol: string) {
+  async function deleteWithSubcollections(colName: string, subCols: string[]) {
     const snap = await getDocs(collection(db, colName));
     for (const docSnap of snap.docs) {
-      const subSnap = await getDocs(
-        collection(db, colName, docSnap.id, subCol),
-      );
-      if (!subSnap.empty) {
-        for (let i = 0; i < subSnap.docs.length; i += 499) {
-          const chunk = subSnap.docs.slice(i, i + 499);
-          const batch = writeBatch(db);
-          chunk.forEach((d) => batch.delete(d.ref));
-          await batch.commit();
+      for (const subCol of subCols) {
+        const subSnap = await getDocs(
+          collection(db, colName, docSnap.id, subCol),
+        );
+        if (!subSnap.empty) {
+          for (let i = 0; i < subSnap.docs.length; i += 499) {
+            const chunk = subSnap.docs.slice(i, i + 499);
+            const batch = writeBatch(db);
+            chunk.forEach((d) => batch.delete(d.ref));
+            await batch.commit();
+          }
         }
       }
       await deleteDoc(docSnap.ref);
@@ -124,10 +146,10 @@
     try {
       for (const target of selectedTargets) {
         progress = `Menghapus ${target.label}...`;
-        if (target.subcollection) {
-          await deleteWithSubcollection(
+        if (target.subcollections?.length) {
+          await deleteWithSubcollections(
             target.collection,
-            target.subcollection,
+            target.subcollections,
           );
         } else {
           await deleteCollection(target.collection);
