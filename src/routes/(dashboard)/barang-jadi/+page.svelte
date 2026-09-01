@@ -101,6 +101,50 @@
       }
       model.colors.get(colorKey)!.items.push(item);
     }
+
+    // Ukuran dengan stok 0 tetap ditampilkan berdasarkan master model.
+    // Ini penting agar model/warna bisa ditemukan lewat filter "Habis".
+    for (const master of modelList) {
+      if (!modelMap.has(master.id)) {
+        modelMap.set(master.id, {
+          model_id: master.id,
+          nama_model: master.nama_model,
+          colors: new Map(),
+        });
+      }
+      const model = modelMap.get(master.id)!;
+      const masterColors = master.warna_tersedia?.length
+        ? master.warna_tersedia
+        : [{ nama_warna: undefined, kode_hex: undefined, warna_id: '' }];
+
+      for (const color of masterColors) {
+        const colorKey = color.nama_warna ?? '';
+        if (!model.colors.has(colorKey)) {
+          model.colors.set(colorKey, {
+            nama_warna: color.nama_warna,
+            kode_hex_warna: color.kode_hex,
+            items: [],
+          });
+        }
+        const colorGroup = model.colors.get(colorKey)!;
+        for (const ukuran of master.ukuran_tersedia) {
+          if (!colorGroup.items.some((item) => item.ukuran === ukuran)) {
+            colorGroup.items.push({
+              id: `${master.id}__${ukuran}__${colorKey || 'tanpa-warna'}__zero`,
+              model_id: master.id,
+              nama_model: master.nama_model,
+              ...(color.nama_warna ? { nama_warna: color.nama_warna } : {}),
+              ...(color.kode_hex ? { kode_hex_warna: color.kode_hex } : {}),
+              ukuran,
+              stok_tersedia: 0,
+              total_masuk: 0,
+              total_keluar: 0,
+            });
+          }
+        }
+      }
+    }
+
     for (const model of modelMap.values()) {
       for (const color of model.colors.values()) {
         color.items.sort(
@@ -286,7 +330,12 @@
     loading = true;
     errorMsg = null;
     try {
-      stokList = await barangJadiCache.get(force);
+      const [stok, models] = await Promise.all([
+        barangJadiCache.get(force),
+        modelBajuCache.get(force),
+      ]);
+      stokList = stok;
+      modelList = models.filter((model) => model.aktif);
       lastLoaded = new Date();
     } catch {
       showError("Gagal memuat data. Periksa koneksi Firebase.");

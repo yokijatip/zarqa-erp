@@ -581,8 +581,8 @@
         <span class="rounded-full bg-gray-100 px-3 py-1 text-sm font-semibold text-gray-700">{filteredRows.length} aktivitas</span>
       {/if}
     </div>
-    <div class="min-w-0 max-w-full overflow-x-auto">
-      <Table.Root class="min-w-[980px]">
+    <div class="hidden min-w-0 max-w-full overflow-hidden md:block">
+      <Table.Root class="w-full table-fixed">
         <Table.Header>
           <Table.Row>
             <Table.Head class="w-44">Waktu</Table.Head>
@@ -613,14 +613,45 @@
                     {categoryLabel(row.category)}
                   </span>
                 </Table.Cell>
-                <Table.Cell class="font-medium text-gray-900">{row.action}</Table.Cell>
-                <Table.Cell class="text-sm text-gray-600">{row.detail}</Table.Cell>
-                <Table.Cell class="text-xs text-gray-400">{row.reference}</Table.Cell>
+                <Table.Cell class="break-words font-medium text-gray-900">{row.action}</Table.Cell>
+                <Table.Cell class="break-words text-sm text-gray-600">{row.detail}</Table.Cell>
+                <Table.Cell class="break-all text-xs text-gray-400">{row.reference}</Table.Cell>
               </Table.Row>
             {/each}
           {/if}
         </Table.Body>
       </Table.Root>
+    </div>
+    <div class="space-y-3 p-3 md:hidden">
+      {#if filteredRows.length === 0}
+        <div class="rounded-lg border border-dashed p-6 text-center text-sm text-gray-400">
+          {loading ? "Memuat aktivitas..." : "Tidak ada aktivitas pada filter ini."}
+        </div>
+      {:else}
+        {#each filteredRows as row (row.id)}
+          <article class="min-w-0 rounded-lg border border-gray-100 bg-gray-50/60 p-3">
+            <div class="flex min-w-0 items-start justify-between gap-3">
+              <div class="min-w-0">
+                <p class="break-words text-sm font-semibold text-gray-900">{row.action}</p>
+                <p class="mt-1 break-words text-xs text-gray-500">{row.userName} · {formatDateTime(row.tanggal)}</p>
+              </div>
+              <span class="shrink-0 rounded-full bg-gray-100 px-2 py-1 text-[11px] font-semibold text-gray-700">
+                {categoryLabel(row.category)}
+              </span>
+            </div>
+            <dl class="mt-3 space-y-2 border-t border-gray-200 pt-3 text-xs">
+              <div>
+                <dt class="text-gray-400">Detail</dt>
+                <dd class="break-words text-gray-700">{row.detail}</dd>
+              </div>
+              <div>
+                <dt class="text-gray-400">Referensi</dt>
+                <dd class="break-all text-gray-500">{row.reference}</dd>
+              </div>
+            </dl>
+          </article>
+        {/each}
+      {/if}
     </div>
   </section>
 

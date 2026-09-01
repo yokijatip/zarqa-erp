@@ -8,7 +8,6 @@
   import { Badge } from "$lib/components/ui/badge";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
-  import * as Select from "$lib/components/ui/select/index.js";
   import * as Table from "$lib/components/ui/table";
   import type { BarangKeluarItem, ModelBaju } from "$lib/types";
   import {
@@ -37,6 +36,7 @@
   let selectedKey = $state("");
   let returQty = $state<Record<string, number>>({});
   let manualCatatan = $state("");
+  let manualSearch = $state("");
 
   let candidates = $derived.by<ReturCandidate[]>(() =>
     rows.flatMap((row) =>
@@ -67,6 +67,16 @@
   let selectedCandidate = $derived(
     candidates.find((entry) => `${entry.row.id}:${entry.itemIndex}` === selectedKey) ?? null,
   );
+  let manualCandidates = $derived.by(() => {
+    const q = manualSearch.trim().toLowerCase();
+    const list = q
+      ? candidates.filter((entry) =>
+          [entry.row.label, entry.row.tujuan, entry.row.buyer, entry.item.nama_model, entry.item.nama_warna ?? ""]
+            .some((value) => value.toLowerCase().includes(q)),
+        )
+      : candidates;
+    return list.slice(0, 30);
+  });
   let selectedReturTotal = $derived(
     selectedCandidate
       ? selectedCandidate.item.detail_keluar.reduce(
@@ -145,6 +155,7 @@
       selectedKey = "";
       returQty = {};
       manualCatatan = "";
+      manualSearch = "";
       await load();
       successMsg = "Retur manual berhasil dicatat. Stok sudah dikembalikan.";
     } catch (e: any) {
@@ -196,36 +207,40 @@
     </div>
     <div class="grid gap-4 lg:grid-cols-[1fr_220px]">
       <div class="space-y-4">
-        <Select.Root
-          type="single"
-          value={selectedKey || undefined}
-          onValueChange={(value) => {
-            selectedKey = value ?? "";
-            returQty = {};
-          }}
-        >
-          <Select.Trigger class="w-full">
-            {#if selectedCandidate}
-              <span>
-                {selectedCandidate.item.nama_model}
-                {selectedCandidate.item.nama_warna ? ` - ${selectedCandidate.item.nama_warna}` : ""}
-                · {selectedCandidate.row.tujuan}
-              </span>
-            {:else}
-              <span class="text-muted-foreground">-- Pilih order/item keluar --</span>
+        {#if selectedCandidate}
+          <div class="flex items-center justify-between gap-3 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3">
+            <div class="min-w-0">
+              <p class="truncate text-sm font-semibold text-gray-900">{selectedCandidate.item.nama_model}{selectedCandidate.item.nama_warna ? ` - ${selectedCandidate.item.nama_warna}` : ""}</p>
+              <p class="text-xs text-gray-500">{formatDate(selectedCandidate.row.tanggal)} · {selectedCandidate.row.tujuan} · {selectedCandidate.item.total_pcs} pcs</p>
+            </div>
+            <Button variant="outline" size="sm" onclick={() => { selectedKey = ""; returQty = {}; }}>Ganti</Button>
+          </div>
+        {:else}
+          <div class="space-y-2">
+            <Input bind:value={manualSearch} placeholder="Cari model, warna, tujuan, atau buyer..." />
+            <div class="max-h-64 overflow-y-auto rounded-lg border border-gray-200 bg-white">
+              {#each manualCandidates as entry}
+                {@const key = `${entry.row.id}:${entry.itemIndex}`}
+                <button
+                  type="button"
+                  class="flex w-full items-center justify-between gap-3 border-b border-gray-100 px-4 py-3 text-left transition last:border-0 hover:bg-gray-50"
+                  onclick={() => { selectedKey = key; returQty = {}; }}
+                >
+                  <span class="min-w-0">
+                    <span class="block truncate text-sm font-medium text-gray-900">{entry.item.nama_model}{entry.item.nama_warna ? ` - ${entry.item.nama_warna}` : ""}</span>
+                    <span class="block truncate text-xs text-gray-500">{formatDate(entry.row.tanggal)} · {entry.row.tujuan} · {entry.item.total_pcs} pcs</span>
+                  </span>
+                  <span class="shrink-0 text-xs font-medium text-blue-600">Pilih</span>
+                </button>
+              {:else}
+                <p class="px-4 py-6 text-center text-sm text-gray-400">Order retur tidak ditemukan.</p>
+              {/each}
+            </div>
+            {#if candidates.length > manualCandidates.length}
+              <p class="text-xs text-gray-400">Menampilkan maksimal 30 item. Gunakan pencarian untuk menemukan order lain.</p>
             {/if}
-          </Select.Trigger>
-          <Select.Content preventScroll={false}>
-            {#each candidates as entry}
-              {@const key = `${entry.row.id}:${entry.itemIndex}`}
-              <Select.Item value={key}>
-                {formatDate(entry.row.tanggal)} · {entry.item.nama_model}
-                {entry.item.nama_warna ? ` - ${entry.item.nama_warna}` : ""}
-                · {entry.row.tujuan} · {entry.item.total_pcs} pcs
-              </Select.Item>
-            {/each}
-          </Select.Content>
-        </Select.Root>
+          </div>
+        {/if}
 
         {#if selectedCandidate}
           <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">

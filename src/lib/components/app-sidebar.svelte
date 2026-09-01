@@ -50,6 +50,7 @@
         { title: "Stok Potongan", url: "/stok-potongan" },
         { title: "Barang Jadi", url: "/barang-jadi" },
         { title: "Barang Keluar", url: "/barang-keluar" },
+        { title: "Retur Penjualan", url: "/penjualan/retur" },
         { title: "Warna", url: "/warna" },
       ],
     },
@@ -82,7 +83,6 @@
         { title: "Ringkasan Penjualan", url: "/penjualan" },
         { title: "Order Penjualan", url: "/penjualan/order" },
         { title: "Data Buyer", url: "/penjualan/buyer" },
-        { title: "Retur", url: "/penjualan/retur" },
       ],
     },
     {

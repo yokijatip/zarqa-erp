@@ -32,7 +32,7 @@
     '/penjualan':        [{ label: 'Penjualan' }],
     '/penjualan/order':  [{ label: 'Penjualan', href: '/penjualan' }, { label: 'Order Penjualan' }],
     '/penjualan/buyer':  [{ label: 'Penjualan', href: '/penjualan' }, { label: 'Data Buyer' }],
-    '/penjualan/retur':  [{ label: 'Penjualan', href: '/penjualan' }, { label: 'Retur' }],
+    '/penjualan/retur':  [{ label: 'Gudang', href: '/gudang' }, { label: 'Retur Penjualan' }],
     '/karyawan':         [{ label: 'Karyawan' }],
     '/karyawan/data':    [{ label: 'Karyawan', href: '/karyawan' }, { label: 'Data Karyawan' }],
     '/karyawan/penggajian': [{ label: 'Karyawan', href: '/karyawan' }, { label: 'Penggajian' }],
@@ -86,7 +86,7 @@
     }
 
     if (pathname.startsWith('/laporan')) {
-      return hasRole(role, ['admin_gudang', 'admin_hr', 'admin_keuangan']);
+      return hasRole(role, ['admin_hr', 'admin_keuangan']);
     }
 
     return true;
