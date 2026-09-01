@@ -77,13 +77,13 @@
     },
     {
       title: "Penjualan",
-      url: "#",
+      url: "/penjualan",
       icon: ShirtIcon,
-      comingSoon: true,
       items: [
-        { title: "Order Penjualan", url: "#" },
-        { title: "Data Buyer", url: "#" },
-        { title: "Retur", url: "#" },
+        { title: "Ringkasan Penjualan", url: "/penjualan" },
+        { title: "Order Penjualan", url: "/penjualan/order" },
+        { title: "Data Buyer", url: "/penjualan/buyer" },
+        { title: "Retur", url: "/penjualan/retur" },
       ],
     },
     {
