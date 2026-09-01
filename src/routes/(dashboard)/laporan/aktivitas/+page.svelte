@@ -496,7 +496,7 @@
 
 <svelte:head><title>Aktivitas Akun - Zarqa ERP</title></svelte:head>
 
-<div class="space-y-5 p-6">
+<div class="min-w-0 max-w-full space-y-5 overflow-x-hidden p-6">
   <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
     <div>
       <p class="text-sm text-gray-400">Laporan</p>
@@ -581,8 +581,8 @@
         <span class="rounded-full bg-gray-100 px-3 py-1 text-sm font-semibold text-gray-700">{filteredRows.length} aktivitas</span>
       {/if}
     </div>
-    <div class="overflow-x-auto">
-      <Table.Root>
+    <div class="min-w-0 max-w-full overflow-x-auto">
+      <Table.Root class="min-w-[980px]">
         <Table.Header>
           <Table.Row>
             <Table.Head class="w-44">Waktu</Table.Head>

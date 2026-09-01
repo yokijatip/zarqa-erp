@@ -136,7 +136,7 @@
       </Breadcrumb.Root>
     </header>
 
-    <main class="flex flex-1 flex-col gap-4 p-6">
+    <main class="flex min-w-0 flex-1 flex-col gap-4 overflow-x-hidden p-6">
       {#if accessAllowed}
         {@render children()}
       {:else}
