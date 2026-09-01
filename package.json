@@ -13,6 +13,7 @@
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+		"ship": "npm run check && npm run deploy:hosting",
 		"deploy:hosting": "npm run build && firebase deploy --only hosting",
 		"test:e2e": "playwright test",
 		"test:e2e:ui": "playwright test --ui",
