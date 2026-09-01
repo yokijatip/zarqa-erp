@@ -17,7 +17,6 @@
   import * as Sidebar from "$lib/components/ui/sidebar/index.js";
   import {
     currentUser,
-    isKaryawanManager,
     userRole,
   } from "$lib/stores/auth.store";
   import type { ComponentProps } from "svelte";
@@ -119,10 +118,6 @@
 
   const navMain = $derived(
     allNavMain
-      .filter((item) => {
-        if (item.title === "Karyawan") return $isKaryawanManager;
-        return true;
-      })
       .map((item) => {
         if (item.title !== "Produksi") return item;
         const role = $userRole;
@@ -133,20 +128,24 @@
           "owner",
           "developer",
         ].includes(role ?? "");
-        const subitems = [
-          ...(isAdminLike
-            ? [{ title: "Monitor Produksi", url: "/monitor-produksi" }]
-            : []),
-          ...(role === "kepala_cutting" || isAdminLike
-            ? [{ title: "Produksi Cutting", url: "/produksi/cutting" }]
-            : []),
-          ...(role === "kepala_jahit" || isAdminLike
-            ? [{ title: "Produksi Jahit", url: "/produksi/jahit" }]
-            : []),
-          ...(role === "kepala_steam" || isAdminLike
-            ? [{ title: "Produksi Steam", url: "/produksi/steam" }]
-            : []),
-        ];
+        const subitems = isAdminLike
+          ? [
+              { title: "Monitor Produksi", url: "/monitor-produksi" },
+              { title: "Produksi Cutting", url: "/produksi/cutting" },
+              { title: "Produksi Jahit", url: "/produksi/jahit" },
+              { title: "Produksi Steam", url: "/produksi/steam" },
+            ]
+          : [
+              ...(role === "kepala_cutting"
+                ? [{ title: "Produksi Cutting", url: "/produksi/cutting" }]
+                : []),
+              ...(role === "kepala_jahit"
+                ? [{ title: "Produksi Jahit", url: "/produksi/jahit" }]
+                : []),
+              ...(role === "kepala_steam"
+                ? [{ title: "Produksi Steam", url: "/produksi/steam" }]
+                : []),
+            ];
         // Arahkan top-level klik ke halaman relevan per role
         const topUrl =
           role === "kepala_cutting"

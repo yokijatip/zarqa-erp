@@ -4,6 +4,10 @@
   import { Separator } from '$lib/components/ui/separator/index.js';
   import * as Sidebar from '$lib/components/ui/sidebar/index.js';
   import * as Breadcrumb from '$lib/components/ui/breadcrumb/index.js';
+  import { userRole } from '$lib/stores/auth.store';
+  import { ROLE_LABEL } from '$lib/firebase/karyawan';
+  import LockIcon from '@lucide/svelte/icons/lock-keyhole';
+  import type { UserRole } from '$lib/types';
 
   let { children } = $props();
 
@@ -23,9 +27,73 @@
     '/barang-keluar':    [{ label: 'Gudang', href: '/gudang' }, { label: 'Barang Keluar' }],
     '/barang-keluar/catat': [{ label: 'Gudang', href: '/gudang' }, { label: 'Barang Keluar', href: '/barang-keluar' }, { label: 'Input' }],
     '/keuangan':         [{ label: 'Keuangan' }],
+    '/laporan':          [{ label: 'Laporan' }],
+    '/laporan/aktivitas': [{ label: 'Laporan', href: '/laporan' }, { label: 'Aktivitas Akun' }],
+    '/penjualan':        [{ label: 'Penjualan' }],
+    '/penjualan/order':  [{ label: 'Penjualan', href: '/penjualan' }, { label: 'Order Penjualan' }],
+    '/penjualan/buyer':  [{ label: 'Penjualan', href: '/penjualan' }, { label: 'Data Buyer' }],
+    '/penjualan/retur':  [{ label: 'Penjualan', href: '/penjualan' }, { label: 'Retur' }],
+    '/karyawan':         [{ label: 'Karyawan' }],
+    '/karyawan/data':    [{ label: 'Karyawan', href: '/karyawan' }, { label: 'Data Karyawan' }],
+    '/karyawan/penggajian': [{ label: 'Karyawan', href: '/karyawan' }, { label: 'Penggajian' }],
     '/pengaturan':       [{ label: 'Pengaturan' }],
     '/pengaturan/profil': [{ label: 'Pengaturan', href: '/pengaturan' }, { label: 'Profil' }],
   };
+
+  const SUPER_ROLES: UserRole[] = ['owner', 'developer'];
+  const WEB_ROLES: UserRole[] = ['admin_gudang', 'admin_hr', 'admin_keuangan', 'owner', 'developer'];
+
+  function hasRole(role: UserRole | null, allowed: UserRole[]): boolean {
+    return !!role && (allowed.includes(role) || SUPER_ROLES.includes(role));
+  }
+
+  function canAccess(pathname: string, role: UserRole | null): boolean {
+    if (!role) return false;
+    if (SUPER_ROLES.includes(role)) return true;
+    if (!WEB_ROLES.includes(role)) return false;
+
+    if (pathname === '/dashboard' || pathname === '/') return true;
+    if (pathname.startsWith('/pengaturan/flushing')) return false;
+    if (pathname.startsWith('/pengaturan')) return true;
+
+    if (
+      pathname.startsWith('/gudang') ||
+      pathname.startsWith('/stok-kain') ||
+      pathname.startsWith('/model-baju') ||
+      pathname.startsWith('/stok-potongan') ||
+      pathname.startsWith('/barang-jadi') ||
+      pathname.startsWith('/barang-keluar') ||
+      pathname.startsWith('/monitor-produksi') ||
+      pathname.startsWith('/produksi')
+    ) {
+      return hasRole(role, ['admin_gudang']);
+    }
+
+    if (pathname.startsWith('/penjualan')) {
+      return hasRole(role, ['admin_gudang', 'admin_keuangan']);
+    }
+
+    if (pathname.startsWith('/keuangan')) {
+      return hasRole(role, ['admin_keuangan']);
+    }
+
+    if (pathname.startsWith('/karyawan')) {
+      return hasRole(role, ['admin_hr']);
+    }
+
+    if (pathname.startsWith('/laporan/aktivitas')) {
+      return hasRole(role, ['owner', 'developer']);
+    }
+
+    if (pathname.startsWith('/laporan')) {
+      return hasRole(role, ['admin_gudang', 'admin_hr', 'admin_keuangan']);
+    }
+
+    return true;
+  }
+
+  const accessAllowed = $derived(canAccess($page.url.pathname, $userRole));
+  const roleName = $derived($userRole ? (ROLE_LABEL[$userRole] ?? $userRole) : '-');
 
   let crumbs = $derived.by((): Crumb[] => {
     const pathname = $page.url.pathname;
@@ -69,7 +137,28 @@
     </header>
 
     <main class="flex flex-1 flex-col gap-4 p-6">
-      {@render children()}
+      {#if accessAllowed}
+        {@render children()}
+      {:else}
+        <div class="flex min-h-[60vh] items-center justify-center">
+          <div class="max-w-md rounded-xl border bg-white p-8 text-center shadow-sm">
+            <div class="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-red-50 text-red-600">
+              <LockIcon class="h-7 w-7" />
+            </div>
+            <h1 class="mt-4 text-xl font-semibold text-gray-900">Tidak Bisa Akses</h1>
+            <p class="mt-2 text-sm leading-6 text-gray-500">
+              Role kamu saat ini <span class="font-semibold text-gray-700">{roleName}</span>.
+              Halaman ini hanya bisa dibuka oleh role yang punya otoritas.
+            </p>
+            <a
+              href="/dashboard"
+              class="mt-5 inline-flex rounded-lg bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800"
+            >
+              Kembali ke Dashboard
+            </a>
+          </div>
+        </div>
+      {/if}
     </main>
   </Sidebar.Inset>
 </Sidebar.Provider>
