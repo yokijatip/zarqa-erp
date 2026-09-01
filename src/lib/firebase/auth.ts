@@ -10,8 +10,8 @@ import {
   type User,
 } from 'firebase/auth';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { auth, db, storage } from './config';
+import { auth, db } from './config';
+import { uploadToCloudinary } from '$lib/cloudinary';
 import type { UserProfile } from '$lib/types';
 
 // Role yang diizinkan login ke web admin
@@ -50,11 +50,9 @@ export async function updateUserProfile(uid: string, name: string): Promise<void
   await updateDoc(doc(db, 'users', uid), { name });
 }
 
-// Upload foto profil ke Firebase Storage, simpan URL ke Firestore
+// Upload foto profil ke Cloudinary, simpan URL ke Firestore.
 export async function uploadProfilePhoto(uid: string, file: File): Promise<string> {
-  const storageRef = ref(storage, `profile_photos/${uid}`);
-  await uploadBytes(storageRef, file, { contentType: file.type });
-  const url = await getDownloadURL(storageRef);
+  const url = await uploadToCloudinary(file, 'profile');
   await updateDoc(doc(db, 'users', uid), { photoURL: url });
   return url;
 }

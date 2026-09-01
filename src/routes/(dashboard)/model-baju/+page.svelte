@@ -18,6 +18,7 @@
   import ArchiveIcon from "@lucide/svelte/icons/archive";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
+  import { uploadToCloudinary } from "$lib/cloudinary";
   import * as Select from "$lib/components/ui/select/index.js";
 
   // ── State ──────────────────────────────────────────────────────────
@@ -37,6 +38,8 @@
 
   // Form fields
   let fNama = $state("");
+  let fFotoUrl = $state("");
+  let fFotoFile = $state<File | null>(null);
   let fDeskripsi = $state("");
   let fUkuran = $state<UkuranBaju[]>([]);
   let fWarna = $state<WarnaTersedia[]>([]);
@@ -94,6 +97,8 @@
 
   function resetForm() {
     fNama = "";
+    fFotoUrl = "";
+    fFotoFile = null;
     fDeskripsi = "";
     fUkuran = [];
     fWarna = [];
@@ -114,6 +119,8 @@
   function bukaEdit(model: ModelBaju) {
     editingId = model.id;
     fNama = model.nama_model;
+    fFotoUrl = model.foto_url ?? "";
+    fFotoFile = null;
     fDeskripsi = model.deskripsi ?? "";
     fUkuran = [...model.ukuran_tersedia];
     fWarna = [...(model.warna_tersedia ?? [])];
@@ -178,8 +185,11 @@
     if (!canSubmit) return;
     saving = true;
     try {
+      let fotoUrl = fFotoUrl;
+      if (fFotoFile) fotoUrl = await uploadToCloudinary(fFotoFile, 'products');
       const input = {
         nama_model: fNama.trim(),
+        ...(fotoUrl ? { foto_url: fotoUrl } : {}),
         ...(fDeskripsi.trim() ? { deskripsi: fDeskripsi.trim() } : {}),
         ukuran_tersedia: fUkuran,
         warna_tersedia: fWarna.length > 0 ? fWarna : [],
@@ -507,6 +517,14 @@
           ? 'border-gray-200 opacity-70'
           : 'border-gray-100'} bg-white shadow-sm transition hover:shadow-md"
       >
+        {#if model.foto_url}
+          <img
+            src={model.foto_url}
+            alt={model.nama_model}
+            class="h-36 w-full object-cover"
+            loading="lazy"
+          />
+        {/if}
         <!-- Card Header -->
         <div
           class="flex items-start justify-between border-b border-gray-100 px-5 py-4"
@@ -808,6 +826,33 @@
             placeholder="Contoh: Gamis Syar'i Polos, Tunik Batik..."
             bind:value={fNama}
           />
+        </div>
+
+        <!-- Foto produk -->
+        <div>
+          <label class="mb-1.5 block text-sm font-medium text-gray-700" for="foto-model">
+            Foto Produk <span class="text-xs font-normal text-gray-400">(opsional)</span>
+          </label>
+          {#if fFotoUrl}
+            <img src={fFotoUrl} alt="Preview {fNama || 'produk'}" class="mb-2 h-24 w-24 rounded-lg border border-gray-200 object-cover" />
+          {/if}
+          <input
+            id="foto-model"
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            onchange={(event) => {
+              const file = (event.currentTarget as HTMLInputElement).files?.[0] ?? null;
+              if (file && file.size > 10 * 1024 * 1024) {
+                showError('Ukuran foto maksimal 10 MB.');
+                (event.currentTarget as HTMLInputElement).value = '';
+                fFotoFile = null;
+                return;
+              }
+              fFotoFile = file;
+            }}
+            class="block w-full cursor-pointer rounded-md border border-gray-200 bg-white px-3 py-2 text-xs text-gray-600 file:mr-3 file:rounded-md file:border-0 file:bg-gray-100 file:px-3 file:py-1.5 file:text-xs file:font-medium"
+          />
+          <p class="mt-1 text-[11px] text-gray-400">JPG, PNG, atau WebP. Maksimal 10 MB.</p>
         </div>
 
         <!-- Deskripsi -->

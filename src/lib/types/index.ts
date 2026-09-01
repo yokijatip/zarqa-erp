@@ -128,6 +128,7 @@ export interface WarnaTersedia {
 export interface ModelBaju {
   id: string;
   nama_model: string;
+  foto_url?: string;
   deskripsi?: string;
   ukuran_tersedia: UkuranBaju[];
   warna_tersedia?: WarnaTersedia[];
