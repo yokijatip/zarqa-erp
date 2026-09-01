@@ -29,6 +29,7 @@
   import WalletIcon from "@lucide/svelte/icons/wallet";
   import FactoryIcon from "@lucide/svelte/icons/factory";
   import BoxesIcon from "@lucide/svelte/icons/boxes";
+  import { hargaJualUntukUkuran } from "$lib/sales/penjualan";
 
   type ReportTab = "ringkasan" | "keuangan" | "produksi" | "barang_keluar" | "stok" | "karyawan";
   type MoneyRow = { label: string; value: number; color: string };
@@ -153,7 +154,10 @@
         }
         const model = modelMap.get(item.model_id) ?? modelNameMap.get(item.nama_model.toLowerCase());
         pcsKeluar += item.total_pcs;
-        nilaiJual += item.total_pcs * (model?.harga_jual ?? 0);
+        nilaiJual += item.detail_keluar.reduce(
+          (sum, detail) => sum + detail.jumlah_pcs * (detail.harga_jual ?? hargaJualUntukUkuran(model, detail.ukuran)),
+          0,
+        );
         hppList += item.total_pcs * (model?.harga_produksi ?? 0);
       }
 

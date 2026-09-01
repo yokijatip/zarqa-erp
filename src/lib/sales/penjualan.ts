@@ -1,4 +1,4 @@
-import type { BarangKeluar, BarangKeluarItem, ModelBaju } from '$lib/types';
+import type { BarangKeluar, BarangKeluarItem, ModelBaju, UkuranBaju } from '$lib/types';
 
 export type SalesItemRow = {
   listId: string;
@@ -105,23 +105,40 @@ function modelPrice(modelList: ModelBaju[], modelId: string) {
   };
 }
 
+export function hargaJualUntukUkuran(model: ModelBaju | undefined, ukuran: string): number {
+  return model?.harga_jual_per_ukuran?.[ukuran as UkuranBaju] ?? model?.harga_jual ?? 0;
+}
+
+export function hargaProduksiUntukUkuran(model: ModelBaju | undefined, ukuran: string): number {
+  return model?.harga_produksi ?? 0;
+}
+
 export function salesItemValue(item: BarangKeluarItem, modelList: ModelBaju[]) {
+  const model = modelList.find((entry) => entry.id === item.model_id);
   const harga = modelPrice(modelList, item.model_id);
   if (item.status === 'pending') return { nilaiJual: 0, hpp: 0, laba: 0 };
-  const pcs = item.detail_keluar.reduce((sum, detail) => sum + detail.jumlah_pcs, 0);
-  const nilaiJual = pcs * harga.jual;
-  const hpp = pcs * harga.produksi;
+  const nilaiJual = item.detail_keluar.reduce(
+    (sum, detail) => sum + detail.jumlah_pcs * (detail.harga_jual ?? hargaJualUntukUkuran(model, detail.ukuran)),
+    0,
+  );
+  const hpp = item.detail_keluar.reduce(
+    (sum, detail) => sum + detail.jumlah_pcs * (detail.harga_produksi ?? harga.produksi),
+    0,
+  );
   return { nilaiJual, hpp, laba: nilaiJual - hpp };
 }
 
 export function salesItemRows(data: BarangKeluar[], modelList: ModelBaju[]): SalesItemRow[] {
   return data.flatMap((row) =>
     listItems(row).flatMap((item) => {
+      const model = modelList.find((entry) => entry.id === item.model_id);
       const harga = modelPrice(modelList, item.model_id);
       return item.detail_keluar.map((detail) => {
         const isPending = item.status === 'pending';
-        const nilaiJual = isPending ? 0 : detail.jumlah_pcs * harga.jual;
-        const hpp = isPending ? 0 : detail.jumlah_pcs * harga.produksi;
+        const hargaJual = detail.harga_jual ?? hargaJualUntukUkuran(model, detail.ukuran);
+        const hargaProduksi = detail.harga_produksi ?? hargaProduksiUntukUkuran(model, detail.ukuran);
+        const nilaiJual = isPending ? 0 : detail.jumlah_pcs * hargaJual;
+        const hpp = isPending ? 0 : detail.jumlah_pcs * hargaProduksi;
         return {
           listId: row.id,
           tanggal: row.tanggal_keluar,
@@ -133,8 +150,8 @@ export function salesItemRows(data: BarangKeluar[], modelList: ModelBaju[]): Sal
           ukuran: detail.ukuran,
           status: item.status,
           pcs: detail.jumlah_pcs,
-          harga_jual: harga.jual,
-          harga_produksi: harga.produksi,
+          harga_jual: hargaJual,
+          harga_produksi: hargaProduksi,
           nilai_jual: nilaiJual,
           hpp,
           laba: nilaiJual - hpp,

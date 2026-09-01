@@ -215,6 +215,9 @@
     const keteranganSnapshot = fKeterangan.trim();
     const keluarItems: DraftBarangKeluarItem[] = [];
     const pendingItems: DraftBarangKeluarItem[] = [];
+    const modelHarga = modelList.find((entry) => entry.id === selectedModel.model_id);
+    const hargaJual = (ukuran: UkuranBaju) => modelHarga?.harga_jual_per_ukuran?.[ukuran] ?? modelHarga?.harga_jual ?? 0;
+    const hargaProduksi = modelHarga?.harga_produksi ?? 0;
 
     for (const warna of selectedWarnaList) {
       const detailKeluar: BarangKeluarItem["detail_keluar"] = [];
@@ -228,10 +231,10 @@
         const jumlahPending = Math.max(0, jumlah - tersedia);
 
         if (jumlahKeluar > 0) {
-          detailKeluar.push({ ukuran, jumlah_pcs: jumlahKeluar });
+          detailKeluar.push({ ukuran, jumlah_pcs: jumlahKeluar, harga_jual: hargaJual(ukuran), harga_produksi: hargaProduksi });
         }
         if (jumlahPending > 0) {
-          detailPending.push({ ukuran, jumlah_pcs: jumlahPending });
+          detailPending.push({ ukuran, jumlah_pcs: jumlahPending, harga_jual: hargaJual(ukuran), harga_produksi: hargaProduksi });
         }
       }
 

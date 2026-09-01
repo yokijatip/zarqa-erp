@@ -36,6 +36,7 @@
   import EyeIcon from "@lucide/svelte/icons/eye";
   import UploadIcon from "@lucide/svelte/icons/upload";
   import XIcon from "@lucide/svelte/icons/x";
+  import { hargaJualUntukUkuran } from "$lib/sales/penjualan";
   import { type DateRange, getPeriodRange } from "$lib/period";
   import PeriodSelector from "$lib/components/period-selector.svelte";
   import BarangKeluarDetailDialog from "$lib/components/barang-keluar-detail-dialog.svelte";
@@ -412,7 +413,10 @@
           sum +
           listItems(r)
             .filter((item) => item.status !== "pending")
-            .reduce((s, item) => s + item.total_pcs * hargaModel(item.model_id).jual, 0),
+            .reduce((s, item) => s + item.detail_keluar.reduce(
+              (detailSum, detail) => detailSum + detail.jumlah_pcs * (detail.harga_jual ?? hargaJualUntukUkuran(modelList.find((model) => model.id === item.model_id), detail.ukuran)),
+              0,
+            ), 0),
         0,
       );
       const totalNilaiProduksiPdf = riwayatPeriod.reduce(
@@ -505,7 +509,10 @@
           )
           .flatMap((r) => listItems(r).map((item) => {
             const harga = hargaModel(item.model_id);
-            const totalJual = item.status === "pending" ? 0 : item.total_pcs * harga.jual;
+            const totalJual = item.status === "pending" ? 0 : item.detail_keluar.reduce(
+              (sum, detail) => sum + detail.jumlah_pcs * (detail.harga_jual ?? hargaJualUntukUkuran(modelList.find((model) => model.id === item.model_id), detail.ukuran)),
+              0,
+            );
             const totalProduksi = item.status === "pending" ? 0 : item.total_pcs * harga.produksi;
             return [
                formatDate(r.tanggal_keluar),
@@ -778,6 +785,9 @@
 
   function tambahDraftItem() {
     if (!canAddItem || !selectedModelData) return;
+    const model = modelList.find((entry) => entry.id === selectedModelData.model_id);
+    const hargaJual = (ukuran: UkuranBaju) => model?.harga_jual_per_ukuran?.[ukuran] ?? model?.harga_jual ?? 0;
+    const hargaProduksi = model?.harga_produksi ?? 0;
     const items: BarangKeluarItem[] = [...detailKeluarByWarna.values()]
       .filter((entry) => entry.total > 0)
       .map(({ warna, detail, total }) => ({
@@ -785,7 +795,11 @@
         nama_model: selectedModelData.nama_model,
         ...(warna.nama_warna ? { nama_warna: warna.nama_warna } : {}),
         ...(warna.kode_hex_warna ? { kode_hex_warna: warna.kode_hex_warna } : {}),
-        detail_keluar: detail,
+        detail_keluar: detail.map((entry) => ({
+          ...entry,
+          harga_jual: hargaJual(entry.ukuran),
+          harga_produksi: hargaProduksi,
+        })),
         total_pcs: total,
         status: fPending ? "pending" : "keluar",
         ...(fPending && fAlasanPending.trim()

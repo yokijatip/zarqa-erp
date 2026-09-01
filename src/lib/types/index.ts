@@ -134,6 +134,9 @@ export interface ModelBaju {
   warna_tersedia?: WarnaTersedia[];
   kebutuhan_yard_per_pcs?: Partial<Record<UkuranBaju, number>>;
   harga_jual?: number;
+  // Harga jual dapat berbeda untuk setiap ukuran. harga_jual tetap dipakai
+  // sebagai fallback untuk data lama atau ukuran yang belum diberi harga.
+  harga_jual_per_ukuran?: Partial<Record<UkuranBaju, number>>;
   harga_produksi?: number;
   tarif_cutting?: number;
   tarif_jahit?: number;
@@ -373,6 +376,10 @@ export interface RiwayatBarangJadi {
 export interface DetailKeluar {
   ukuran: UkuranBaju;
   jumlah_pcs: number;
+  // Snapshot harga saat barang keluar, supaya histori tidak berubah ketika
+  // harga master model diperbarui.
+  harga_jual?: number;
+  harga_produksi?: number;
   // Snapshot lot produksi yang terkonsumsi (FIFO) untuk ukuran ini pada
   // pengiriman ini — dipakai untuk menampilkan siapa cutting/jahit/steam-nya
   // di laporan. Kalau kosong/tidak menutupi jumlah_pcs, sisanya adalah stok

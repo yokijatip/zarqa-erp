@@ -41,6 +41,7 @@
   import * as Select from "$lib/components/ui/select/index.js";
   import * as Table from "$lib/components/ui/table";
   import { Button } from "$lib/components/ui/button";
+  import { hargaJualUntukUkuran, hargaProduksiUntukUkuran } from "$lib/sales/penjualan";
   import { Input } from "$lib/components/ui/input";
   import WalletIcon from "@lucide/svelte/icons/wallet";
   import TrendingUpIcon from "@lucide/svelte/icons/trending-up";
@@ -148,10 +149,14 @@
         const model =
           modelMap.get(item.model_id) ??
           modelNameMap.get(item.nama_model.toLowerCase());
-        const hargaJual = model?.harga_jual ?? 0;
-        const hargaProduksi = model?.harga_produksi ?? 0;
-        pendapatan += item.total_pcs * hargaJual;
-        hpp += item.total_pcs * hargaProduksi;
+        pendapatan += item.detail_keluar.reduce(
+          (sum, detail) => sum + detail.jumlah_pcs * (detail.harga_jual ?? hargaJualUntukUkuran(model, detail.ukuran)),
+          0,
+        );
+        hpp += item.detail_keluar.reduce(
+          (sum, detail) => sum + detail.jumlah_pcs * (detail.harga_produksi ?? hargaProduksiUntukUkuran(model, detail.ukuran)),
+          0,
+        );
         totalPcs += item.total_pcs;
         modelNames.add(item.nama_model);
       }

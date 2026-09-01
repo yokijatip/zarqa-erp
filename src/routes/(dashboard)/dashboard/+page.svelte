@@ -23,6 +23,7 @@
   import { getTransaksiKeuangan } from "$lib/firebase/keuangan";
   import { getPembayaranGajiPeriode, type PembayaranGajiRecord } from "$lib/firebase/penggajian";
   import { getRiwayatBarangKeluarByPeriod } from "$lib/firebase/barang-jadi";
+  import { hargaJualUntukUkuran } from "$lib/sales/penjualan";
 
   Chart.register(...registerables);
 
@@ -226,10 +227,13 @@
 
     for (const item of keluarItemsFiltered) {
       const model = modelMap.get(item.model_id) ?? modelNameMap.get(item.nama_model);
-      const hargaJual = model?.harga_jual ?? 0;
       const hargaProduksi = model?.harga_produksi ?? 0;
 
-      if (hargaJual > 0) pendapatan += item.total_pcs * hargaJual;
+      const nilaiJualItem = item.detail_keluar.reduce(
+        (sum, detail) => sum + detail.jumlah_pcs * (detail.harga_jual ?? hargaJualUntukUkuran(model, detail.ukuran)),
+        0,
+      );
+      if (nilaiJualItem > 0) pendapatan += nilaiJualItem;
       else pcsTanpaHargaJual += item.total_pcs;
 
       if (hargaProduksi > 0) biayaProduksi += item.total_pcs * hargaProduksi;

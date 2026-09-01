@@ -1,6 +1,7 @@
 <script lang="ts">
   import * as Dialog from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
+  import { hargaJualUntukUkuran } from "$lib/sales/penjualan";
   import type { BarangKeluar, BarangKeluarItem, ModelBaju } from "$lib/types";
 
   let {
@@ -90,7 +91,11 @@
           .map((d) => `${escapeHtml(d.ukuran)}: ${d.jumlah_pcs} pcs`)
           .join("<br />");
         const harga = hargaModel(item.model_id);
-        const totalJual = item.status === "pending" ? 0 : item.total_pcs * harga.jual;
+        const model = modelList.find((entry) => entry.id === item.model_id);
+        const totalJual = item.status === "pending" ? 0 : item.detail_keluar.reduce(
+          (sum, d) => sum + d.jumlah_pcs * (d.harga_jual ?? hargaJualUntukUkuran(model, d.ukuran)),
+          0,
+        );
         const totalProduksi = item.status === "pending" ? 0 : item.total_pcs * harga.produksi;
         return `
           <tr>
@@ -99,7 +104,7 @@
             <td>${detail}</td>
             <td class="right">${item.total_pcs} pcs</td>
             <td>${item.status === "pending" ? "Pending" : "Keluar"}</td>
-            <td class="right">${harga.jual > 0 ? escapeHtml(formatRupiah(harga.jual)) : "-"}</td>
+            <td class="right">${totalJual > 0 ? escapeHtml(formatRupiah(totalJual / item.total_pcs)) : "-"}</td>
             <td class="right">${harga.produksi > 0 ? escapeHtml(formatRupiah(harga.produksi)) : "-"}</td>
             <td class="right">${escapeHtml(formatRupiah(totalJual))}</td>
             <td class="right">${escapeHtml(formatRupiah(totalProduksi))}</td>
@@ -116,7 +121,10 @@
       .reduce((sum, item) => sum + item.total_pcs, 0);
     const totalJual = printItems
       .filter((item) => item.status !== "pending")
-      .reduce((sum, item) => sum + item.total_pcs * hargaModel(item.model_id).jual, 0);
+      .reduce((sum, item) => sum + item.detail_keluar.reduce(
+        (detailSum, detail) => detailSum + detail.jumlah_pcs * (detail.harga_jual ?? hargaJualUntukUkuran(modelList.find((model) => model.id === item.model_id), detail.ukuran)),
+        0,
+      ), 0);
     const totalProduksi = printItems
       .filter((item) => item.status !== "pending")
       .reduce((sum, item) => sum + item.total_pcs * hargaModel(item.model_id).produksi, 0);
