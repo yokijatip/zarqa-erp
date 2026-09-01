@@ -45,6 +45,18 @@ export type BuyerRow = {
   lastOrderMs: number;
 };
 
+export type ProductSalesRow = {
+  key: string;
+  nama_model: string;
+  nama_warna?: string;
+  ukuran: string;
+  pcs: number;
+  nilaiJual: number;
+  hpp: number;
+  laba: number;
+  orderCount: number;
+};
+
 export function listItems(row: BarangKeluar): BarangKeluarItem[] {
   return row.items && row.items.length > 0
     ? row.items
@@ -91,6 +103,15 @@ function modelPrice(modelList: ModelBaju[], modelId: string) {
     jual: model?.harga_jual ?? 0,
     produksi: model?.harga_produksi ?? 0,
   };
+}
+
+export function salesItemValue(item: BarangKeluarItem, modelList: ModelBaju[]) {
+  const harga = modelPrice(modelList, item.model_id);
+  if (item.status === 'pending') return { nilaiJual: 0, hpp: 0, laba: 0 };
+  const pcs = item.detail_keluar.reduce((sum, detail) => sum + detail.jumlah_pcs, 0);
+  const nilaiJual = pcs * harga.jual;
+  const hpp = pcs * harga.produksi;
+  return { nilaiJual, hpp, laba: nilaiJual - hpp };
 }
 
 export function salesItemRows(data: BarangKeluar[], modelList: ModelBaju[]): SalesItemRow[] {
@@ -172,6 +193,33 @@ export function buyerRows(rows: SalesListRow[]): BuyerRow[] {
     map.set(key, existing);
   }
   return [...map.values()].sort((a, b) => b.nilaiJual - a.nilaiJual || b.lastOrderMs - a.lastOrderMs);
+}
+
+export function productSalesRows(items: SalesItemRow[]): ProductSalesRow[] {
+  const map = new Map<string, ProductSalesRow>();
+  for (const item of items.filter((row) => row.status !== 'pending')) {
+    const key = `${item.model_id}|${item.nama_warna ?? ''}|${item.ukuran}`;
+    const existing =
+      map.get(key) ??
+      ({
+        key,
+        nama_model: item.nama_model,
+        nama_warna: item.nama_warna,
+        ukuran: item.ukuran,
+        pcs: 0,
+        nilaiJual: 0,
+        hpp: 0,
+        laba: 0,
+        orderCount: 0,
+      } satisfies ProductSalesRow);
+    existing.pcs += item.pcs;
+    existing.nilaiJual += item.nilai_jual;
+    existing.hpp += item.hpp;
+    existing.laba += item.laba;
+    existing.orderCount += 1;
+    map.set(key, existing);
+  }
+  return [...map.values()].sort((a, b) => b.pcs - a.pcs || b.nilaiJual - a.nilaiJual);
 }
 
 export function filterSalesLists(rows: SalesListRow[], search: string): SalesListRow[] {

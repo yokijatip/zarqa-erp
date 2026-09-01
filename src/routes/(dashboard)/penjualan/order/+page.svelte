@@ -28,6 +28,15 @@
   let totalPcs = $derived(filtered.reduce((sum, row) => sum + row.pcsKeluar, 0));
   let totalPending = $derived(filtered.reduce((sum, row) => sum + row.pcsPending, 0));
 
+  function escapeHtml(value: unknown): string {
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
   async function load() {
     loading = true;
     errorMsg = null;
@@ -77,6 +86,73 @@
     }
   }
 
+  function exportOrderPdf() {
+    const rowsHtml = filtered
+      .map(
+        (row, index) => `
+          <tr>
+            <td>${index + 1}</td>
+            <td>${escapeHtml(formatDate(row.tanggal))}</td>
+            <td>${escapeHtml(row.label)}<br><small>${escapeHtml(row.itemCount)} item</small></td>
+            <td>${escapeHtml(row.tujuan)}</td>
+            <td>${escapeHtml(row.buyer)}</td>
+            <td class="right">${row.pcsKeluar}</td>
+            <td class="right">${row.pcsPending}</td>
+            <td class="right">${escapeHtml(rupiah(row.nilaiJual))}</td>
+            <td class="right">${escapeHtml(rupiah(row.hpp))}</td>
+            <td class="right">${escapeHtml(rupiah(row.laba))}</td>
+          </tr>
+        `,
+      )
+      .join("");
+    const html = `
+      <!doctype html>
+      <html>
+        <head>
+          <title>Rekap Order Penjualan</title>
+          <style>
+            @page { size: A4 landscape; margin: 10mm; }
+            body { font-family: Arial, sans-serif; color: #111827; margin: 20px; }
+            h1 { font-size: 18px; margin: 0; }
+            .muted { color: #6b7280; font-size: 12px; margin-top: 4px; }
+            .summary { display: flex; gap: 18px; margin: 16px 0; font-size: 12px; font-weight: 700; }
+            table { width: 100%; border-collapse: collapse; font-size: 11px; }
+            th { background: #111827; color: white; text-align: left; }
+            th, td { border: 1px solid #e5e7eb; padding: 7px; vertical-align: top; }
+            .right { text-align: right; }
+            small { color: #6b7280; }
+          </style>
+        </head>
+        <body>
+          <h1>Zarqa - Rekap Order Penjualan</h1>
+          <div class="muted">Dicetak ${escapeHtml(new Date().toLocaleString("id-ID"))}</div>
+          <div class="summary">
+            <div>List: ${filtered.length}</div>
+            <div>Pcs keluar: ${totalPcs}</div>
+            <div>Pending: ${totalPending}</div>
+            <div>Penjualan: ${escapeHtml(rupiah(totalNilai))}</div>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>No</th><th>Tanggal</th><th>List</th><th>Tujuan</th><th>Buyer</th>
+                <th class="right">Pcs</th><th class="right">Pending</th>
+                <th class="right">Penjualan</th><th class="right">HPP</th><th class="right">Laba</th>
+              </tr>
+            </thead>
+            <tbody>${rowsHtml || '<tr><td colspan="10">Tidak ada data.</td></tr>'}</tbody>
+          </table>
+        </body>
+      </html>
+    `;
+    const win = window.open("", "_blank", "width=1000,height=700");
+    if (!win) return;
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    win.print();
+  }
+
   onMount(load);
   $effect(() => {
     dateRange;
@@ -96,6 +172,7 @@
     <div class="flex flex-wrap gap-2">
       <PeriodSelector bind:dateRange defaultPeriod="hari_ini" />
       <Button variant="outline" onclick={load}>Refresh</Button>
+      <Button variant="outline" onclick={exportOrderPdf}>Export PDF</Button>
       <Button onclick={() => goto("/barang-keluar/catat")}>+ Input Order</Button>
     </div>
   </div>

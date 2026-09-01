@@ -10,9 +10,12 @@
   import {
     buyerRows,
     formatDate,
+    productSalesRows,
     rupiah,
+    salesItemRows,
     salesListRows,
     type BuyerRow,
+    type ProductSalesRow,
     type SalesListRow,
   } from "$lib/sales/penjualan";
   import TrendingUpIcon from "@lucide/svelte/icons/trending-up";
@@ -25,6 +28,7 @@
   let dateRange = $state<DateRange>(getPeriodRange("hari_ini"));
   let rows = $state<SalesListRow[]>([]);
   let buyers = $state<BuyerRow[]>([]);
+  let products = $state<ProductSalesRow[]>([]);
 
   let totalPenjualan = $derived(rows.reduce((sum, row) => sum + row.nilaiJual, 0));
   let totalOrder = $derived(rows.length);
@@ -52,6 +56,7 @@
         modelBajuCache.get(),
       ]);
       rows = salesListRows(keluar, models);
+      products = productSalesRows(salesItemRows(keluar, models));
       buyers = buyerRows(rows);
     } catch (e: any) {
       errorMsg = e?.message ?? "Gagal memuat penjualan.";
@@ -92,6 +97,59 @@
     <StatCard title="Order" value={String(totalOrder)} icon={ShoppingBagIcon} {loading} footerSubtext={`${totalPcs} pcs terkirim`} />
     <StatCard title="Pending" value={`${totalPending} pcs`} icon={ClockIcon} {loading} footerSubtext="stok belum terpenuhi" class={totalPending > 0 ? "border-amber-100 bg-amber-50" : ""} valueClass={totalPending > 0 ? "text-amber-700" : ""} />
     <StatCard title="Buyer" value={String(buyers.length)} icon={UsersIcon} {loading} footerSubtext="tujuan/reseller aktif" />
+  </div>
+
+  <div class="grid gap-4 xl:grid-cols-[1.1fr_1fr]">
+    <section class="rounded-lg border bg-white p-5 shadow-sm">
+      <div class="mb-4 flex items-center justify-between">
+        <div>
+          <h2 class="font-semibold text-gray-900">Produk Paling Laku</h2>
+          <p class="text-sm text-gray-400">Model, warna, ukuran yang paling banyak keluar.</p>
+        </div>
+      </div>
+      <div class="space-y-2">
+        {#each products.slice(0, 6) as item}
+          <div class="grid grid-cols-[1fr_auto] gap-3 rounded-lg bg-gray-50 px-3 py-2">
+            <div class="min-w-0">
+              <p class="truncate font-medium text-gray-800">{item.nama_model}</p>
+              <p class="text-xs text-gray-400">{item.nama_warna ?? "-"} · {item.ukuran} · {item.orderCount} order</p>
+            </div>
+            <div class="text-right">
+              <p class="font-semibold text-gray-900">{item.pcs} pcs</p>
+              <p class="text-xs text-green-700">{rupiah(item.nilaiJual)}</p>
+            </div>
+          </div>
+        {:else}
+          <p class="py-10 text-center text-sm text-gray-400">Belum ada produk keluar.</p>
+        {/each}
+      </div>
+    </section>
+
+    <section class="rounded-lg border bg-white p-5 shadow-sm">
+      <div class="mb-4 flex items-center justify-between">
+        <div>
+          <h2 class="font-semibold text-gray-900">Order Terbaru</h2>
+          <p class="text-sm text-gray-400">List terakhir dari barang keluar.</p>
+        </div>
+        <Button variant="outline" onclick={() => goto("/penjualan/order")}>Semua</Button>
+      </div>
+      <div class="space-y-2">
+        {#each rows.slice(0, 6) as row}
+          <button
+            class="w-full rounded-lg bg-gray-50 px-3 py-2 text-left hover:bg-gray-100"
+            onclick={() => goto("/penjualan/order")}
+          >
+            <div class="flex justify-between gap-3">
+              <p class="font-medium text-gray-800">{row.label}</p>
+              <p class="font-semibold text-green-700">{rupiah(row.nilaiJual)}</p>
+            </div>
+            <p class="mt-0.5 text-xs text-gray-400">{row.tujuan} · {row.pcsKeluar} pcs · {formatDate(row.tanggal)}</p>
+          </button>
+        {:else}
+          <p class="py-10 text-center text-sm text-gray-400">Belum ada order.</p>
+        {/each}
+      </div>
+    </section>
   </div>
 
   <div class="grid gap-4 xl:grid-cols-[1.4fr_1fr]">
