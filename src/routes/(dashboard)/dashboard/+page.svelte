@@ -16,13 +16,13 @@
     batchCache,
     stokKainCache,
     barangJadiCache,
-    barangKeluarCache,
     modelBajuCache,
   } from "$lib/stores/data-cache.svelte";
   import { type DateRange, filterByRange, getPeriodRange } from "$lib/period";
   import PeriodSelector from "$lib/components/period-selector.svelte";
   import { getTransaksiKeuangan } from "$lib/firebase/keuangan";
   import { getPembayaranGajiPeriode, type PembayaranGajiRecord } from "$lib/firebase/penggajian";
+  import { getRiwayatBarangKeluarByPeriod } from "$lib/firebase/barang-jadi";
 
   Chart.register(...registerables);
 
@@ -46,7 +46,7 @@
   let loading = $state(false);
   let lastLoaded = $state<Date | null>(null);
   let errorMsg = $state<string | null>(null);
-  let financeRangeKey = $state("");
+  let periodDataKey = $state("");
 
   // Date Range State
   let dateRange = $state<DateRange>(getPeriodRange('bulan_ini'));
@@ -526,14 +526,16 @@
     });
   }
 
-  async function loadFinanceForRange(range: DateRange) {
+  async function loadPeriodData(range: DateRange) {
     const key = range ? `${range.start.toISOString()}|${range.end.toISOString()}` : "all";
-    financeRangeKey = key;
-    const [transaksi, gaji] = await Promise.all([
+    periodDataKey = key;
+    const [keluar, transaksi, gaji] = await Promise.all([
+      getRiwayatBarangKeluarByPeriod(range),
       getTransaksiKeuangan(range),
       getPembayaranGajiPeriode(range),
     ]);
-    if (financeRangeKey !== key) return;
+    if (periodDataKey !== key) return;
+    barangKeluar = keluar;
     transaksiKeuangan = transaksi;
     pembayaranGaji = gaji;
   }
@@ -547,8 +549,8 @@
   $effect(() => {
     const range = dateRange;
     if (!lastLoaded) return;
-    loadFinanceForRange(range).catch(() => {
-      errorMsg = "Gagal memuat data keuangan.";
+    loadPeriodData(range).catch(() => {
+      errorMsg = "Gagal memuat data periode.";
     });
   });
 
@@ -559,7 +561,6 @@
       batchCache.isFresh() &&
       stokKainCache.isFresh() &&
       barangJadiCache.isFresh() &&
-      barangKeluarCache.isFresh() &&
       modelBajuCache.isFresh();
 
     if (!force && allFresh) {
@@ -567,9 +568,8 @@
       batches = batchCache.data ?? [];
       stokKain = stokKainCache.data ?? [];
       barangJadi = barangJadiCache.data ?? [];
-      barangKeluar = barangKeluarCache.data ?? [];
       modelBaju = modelBajuCache.data ?? [];
-      await loadFinanceForRange(dateRange);
+      await loadPeriodData(dateRange);
       lastLoaded = batchCache.fetchedAt ? new Date(batchCache.fetchedAt) : lastLoaded;
       await tick();
       buildStatusChart();
@@ -581,16 +581,16 @@
     loading = true;
     errorMsg = null;
     try {
-      [batches, stokKain, barangJadi, barangKeluar, modelBaju, transaksiKeuangan, pembayaranGaji] = await Promise.all([
+      [batches, stokKain, barangJadi, modelBaju, barangKeluar, transaksiKeuangan, pembayaranGaji] = await Promise.all([
         batchCache.get(force),
         stokKainCache.get(force),
         barangJadiCache.get(force),
-        barangKeluarCache.get(force),
         modelBajuCache.get(force),
+        getRiwayatBarangKeluarByPeriod(dateRange),
         getTransaksiKeuangan(dateRange),
         getPembayaranGajiPeriode(dateRange),
       ]);
-      financeRangeKey = dateRange ? `${dateRange.start.toISOString()}|${dateRange.end.toISOString()}` : "all";
+      periodDataKey = dateRange ? `${dateRange.start.toISOString()}|${dateRange.end.toISOString()}` : "all";
       lastLoaded = new Date();
       await tick();
       buildStatusChart();
