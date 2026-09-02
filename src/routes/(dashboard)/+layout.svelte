@@ -54,6 +54,7 @@
 
     if (pathname === '/dashboard' || pathname === '/') return true;
     if (pathname.startsWith('/pengaturan/flushing')) return false;
+    if (pathname.startsWith('/keuangan/budget')) return false;
     if (pathname.startsWith('/pengaturan')) return true;
 
     if (

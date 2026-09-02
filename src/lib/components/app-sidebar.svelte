@@ -90,7 +90,7 @@
       icon: WalletIcon,
       items: [
         { title: "Ringkasan Keuangan", url: "/keuangan" },
-        { title: "Budget Bulanan", url: "/keuangan/budget" },
+        { title: "Budget Bulanan", url: "/keuangan/budget", comingSoon: true },
         { title: "Pemasukan", url: "/keuangan?tipe=pemasukan" },
         { title: "Pengeluaran", url: "/keuangan?tipe=pengeluaran" },
       ],
