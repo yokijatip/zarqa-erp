@@ -69,7 +69,9 @@
     referensi?: string;
   };
 
-  let dateRange = $state<DateRange>(getPeriodRange("hari_ini"));
+  let reportDateRange = $state<DateRange>(getPeriodRange("semua"));
+  let transactionDateRange = $state<DateRange>(getPeriodRange("hari_ini"));
+  let overviewDateRange = $state<DateRange>(getPeriodRange("semua"));
   let barangKeluar = $state<BarangKeluar[]>([]);
   let modelList = $state<ModelBaju[]>([]);
   let transaksiManual = $state<TransaksiKeuangan[]>([]);
@@ -89,6 +91,11 @@
   let activeTab = $state<"semua" | TipeTransaksiKeuangan>("semua");
   let activePanel = $state<"transaksi" | "aset" | "gudang">("transaksi");
   let searchQuery = $state("");
+
+  function inDateRange(value: Date | null, range: DateRange): boolean {
+    if (!range || !value) return !range;
+    return value >= range.start && value <= range.end;
+  }
 
   let fTipe = $state<TipeTransaksiKeuangan>("pengeluaran");
   let fKategori = $state<KategoriTransaksiKeuangan>("operasional");
@@ -214,8 +221,17 @@
     ),
   );
 
+  let reportLines = $derived(allLines.filter((line) => inDateRange(line.tanggal, reportDateRange)));
+  let overviewLines = $derived(allLines.filter((line) => inDateRange(line.tanggal, overviewDateRange)));
+  let overviewSummary = $derived.by(() => {
+    const pemasukan = overviewLines.filter((line) => line.tipe === "pemasukan").reduce((sum, line) => sum + line.nominal, 0);
+    const hpp = overviewLines.filter((line) => line.source === "penjualan").reduce((sum, line) => sum + (line.hpp ?? 0), 0);
+    const pengeluaran = overviewLines.filter((line) => line.tipe === "pengeluaran").reduce((sum, line) => sum + line.nominal, 0);
+    return { pemasukan, hpp, pengeluaran, labaBersih: pemasukan - hpp - pengeluaran };
+  });
+
   let filteredLines = $derived.by(() => {
-    let list = allLines;
+    let list = allLines.filter((line) => inDateRange(line.tanggal, transactionDateRange));
     if (activeTab !== "semua") list = list.filter((line) => line.tipe === activeTab);
     const q = searchQuery.trim().toLowerCase();
     if (q) {
@@ -230,26 +246,23 @@
   });
 
   let incomeLines = $derived(
-    allLines.filter((line) => line.tipe === "pemasukan"),
+    reportLines.filter((line) => line.tipe === "pemasukan"),
   );
 
   let expenseLines = $derived(
-    allLines.filter((line) => line.tipe === "pengeluaran"),
+    reportLines.filter((line) => line.tipe === "pengeluaran"),
   );
 
   let summary = $derived.by(() => {
-    const penjualan = salesLines.reduce((sum, line) => sum + line.nominal, 0);
-    const hpp = salesLines.reduce((sum, line) => sum + (line.hpp ?? 0), 0);
-    const pemasukanManual = transaksiManual
-      .filter((trx) => trx.tipe === "pemasukan")
-      .reduce((sum, trx) => sum + trx.nominal, 0);
-    const pembelianAset = transaksiManual
-      .filter((trx) => trx.tipe === "pengeluaran" && trx.kategori === "aset")
-      .reduce((sum, trx) => sum + trx.nominal, 0);
-    const pengeluaranOperasional = transaksiManual
-      .filter((trx) => trx.tipe === "pengeluaran" && trx.kategori !== "aset")
-      .reduce((sum, trx) => sum + trx.nominal, 0);
-    const gajiTerbayar = payrollLines.reduce((sum, line) => sum + line.nominal, 0);
+    const reportSalesLines = reportLines.filter((line) => line.source === "penjualan");
+    const reportManualLines = reportLines.filter((line) => line.source === "manual");
+    const reportPayrollLines = reportLines.filter((line) => line.source === "gaji");
+    const penjualan = reportSalesLines.reduce((sum, line) => sum + line.nominal, 0);
+    const hpp = reportSalesLines.reduce((sum, line) => sum + (line.hpp ?? 0), 0);
+    const pemasukanManual = reportManualLines.filter((line) => line.tipe === "pemasukan").reduce((sum, line) => sum + line.nominal, 0);
+    const pembelianAset = reportManualLines.filter((line) => line.tipe === "pengeluaran" && line.kategori === "Aset").reduce((sum, line) => sum + line.nominal, 0);
+    const pengeluaranOperasional = reportManualLines.filter((line) => line.tipe === "pengeluaran" && line.kategori !== "Aset").reduce((sum, line) => sum + line.nominal, 0);
+    const gajiTerbayar = reportPayrollLines.reduce((sum, line) => sum + line.nominal, 0);
     const gajiRegulerEstimasi = regularSalaryRows.reduce((sum, line) => sum + line.nominal, 0);
     const totalBebanGaji = gajiTerbayar + gajiRegulerEstimasi;
     const totalPengeluaranKas = pengeluaranOperasional + pembelianAset + gajiTerbayar;
@@ -318,14 +331,14 @@
         nama: karyawan.name,
         role: karyawan.role,
         tipe: karyawan.tipe_penggajian ?? "bulanan",
-        nominal: estimateSalaryForRange(karyawan.gaji_pokok ?? 0, karyawan.tipe_penggajian ?? "bulanan", dateRange),
+        nominal: estimateSalaryForRange(karyawan.gaji_pokok ?? 0, karyawan.tipe_penggajian ?? "bulanan", reportDateRange),
       }))
       .filter((row) => row.nominal > 0),
   );
 
   let cashflowChartRows = $derived.by(() => {
     const map = new Map<string, { label: string; pemasukan: number; pengeluaran: number }>();
-    for (const line of allLines) {
+    for (const line of overviewLines) {
       const date = line.tanggal;
       if (!date) continue;
       const key = date.toISOString().slice(0, 10);
@@ -498,10 +511,10 @@
     errorMsg = null;
     try {
       const [keluar, models, transaksi, gaji, aset, stokJadi, karyawan] = await Promise.all([
-        getRiwayatBarangKeluarByPeriod(dateRange),
+        getRiwayatBarangKeluarByPeriod(null),
         getModelBajuList(false),
-        getTransaksiKeuangan(dateRange),
-        getPembayaranGajiPeriode(dateRange),
+        getTransaksiKeuangan(null),
+        getPembayaranGajiPeriode(null),
         getAsetPerusahaan(),
         getStokBarangJadi(),
         getKaryawanList(),
@@ -676,7 +689,7 @@
   });
 
   $effect(() => {
-    const key = rangeKey(dateRange);
+    const key = rangeKey(reportDateRange);
     if (!canAccess || lastLoadKey === key) return;
     lastLoadKey = key;
     void load();
@@ -726,6 +739,9 @@
       </p>
     </div>
     <div class="flex flex-wrap items-center gap-2">
+      {#if pageMode === "ringkasan"}
+        <PeriodSelector bind:dateRange={overviewDateRange} defaultPeriod="semua" />
+      {/if}
       <Button variant="outline" onclick={load} disabled={loading}>
         <RefreshCwIcon class="h-4 w-4 {loading ? 'animate-spin' : ''}" />
         Refresh
@@ -747,8 +763,8 @@
         <div class="flex items-start justify-between gap-3">
           <div>
             <p class="text-sm text-gray-300">Laba bersih estimasi</p>
-            <p class="mt-3 text-3xl font-bold {summary.labaBersih < 0 ? 'text-red-300' : 'text-white'}">
-              {rupiah(summary.labaBersih)}
+            <p class="mt-3 text-3xl font-bold {overviewSummary.labaBersih < 0 ? 'text-red-300' : 'text-white'}">
+              {rupiah(overviewSummary.labaBersih)}
             </p>
           </div>
           <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-white/10">
@@ -758,22 +774,22 @@
         <div class="mt-5 grid grid-cols-3 gap-2 text-xs">
           <div class="rounded-lg bg-white/10 px-3 py-2">
             <p class="text-gray-400">Penjualan</p>
-            <p class="mt-1 font-semibold text-green-300">{rupiah(summary.penjualan)}</p>
+            <p class="mt-1 font-semibold text-green-300">{rupiah(overviewSummary.pemasukan)}</p>
           </div>
           <div class="rounded-lg bg-white/10 px-3 py-2">
             <p class="text-gray-400">HPP</p>
-            <p class="mt-1 font-semibold text-orange-300">{rupiah(summary.hpp)}</p>
+            <p class="mt-1 font-semibold text-orange-300">{rupiah(overviewSummary.hpp)}</p>
           </div>
           <div class="rounded-lg bg-white/10 px-3 py-2">
             <p class="text-gray-400">Beban</p>
-            <p class="mt-1 font-semibold text-red-300">{rupiah(summary.pengeluaranOperasional + summary.totalBebanGaji)}</p>
+            <p class="mt-1 font-semibold text-red-300">{rupiah(overviewSummary.pengeluaran)}</p>
           </div>
         </div>
       </section>
 
       <StatCard
         title="Penjualan"
-        value={rupiah(summary.penjualan)}
+        value={rupiah(overviewSummary.pemasukan)}
         icon={TrendingUpIcon}
         {loading}
         footerSubtext={`${incomeLines.length} transaksi masuk`}
@@ -782,23 +798,23 @@
       />
       <StatCard
         title="Kas"
-        value={rupiah(summary.kasTercatat)}
+        value={rupiah(overviewSummary.pemasukan - overviewSummary.pengeluaran)}
         icon={BanknoteIcon}
         {loading}
         footerSubtext="masuk - kas keluar"
-        class={summary.kasTercatat < 0 ? "border-red-100 bg-red-50" : "border-blue-100 bg-blue-50"}
-        valueClass={summary.kasTercatat < 0 ? "text-red-600" : "text-blue-700"}
+        class={overviewSummary.pemasukan - overviewSummary.pengeluaran < 0 ? "border-red-100 bg-red-50" : "border-blue-100 bg-blue-50"}
+        valueClass={overviewSummary.pemasukan - overviewSummary.pengeluaran < 0 ? "text-red-600" : "text-blue-700"}
       />
       <StatCard
         title="Margin"
-        value={`${summary.marginKotor}%`}
+        value={`${overviewSummary.pemasukan > 0 ? Math.round(((overviewSummary.pemasukan - overviewSummary.hpp) / overviewSummary.pemasukan) * 100) : 0}%`}
         icon={ReceiptIcon}
         {loading}
-        footerSubtext={rupiah(summary.labaKotor)}
-        valueClass={summary.labaKotor < 0 ? "text-red-600" : "text-gray-900"}
+        footerSubtext={rupiah(overviewSummary.pemasukan - overviewSummary.hpp)}
+        valueClass={overviewSummary.pemasukan - overviewSummary.hpp < 0 ? "text-red-600" : "text-gray-900"}
       />
     </div>
-  {:else}
+  {:else if pageMode === "pengeluaran"}
     <div class="mb-5 grid grid-cols-1 gap-4 md:grid-cols-3">
       <StatCard
         title="Operasional"
@@ -896,7 +912,7 @@
           <h2 class="text-sm font-semibold text-gray-800">Laporan Laba Rugi</h2>
           <p class="mt-0.5 text-xs text-gray-400">Format ringkas sesuai praktik dasar perusahaan.</p>
         </div>
-        <PeriodSelector bind:dateRange defaultPeriod="hari_ini" />
+        <PeriodSelector bind:dateRange={reportDateRange} defaultPeriod="semua" />
       </div>
       <div class="mt-4 divide-y divide-gray-100 rounded-lg border border-gray-100">
         <div class="flex items-center justify-between px-4 py-3">
@@ -991,7 +1007,7 @@
             <h2 class="text-sm font-semibold text-gray-800">Sumber Pemasukan</h2>
             <p class="mt-0.5 text-xs text-gray-400">Penjualan otomatis dan pemasukan manual pada periode ini.</p>
           </div>
-          <PeriodSelector bind:dateRange defaultPeriod="hari_ini" />
+          <PeriodSelector bind:dateRange={reportDateRange} defaultPeriod="semua" />
         </div>
         <div class="mt-5 grid gap-3 sm:grid-cols-3">
           <div class="rounded-xl bg-green-50 p-4">
@@ -1048,7 +1064,7 @@
             <h2 class="text-sm font-semibold text-gray-800">Kontrol Pengeluaran</h2>
             <p class="mt-0.5 text-xs text-gray-400">Beban operasional, gaji, dan pembelian aset perusahaan.</p>
           </div>
-          <PeriodSelector bind:dateRange defaultPeriod="hari_ini" />
+          <PeriodSelector bind:dateRange={reportDateRange} defaultPeriod="semua" />
         </div>
         <div class="mt-5 grid gap-3 sm:grid-cols-4">
           <div class="rounded-xl bg-red-50 p-4">
@@ -1137,7 +1153,7 @@
       <div class="min-w-[220px] flex-1">
         <Input placeholder="Cari transaksi, kategori, referensi..." bind:value={searchQuery} />
       </div>
-      <PeriodSelector bind:dateRange defaultPeriod="hari_ini" />
+      <PeriodSelector bind:dateRange={transactionDateRange} defaultPeriod="hari_ini" />
       {#if pageMode === "ringkasan"}
         <div class="flex items-center gap-2">
           {#each [["semua", "Semua"], ["pemasukan", "Pemasukan"], ["pengeluaran", "Pengeluaran"]] as tab}
