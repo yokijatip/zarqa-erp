@@ -65,6 +65,8 @@
     kategori: string;
     deskripsi: string;
     nominal: number;
+    jenisGaji?: "produksi" | "reguler";
+    karyawanUid?: string;
     hpp?: number;
     labaKotor?: number;
     referensi?: string;
@@ -213,6 +215,8 @@
       kategori: "Gaji",
       deskripsi: `Gaji ${gaji.karyawan_nama} (${gaji.divisi})`,
       nominal: gaji.total_gaji,
+      jenisGaji: ["Cutting", "Jahit", "Steam"].includes(gaji.divisi) ? "produksi" : "reguler",
+      karyawanUid: gaji.karyawan_uid,
       referensi: gaji.id,
     })),
   );
@@ -232,7 +236,9 @@
       .reduce((sum, line) => sum + line.nominal, 0);
     const pemasukan = penjualan + pemasukanManual;
     const hpp = overviewLines.filter((line) => line.source === "penjualan").reduce((sum, line) => sum + (line.hpp ?? 0), 0);
-    const pengeluaran = overviewLines.filter((line) => line.tipe === "pengeluaran").reduce((sum, line) => sum + line.nominal, 0);
+    const pengeluaran = overviewLines
+      .filter((line) => line.tipe === "pengeluaran" && !(line.source === "gaji" && line.jenisGaji === "produksi"))
+      .reduce((sum, line) => sum + line.nominal, 0);
     return { penjualan, pemasukanManual, pemasukan, hpp, pengeluaran, labaBersih: pemasukan - hpp - pengeluaran };
   });
 
@@ -269,8 +275,11 @@
     const pembelianAset = reportManualLines.filter((line) => line.tipe === "pengeluaran" && line.kategori === "Aset").reduce((sum, line) => sum + line.nominal, 0);
     const pengeluaranOperasional = reportManualLines.filter((line) => line.tipe === "pengeluaran" && line.kategori !== "Aset").reduce((sum, line) => sum + line.nominal, 0);
     const gajiTerbayar = reportPayrollLines.reduce((sum, line) => sum + line.nominal, 0);
-    const gajiRegulerEstimasi = regularSalaryRows.reduce((sum, line) => sum + line.nominal, 0);
-    const totalBebanGaji = gajiTerbayar + gajiRegulerEstimasi;
+    const gajiProduksiTerbayar = reportPayrollLines.filter((line) => line.jenisGaji === "produksi").reduce((sum, line) => sum + line.nominal, 0);
+    const gajiRegulerTerbayar = reportPayrollLines.filter((line) => line.jenisGaji === "reguler").reduce((sum, line) => sum + line.nominal, 0);
+    const paidRegularUids = new Set(reportPayrollLines.filter((line) => line.jenisGaji === "reguler").map((line) => line.karyawanUid));
+    const gajiRegulerEstimasi = regularSalaryRows.filter((line) => !paidRegularUids.has(line.uid)).reduce((sum, line) => sum + line.nominal, 0);
+    const totalBebanGaji = gajiRegulerTerbayar + gajiRegulerEstimasi;
     const totalPengeluaranKas = pengeluaranOperasional + pembelianAset + gajiTerbayar;
     const labaKotor = penjualan - hpp;
     const labaBersih = labaKotor + pemasukanManual - pengeluaranOperasional - totalBebanGaji;
@@ -292,6 +301,8 @@
       pengeluaranOperasional,
       pembelianAset,
       gajiTerbayar,
+      gajiProduksiTerbayar,
+      gajiRegulerTerbayar,
       gajiRegulerEstimasi,
       totalBebanGaji,
       totalPengeluaranKas,
@@ -396,8 +407,8 @@
       const label = kategoriLabel(trx.tipe, trx.kategori);
       map.set(label, (map.get(label) ?? 0) + trx.nominal);
     }
-    if (summary.gajiTerbayar > 0) {
-      map.set("Gaji Terbayar", (map.get("Gaji Terbayar") ?? 0) + summary.gajiTerbayar);
+    if (summary.totalBebanGaji > 0) {
+      map.set("Gaji Karyawan Reguler", (map.get("Gaji Karyawan Reguler") ?? 0) + summary.totalBebanGaji);
     }
     return [...map.entries()].sort((a, b) => b[1] - a[1]);
   });
@@ -674,8 +685,8 @@
           ["Laba kotor", rupiah(summary.labaKotor)],
           ["Pemasukan lain", rupiah(summary.pemasukanManual)],
           ["Pengeluaran operasional", rupiah(summary.pengeluaranOperasional)],
-          ["Gaji terbayar otomatis", rupiah(summary.gajiTerbayar)],
-          ["Estimasi gaji reguler", rupiah(summary.gajiRegulerEstimasi)],
+          ["Gaji produksi (sudah termasuk HPP)", rupiah(summary.gajiProduksiTerbayar)],
+          ["Gaji karyawan reguler", rupiah(summary.totalBebanGaji)],
           ["Pembelian aset (arus kas, bukan beban laba rugi)", rupiah(summary.pembelianAset)],
           ["Kas tercatat", rupiah(summary.kasTercatat)],
           ["Laba bersih", rupiah(summary.labaBersih)],
@@ -961,7 +972,7 @@
         </div>
         <div class="flex items-center justify-between px-4 py-3">
           <span class="text-sm text-gray-500">Gaji terbayar otomatis</span>
-          <span class="font-semibold text-red-700">({rupiah(summary.gajiTerbayar)})</span>
+          <span class="font-semibold text-blue-700">{rupiah(summary.gajiProduksiTerbayar)} <span class="text-xs font-normal text-gray-400">(termasuk HPP)</span></span>
         </div>
         <div class="flex items-center justify-between px-4 py-3">
           <span class="text-sm text-gray-500">Estimasi gaji reguler</span>
@@ -1086,7 +1097,7 @@
         <div class="flex items-center justify-between gap-3">
           <div>
             <h2 class="text-sm font-semibold text-gray-800">Kontrol Pengeluaran</h2>
-            <p class="mt-0.5 text-xs text-gray-400">Beban operasional, gaji, dan pembelian aset perusahaan.</p>
+            <p class="mt-0.5 text-xs text-gray-400">Beban operasional, gaji reguler, dan pembelian aset perusahaan.</p>
           </div>
           <PeriodSelector bind:dateRange={reportDateRange} defaultPeriod="semua" />
         </div>

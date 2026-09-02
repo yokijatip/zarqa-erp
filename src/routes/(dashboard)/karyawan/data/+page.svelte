@@ -8,6 +8,7 @@
     hapusAkunKaryawan,
     ROLE_LABEL,
     ROLE_KARYAWAN,
+    tipeKaryawanLabel,
   } from "$lib/firebase/karyawan";
   import { isKaryawanManager } from "$lib/stores/auth.store";
   import type { UserProfile, UserRole, TipePenggajian } from "$lib/types";
@@ -528,9 +529,9 @@
         <Table.Header>
           <Table.Row class="bg-gray-50 hover:bg-gray-50">
             <Table.Head class="w-[30%]">Karyawan</Table.Head>
-            <Table.Head class="w-[16%]">Role</Table.Head>
+            <Table.Head class="w-[16%]">Jabatan</Table.Head>
             <Table.Head class="w-[15%]">Info Kerja</Table.Head>
-            <Table.Head class="w-[12%] text-center">Tipe</Table.Head>
+            <Table.Head class="w-[12%] text-center">Tipe Akun</Table.Head>
             <Table.Head class="w-[14%] text-center">Penggajian</Table.Head>
             <Table.Head class="w-[10%]">Expired</Table.Head>
             <Table.Head class="w-[13%]"></Table.Head>
@@ -556,11 +557,12 @@
                 </div>
               </Table.Cell>
               <Table.Cell>
-                <span
-                  class="inline-flex max-w-full whitespace-nowrap rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700"
-                >
-                  {ROLE_LABEL[k.role] ?? k.role}
-                </span>
+                <div class="space-y-1">
+                  <span class="inline-flex max-w-full whitespace-nowrap rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700">
+                    {ROLE_LABEL[k.role] ?? k.role}
+                  </span>
+                  <p class="text-[11px] text-gray-500">{tipeKaryawanLabel(k.role)}</p>
+                </div>
               </Table.Cell>
               <Table.Cell>
                 <div class="space-y-1">
@@ -894,7 +896,7 @@
         </label>
         <Input id="t-gaji-pokok" type="number" min="0" placeholder="0" bind:value={fGajiPokok} />
         <p class="text-xs text-gray-400">
-          Dipakai ke estimasi keuangan untuk staff/admin reguler. Produksi tetap memakai tarif per pcs.
+          Dipakai ke estimasi keuangan untuk karyawan reguler. Karyawan produksi memakai tarif per pcs.
         </p>
       </div>
     </div>
@@ -1105,7 +1107,7 @@
           </label>
           <Input id="e-gaji-pokok" type="number" min="0" placeholder="0" bind:value={eGajiPokok} />
           <p class="text-xs text-gray-400">
-            Dipakai ke estimasi keuangan untuk staff/admin reguler. Produksi tetap memakai tarif per pcs.
+            Dipakai ke estimasi keuangan untuk karyawan reguler. Karyawan produksi memakai tarif per pcs.
           </p>
         </div>
       </div>

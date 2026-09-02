@@ -186,8 +186,16 @@
   const pemasukanManual = $derived(transaksi.filter((t) => t.tipe === "pemasukan").reduce((s, t) => s + t.nominal, 0));
   const pengeluaranManual = $derived(transaksi.filter((t) => t.tipe === "pengeluaran").reduce((s, t) => s + t.nominal, 0));
   const gajiTerbayar = $derived(gaji.reduce((s, item) => s + item.total_gaji, 0));
+  const isGajiProduksi = (item: PembayaranGajiRecord) => {
+    const employee = karyawan.find((worker) => worker.uid === item.karyawan_uid);
+    return employee
+      ? ["kepala_cutting", "kepala_jahit", "kepala_steam"].includes(employee.role)
+      : ["Cutting", "Jahit", "Steam"].includes(item.divisi);
+  };
+  const gajiProduksiTerbayar = $derived(gaji.filter(isGajiProduksi).reduce((s, item) => s + item.total_gaji, 0));
+  const gajiRegulerTerbayar = $derived(gaji.filter((item) => !isGajiProduksi(item)).reduce((s, item) => s + item.total_gaji, 0));
   const labaKotor = $derived(penjualan - hpp);
-  const labaBersih = $derived(labaKotor + pemasukanManual - pengeluaranManual - gajiTerbayar);
+  const labaBersih = $derived(labaKotor + pemasukanManual - pengeluaranManual - gajiRegulerTerbayar);
   const kasMasuk = $derived(penjualan + pemasukanManual);
   const kasKeluar = $derived(pengeluaranManual + gajiTerbayar);
   const kasBersih = $derived(kasMasuk - kasKeluar);
@@ -216,7 +224,7 @@
   const expenseRows = $derived.by<MoneyRow[]>(() => {
     const map = new Map<string, number>();
     map.set("HPP produksi barang keluar", hpp);
-    map.set("Gaji terbayar", gajiTerbayar);
+    map.set("Gaji karyawan reguler", gajiRegulerTerbayar);
     for (const item of transaksi.filter((t) => t.tipe === "pengeluaran")) {
       const label = kategoriLabel(item.tipe, item.kategori);
       map.set(label, (map.get(label) ?? 0) + item.nominal);
@@ -390,7 +398,8 @@
           ["Laba kotor", rupiah(labaKotor)],
           ["Pemasukan manual", rupiah(pemasukanManual)],
           ["Pengeluaran manual", rupiah(pengeluaranManual)],
-          ["Gaji terbayar", rupiah(gajiTerbayar)],
+          ["Gaji produksi (sudah termasuk HPP)", rupiah(gajiProduksiTerbayar)],
+          ["Gaji karyawan reguler", rupiah(gajiRegulerTerbayar)],
           ["Laba bersih estimasi", rupiah(labaBersih)],
           ["Kas masuk", rupiah(kasMasuk)],
           ["Kas keluar", rupiah(kasKeluar)],
@@ -556,7 +565,8 @@
           <div class="flex justify-between bg-gray-50 px-4 py-3 text-sm"><span class="font-semibold">Laba kotor</span><strong>{rupiah(labaKotor)}</strong></div>
           <div class="flex justify-between px-4 py-3 text-sm"><span>Pemasukan manual/lainnya</span><strong class="text-green-700">{rupiah(pemasukanManual)}</strong></div>
           <div class="flex justify-between px-4 py-3 text-sm"><span>Pengeluaran perusahaan</span><strong class="text-red-700">({rupiah(pengeluaranManual)})</strong></div>
-          <div class="flex justify-between px-4 py-3 text-sm"><span>Gaji terbayar</span><strong class="text-red-700">({rupiah(gajiTerbayar)})</strong></div>
+          <div class="flex justify-between px-4 py-3 text-sm"><span>Gaji produksi (sudah termasuk HPP)</span><strong class="text-blue-700">{rupiah(gajiProduksiTerbayar)}</strong></div>
+          <div class="flex justify-between px-4 py-3 text-sm"><span>Gaji karyawan reguler</span><strong class="text-red-700">({rupiah(gajiRegulerTerbayar)})</strong></div>
           <div class="flex justify-between bg-gray-900 px-4 py-3 text-sm text-white"><span class="font-semibold">Laba bersih estimasi</span><strong>{rupiah(labaBersih)}</strong></div>
         </div>
       </section>

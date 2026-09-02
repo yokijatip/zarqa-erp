@@ -12,7 +12,7 @@ const COL = 'users';
 
 // Label readable per role (untuk ditampilkan di tabel)
 export const ROLE_LABEL: Record<UserRole, string> = {
-  staff: 'Staff',
+  staff: 'Karyawan Reguler',
   admin_gudang: 'Admin Gudang',
   admin_hr: 'Admin HR',
   admin_keuangan: 'Admin Keuangan',
@@ -22,6 +22,12 @@ export const ROLE_LABEL: Record<UserRole, string> = {
   developer: 'Developer',
   owner: 'Owner',
 };
+
+export const ROLE_PRODUKSI: UserRole[] = ['kepala_cutting', 'kepala_jahit', 'kepala_steam'];
+
+export function tipeKaryawanLabel(role: UserRole): 'Karyawan Produksi' | 'Karyawan Reguler' {
+  return ROLE_PRODUKSI.includes(role) ? 'Karyawan Produksi' : 'Karyawan Reguler';
+}
 
 // Role yang bisa dipilih saat buat akun karyawan
 export const ROLE_KARYAWAN: UserRole[] = [

@@ -442,7 +442,7 @@
       await simpanPembayaranGaji({
         karyawan_uid: selectedReguler.uid,
         karyawan_nama: selectedReguler.name,
-        divisi: selectedReguler.divisi || selectedReguler.jabatan || "Staff",
+        divisi: selectedReguler.divisi || selectedReguler.jabatan || "Karyawan Reguler",
         periode_start: dateRange ? dateRange.start.toISOString() : new Date().toISOString(),
         periode_end: dateRange ? dateRange.end.toISOString() : new Date().toISOString(),
         total_pcs: 0,
@@ -633,7 +633,7 @@
     <p class="mt-0.5 text-sm text-gray-500">
       {payrollMode === "produksi"
         ? `Karyawan produksi berbasis hasil pcs pada periode: ${periodeLabel}`
-        : `Karyawan reguler/staff berbasis gaji pokok pada periode: ${periodeLabel}`}
+        : `Karyawan reguler berbasis gaji pokok pada periode: ${periodeLabel}`}
     </p>
   </div>
   <div class="flex items-center gap-2 flex-wrap">
@@ -671,7 +671,7 @@
     variant={payrollMode === "reguler" ? "default" : "ghost"}
     onclick={() => (payrollMode = "reguler")}
   >
-    Reguler / Staff
+        Karyawan Reguler
   </Button>
 </div>
 
@@ -690,7 +690,7 @@
       valueClass={stats.belumDicetak > 0 ? "text-amber-600" : "text-green-700"}
     />
   {:else}
-    <StatCard title="Karyawan Reguler" value={regulerStats.totalKaryawan} icon={BanknoteIcon} {loading} footerSubtext="staff aktif" />
+    <StatCard title="Karyawan Reguler" value={regulerStats.totalKaryawan} icon={BanknoteIcon} {loading} footerSubtext="karyawan aktif" />
     <StatCard title="Estimasi Gaji" value={rupiah(regulerStats.totalGaji)} icon={PackageIcon} {loading} footerSubtext="dari gaji pokok" />
     <StatCard
       title="Belum Dibayar"
@@ -844,7 +844,7 @@
     <div class="flex h-14 w-14 items-center justify-center rounded-full bg-gray-100">
       <BanknoteIcon class="h-7 w-7 text-gray-300" />
     </div>
-    <p class="text-sm font-medium text-gray-500">Belum ada karyawan reguler atau staff aktif</p>
+    <p class="text-sm font-medium text-gray-500">Belum ada karyawan reguler aktif</p>
     <p class="text-xs text-gray-400">atur role dan gaji pokok dari data karyawan</p>
   </div>
 {:else}

@@ -6,6 +6,7 @@
     getKaryawanById,
     ROLE_KARYAWAN,
     ROLE_LABEL,
+    tipeKaryawanLabel,
     updateKaryawan,
   } from "$lib/firebase/karyawan";
   import { getPenggajianPeriode } from "$lib/firebase/penggajian";
@@ -411,6 +412,7 @@
       <div class="rounded-lg bg-gray-50 p-3">
         <p class="text-xs text-gray-400">Role Sistem</p>
         <p class="mt-1 truncate text-sm font-semibold text-gray-800">{ROLE_LABEL[karyawan.role] ?? karyawan.role}</p>
+        <p class="mt-0.5 text-xs text-gray-500">{tipeKaryawanLabel(karyawan.role)}</p>
       </div>
       <div class="rounded-lg bg-gray-50 p-3">
         <p class="text-xs text-gray-400">Akses Login</p>
