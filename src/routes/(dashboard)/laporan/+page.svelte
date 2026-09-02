@@ -29,7 +29,7 @@
   import WalletIcon from "@lucide/svelte/icons/wallet";
   import FactoryIcon from "@lucide/svelte/icons/factory";
   import BoxesIcon from "@lucide/svelte/icons/boxes";
-  import { hargaJualUntukUkuran } from "$lib/sales/penjualan";
+  import { hargaJualUntukUkuran, hargaProduksiUntukUkuran } from "$lib/sales/penjualan";
 
   type ReportTab = "ringkasan" | "keuangan" | "produksi" | "barang_keluar" | "stok" | "karyawan";
   type MoneyRow = { label: string; value: number; color: string };
@@ -155,10 +155,10 @@
         const model = modelMap.get(item.model_id) ?? modelNameMap.get(item.nama_model.toLowerCase());
         pcsKeluar += item.total_pcs;
         nilaiJual += item.detail_keluar.reduce(
-          (sum, detail) => sum + detail.jumlah_pcs * (detail.harga_jual ?? hargaJualUntukUkuran(model, detail.ukuran)),
+          (sum, detail) => sum + detail.jumlah_pcs * (detail.harga_jual && detail.harga_jual > 0 ? detail.harga_jual : hargaJualUntukUkuran(model, detail.ukuran)),
           0,
         );
-        hppList += item.total_pcs * (model?.harga_produksi ?? 0);
+        hppList += item.detail_keluar.reduce((sum, detail) => sum + detail.jumlah_pcs * hargaProduksiUntukUkuran(model, detail.ukuran), 0);
       }
 
       return {
@@ -193,7 +193,7 @@
   const stokJadiPcs = $derived(stokJadi.reduce((s, item) => s + item.stok_tersedia, 0));
   const stokPotonganPcs = $derived(stokPotongan.reduce((s, item) => s + item.stok_tersedia, 0));
   const stokKainTotal = $derived(stokKain.reduce((s, item) => s + item.stok_tersedia, 0));
-  const nilaiGudang = $derived(stokJadi.reduce((s, item) => s + item.stok_tersedia * (modelMap.get(item.model_id)?.harga_produksi ?? 0), 0));
+  const nilaiGudang = $derived(stokJadi.reduce((s, item) => s + item.stok_tersedia * hargaProduksiUntukUkuran(modelMap.get(item.model_id), item.ukuran), 0));
 
   const incomeRows = $derived.by<MoneyRow[]>(() => {
     const map = new Map<string, number>();
@@ -279,8 +279,8 @@
       const model = modelMap.get(item.model_id) ?? modelNameMap.get(item.nama_model.toLowerCase());
       const row = map.get(item.model_id) ?? { model: item.nama_model, pcs: 0, nilaiProduksi: 0, nilaiJual: 0 };
       row.pcs += item.stok_tersedia;
-      row.nilaiProduksi += item.stok_tersedia * (model?.harga_produksi ?? 0);
-      row.nilaiJual += item.stok_tersedia * (model?.harga_jual ?? 0);
+      row.nilaiProduksi += item.stok_tersedia * hargaProduksiUntukUkuran(model, item.ukuran);
+      row.nilaiJual += item.stok_tersedia * hargaJualUntukUkuran(model, item.ukuran);
       map.set(item.model_id, row);
     }
     return [...map.values()].sort((a, b) => b.pcs - a.pcs);

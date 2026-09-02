@@ -97,8 +97,14 @@ export function rupiah(value: number): string {
   }).format(value || 0);
 }
 
-function modelPrice(modelList: ModelBaju[], modelId: string) {
-  const model = modelList.find((item) => item.id === modelId);
+function findModel(modelList: ModelBaju[], modelId: string, modelName?: string) {
+  const normalizedName = modelName?.trim().toLowerCase();
+  return modelList.find((item) => item.id === modelId) ??
+    (normalizedName ? modelList.find((item) => item.nama_model.trim().toLowerCase() === normalizedName) : undefined);
+}
+
+function modelPrice(modelList: ModelBaju[], modelId: string, modelName?: string) {
+  const model = findModel(modelList, modelId, modelName);
   return {
     jual: model?.harga_jual ?? 0,
     produksi: model?.harga_produksi ?? 0,
@@ -110,19 +116,23 @@ export function hargaJualUntukUkuran(model: ModelBaju | undefined, ukuran: strin
 }
 
 export function hargaProduksiUntukUkuran(model: ModelBaju | undefined, ukuran: string): number {
-  return model?.harga_produksi ?? 0;
+  return model?.harga_produksi_per_ukuran?.[ukuran as UkuranBaju] ?? model?.harga_produksi ?? 0;
+}
+
+function effectivePrice(snapshot: number | undefined, fallback: number): number {
+  return snapshot != null && snapshot > 0 ? snapshot : fallback;
 }
 
 export function salesItemValue(item: BarangKeluarItem, modelList: ModelBaju[]) {
-  const model = modelList.find((entry) => entry.id === item.model_id);
-  const harga = modelPrice(modelList, item.model_id);
+  const model = findModel(modelList, item.model_id, item.nama_model);
+  const harga = modelPrice(modelList, item.model_id, item.nama_model);
   if (item.status === 'pending') return { nilaiJual: 0, hpp: 0, laba: 0 };
   const nilaiJual = item.detail_keluar.reduce(
-    (sum, detail) => sum + detail.jumlah_pcs * (detail.harga_jual ?? hargaJualUntukUkuran(model, detail.ukuran)),
+    (sum, detail) => sum + detail.jumlah_pcs * effectivePrice(detail.harga_jual, hargaJualUntukUkuran(model, detail.ukuran)),
     0,
   );
   const hpp = item.detail_keluar.reduce(
-    (sum, detail) => sum + detail.jumlah_pcs * (detail.harga_produksi ?? harga.produksi),
+    (sum, detail) => sum + detail.jumlah_pcs * effectivePrice(detail.harga_produksi, hargaProduksiUntukUkuran(model, detail.ukuran) || harga.produksi),
     0,
   );
   return { nilaiJual, hpp, laba: nilaiJual - hpp };
@@ -131,12 +141,11 @@ export function salesItemValue(item: BarangKeluarItem, modelList: ModelBaju[]) {
 export function salesItemRows(data: BarangKeluar[], modelList: ModelBaju[]): SalesItemRow[] {
   return data.flatMap((row) =>
     listItems(row).flatMap((item) => {
-      const model = modelList.find((entry) => entry.id === item.model_id);
-      const harga = modelPrice(modelList, item.model_id);
+      const model = findModel(modelList, item.model_id, item.nama_model);
       return item.detail_keluar.map((detail) => {
         const isPending = item.status === 'pending';
-        const hargaJual = detail.harga_jual ?? hargaJualUntukUkuran(model, detail.ukuran);
-        const hargaProduksi = detail.harga_produksi ?? hargaProduksiUntukUkuran(model, detail.ukuran);
+        const hargaJual = effectivePrice(detail.harga_jual, hargaJualUntukUkuran(model, detail.ukuran));
+        const hargaProduksi = effectivePrice(detail.harga_produksi, hargaProduksiUntukUkuran(model, detail.ukuran));
         const nilaiJual = isPending ? 0 : detail.jumlah_pcs * hargaJual;
         const hpp = isPending ? 0 : detail.jumlah_pcs * hargaProduksi;
         return {

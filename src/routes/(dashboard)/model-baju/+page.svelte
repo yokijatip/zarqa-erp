@@ -46,6 +46,7 @@
   let fHargaJual = $state("");
   let fHargaJualByUkuran = $state<Partial<Record<UkuranBaju, string>>>({});
   let fHargaProduksi = $state("");
+  let fHargaProduksiByUkuran = $state<Partial<Record<UkuranBaju, string>>>({});
   let fKebutuhanYard = $state<Partial<Record<UkuranBaju, string>>>({});
   let fTarifCutting = $state("");
   let fTarifJahit = $state("");
@@ -81,6 +82,9 @@
       const nextHarga = { ...fHargaJualByUkuran };
       delete nextHarga[u];
       fHargaJualByUkuran = nextHarga;
+      const nextHargaProduksi = { ...fHargaProduksiByUkuran };
+      delete nextHargaProduksi[u];
+      fHargaProduksiByUkuran = nextHargaProduksi;
     } else {
       fUkuran = UKURAN_ORDER.filter((x) => [...fUkuran, x].includes(x));
     }
@@ -109,6 +113,7 @@
     fHargaJual = "";
     fHargaJualByUkuran = {};
     fHargaProduksi = "";
+    fHargaProduksiByUkuran = {};
     fKebutuhanYard = {};
     fTarifCutting = "";
     fTarifJahit = "";
@@ -137,6 +142,9 @@
       ]),
     ) as Partial<Record<UkuranBaju, string>>;
     fHargaProduksi = model.harga_produksi != null ? String(model.harga_produksi) : "";
+    fHargaProduksiByUkuran = Object.fromEntries(
+      Object.entries(model.harga_produksi_per_ukuran ?? {}).map(([ukuran, value]) => [ukuran, value != null ? String(value) : ""]),
+    ) as Partial<Record<UkuranBaju, string>>;
     fKebutuhanYard = Object.fromEntries(
       Object.entries(model.kebutuhan_yard_per_pcs ?? {}).map(([ukuran, value]) => [
         ukuran,
@@ -216,6 +224,11 @@
             .filter(([, value]) => value > 0),
         ),
         harga_produksi: Number(fHargaProduksi) || 0,
+        harga_produksi_per_ukuran: Object.fromEntries(
+          fUkuran
+            .map((ukuran) => [ukuran, Number(fHargaProduksiByUkuran[ukuran]) || 0] as const)
+            .filter(([, value]) => value > 0),
+        ),
         tarif_cutting: Number(fTarifCutting) || 0,
         tarif_jahit: Number(fTarifJahit) || 0,
         tarif_steam: Number(fTarifSteam) || 0,
@@ -606,6 +619,36 @@
                     ></span>
                     {w.nama_warna}
                   </span>
+                {/each}
+              </div>
+            </div>
+            <div class="border-t border-gray-200 pt-2.5">
+              <p class="mb-1.5 text-[11px] font-medium text-gray-700">Harga produksi per ukuran</p>
+              <p class="mb-2 text-[11px] text-gray-500">Kosongkan jika memakai harga produksi umum di atas.</p>
+              <div class="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+                {#each fUkuran as ukuran}
+                  <div>
+                    <label class="mb-1 block text-[11px] font-medium text-gray-700" for={`harga-produksi-${ukuran}`}>
+                      {ukuran}
+                    </label>
+                    <div class="relative">
+                      <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-gray-400">Rp</span>
+                      <Input
+                        id={`harga-produksi-${ukuran}`}
+                        type="number"
+                        min="0"
+                        placeholder={fHargaProduksi || "0"}
+                        value={fHargaProduksiByUkuran[ukuran] ?? ""}
+                        oninput={(e) => {
+                          fHargaProduksiByUkuran = {
+                            ...fHargaProduksiByUkuran,
+                            [ukuran]: (e.currentTarget as HTMLInputElement).value,
+                          };
+                        }}
+                        class="h-8 pl-7 text-xs"
+                      />
+                    </div>
+                  </div>
                 {/each}
               </div>
             </div>

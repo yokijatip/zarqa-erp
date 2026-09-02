@@ -150,11 +150,11 @@
           modelMap.get(item.model_id) ??
           modelNameMap.get(item.nama_model.toLowerCase());
         pendapatan += item.detail_keluar.reduce(
-          (sum, detail) => sum + detail.jumlah_pcs * (detail.harga_jual ?? hargaJualUntukUkuran(model, detail.ukuran)),
+          (sum, detail) => sum + detail.jumlah_pcs * (detail.harga_jual && detail.harga_jual > 0 ? detail.harga_jual : hargaJualUntukUkuran(model, detail.ukuran)),
           0,
         );
         hpp += item.detail_keluar.reduce(
-          (sum, detail) => sum + detail.jumlah_pcs * (detail.harga_produksi ?? hargaProduksiUntukUkuran(model, detail.ukuran)),
+          (sum, detail) => sum + detail.jumlah_pcs * (detail.harga_produksi && detail.harga_produksi > 0 ? detail.harga_produksi : hargaProduksiUntukUkuran(model, detail.ukuran)),
           0,
         );
         totalPcs += item.total_pcs;
@@ -259,11 +259,11 @@
     const totalAset = asetList.reduce((sum, aset) => sum + (aset.nilai_saat_ini ?? aset.total_harga ?? 0), 0);
     const gudangProduksi = stokBarangJadi.reduce((sum, stok) => {
       const model = modelMap.get(stok.model_id) ?? modelNameMap.get(stok.nama_model.toLowerCase());
-      return sum + stok.stok_tersedia * (model?.harga_produksi ?? 0);
+      return sum + stok.stok_tersedia * hargaProduksiUntukUkuran(model, stok.ukuran);
     }, 0);
     const gudangJual = stokBarangJadi.reduce((sum, stok) => {
       const model = modelMap.get(stok.model_id) ?? modelNameMap.get(stok.nama_model.toLowerCase());
-      return sum + stok.stok_tersedia * (model?.harga_jual ?? 0);
+      return sum + stok.stok_tersedia * hargaJualUntukUkuran(model, stok.ukuran);
     }, 0);
     const marginKotor = penjualan > 0 ? Math.round((labaKotor / penjualan) * 100) : 0;
     return {
@@ -299,9 +299,9 @@
         map.get(key) ??
         { model: stok.nama_model, pcs: 0, nilaiProduksi: 0, nilaiJual: 0, incompletePrice: false };
       row.pcs += stok.stok_tersedia;
-      row.nilaiProduksi += stok.stok_tersedia * (model?.harga_produksi ?? 0);
-      row.nilaiJual += stok.stok_tersedia * (model?.harga_jual ?? 0);
-      if (!model?.harga_produksi || !model?.harga_jual) row.incompletePrice = true;
+      row.nilaiProduksi += stok.stok_tersedia * hargaProduksiUntukUkuran(model, stok.ukuran);
+      row.nilaiJual += stok.stok_tersedia * hargaJualUntukUkuran(model, stok.ukuran);
+      if (!hargaProduksiUntukUkuran(model, stok.ukuran) || !hargaJualUntukUkuran(model, stok.ukuran)) row.incompletePrice = true;
       map.set(key, row);
     }
     return [...map.values()].sort((a, b) => b.nilaiProduksi - a.nilaiProduksi);

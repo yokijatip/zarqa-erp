@@ -23,7 +23,7 @@
   import { getTransaksiKeuangan } from "$lib/firebase/keuangan";
   import { getPembayaranGajiPeriode, type PembayaranGajiRecord } from "$lib/firebase/penggajian";
   import { getRiwayatBarangKeluarByPeriod } from "$lib/firebase/barang-jadi";
-  import { hargaJualUntukUkuran } from "$lib/sales/penjualan";
+  import { hargaJualUntukUkuran, hargaProduksiUntukUkuran } from "$lib/sales/penjualan";
 
   Chart.register(...registerables);
 
@@ -143,7 +143,7 @@
   let nilaiGudangProduksi = $derived.by(() =>
     barangJadi.reduce((sum, item) => {
       const model = modelMap.get(item.model_id) ?? modelNameMap.get(item.nama_model);
-      return sum + item.stok_tersedia * (model?.harga_produksi ?? 0);
+      return sum + item.stok_tersedia * hargaProduksiUntukUkuran(model, item.ukuran);
     }, 0),
   );
 
@@ -227,16 +227,18 @@
 
     for (const item of keluarItemsFiltered) {
       const model = modelMap.get(item.model_id) ?? modelNameMap.get(item.nama_model);
-      const hargaProduksi = model?.harga_produksi ?? 0;
-
       const nilaiJualItem = item.detail_keluar.reduce(
-        (sum, detail) => sum + detail.jumlah_pcs * (detail.harga_jual ?? hargaJualUntukUkuran(model, detail.ukuran)),
+        (sum, detail) => sum + detail.jumlah_pcs * (detail.harga_jual && detail.harga_jual > 0 ? detail.harga_jual : hargaJualUntukUkuran(model, detail.ukuran)),
         0,
       );
       if (nilaiJualItem > 0) pendapatan += nilaiJualItem;
       else pcsTanpaHargaJual += item.total_pcs;
 
-      if (hargaProduksi > 0) biayaProduksi += item.total_pcs * hargaProduksi;
+      const biayaItem = item.detail_keluar.reduce(
+        (sum, detail) => sum + detail.jumlah_pcs * hargaProduksiUntukUkuran(model, detail.ukuran),
+        0,
+      );
+      if (biayaItem > 0) biayaProduksi += biayaItem;
       else pcsTanpaHargaProduksi += item.total_pcs;
     }
 

@@ -138,6 +138,7 @@ export interface ModelBaju {
   // sebagai fallback untuk data lama atau ukuran yang belum diberi harga.
   harga_jual_per_ukuran?: Partial<Record<UkuranBaju, number>>;
   harga_produksi?: number;
+  harga_produksi_per_ukuran?: Partial<Record<UkuranBaju, number>>;
   tarif_cutting?: number;
   tarif_jahit?: number;
   tarif_steam?: number;
