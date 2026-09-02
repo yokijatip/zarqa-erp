@@ -50,11 +50,15 @@
     },
     {
       collection: "transaksi_keuangan",
-      label: "Transaksi Keuangan",
-      warning: "Pemasukan, pengeluaran, dan catatan pembelian bahan baku akan dihapus.",
+      label: "Riwayat Keuangan (Transaksi)",
+      warning: "Semua pemasukan, pengeluaran, dan catatan pembelian bahan baku akan dihapus.",
     },
     { collection: "aset_perusahaan", label: "Aset Perusahaan" },
-    { collection: "pembayaran_gaji", label: "Pembayaran Gaji" },
+    {
+      collection: "pembayaran_gaji",
+      label: "Riwayat Pembayaran Gaji",
+      warning: "Riwayat pembayaran gaji dan data penggajian yang sudah dibayar akan dihapus.",
+    },
   ];
 
   // Koleksi yang dilindungi — tidak pernah dihapus

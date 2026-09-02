@@ -6,12 +6,14 @@
   import { getModelBajuList } from "$lib/firebase/model-baju";
   import { getKaryawanList } from "$lib/firebase/karyawan";
   import { getPembayaranGajiPeriode, type PembayaranGajiRecord } from "$lib/firebase/penggajian";
-  import { getTransaksiKeuangan, kategoriLabel } from "$lib/firebase/keuangan";
+  import { getAsetPerusahaan, getTransaksiKeuangan, kategoriLabel } from "$lib/firebase/keuangan";
+  import { page } from "$app/stores";
   import { type DateRange, getPeriodRange } from "$lib/period";
   import type {
     BarangKeluar,
     BarangKeluarItem,
     BatchProduksi,
+    AsetPerusahaan,
     ModelBaju,
     StokBarangJadi,
     StokKain,
@@ -35,7 +37,7 @@
   type MoneyRow = { label: string; value: number; color: string };
 
   let dateRange = $state<DateRange>(getPeriodRange("bulan_ini"));
-  let activeTab = $state<ReportTab>("ringkasan");
+  let activeTab = $state<ReportTab>($page.url.searchParams.get("tab") === "keuangan" ? "keuangan" : "ringkasan");
   let loading = $state(true);
   let exporting = $state(false);
   let errorMsg = $state<string | null>(null);
@@ -49,10 +51,11 @@
   let transaksi = $state<TransaksiKeuangan[]>([]);
   let gaji = $state<PembayaranGajiRecord[]>([]);
   let karyawan = $state<UserProfile[]>([]);
+  let aset = $state<AsetPerusahaan[]>([]);
 
   const tabs: Array<{ id: ReportTab; label: string }> = [
     { id: "ringkasan", label: "Ringkasan" },
-    { id: "keuangan", label: "Keuangan" },
+    { id: "keuangan", label: "Laporan Keuangan" },
     { id: "produksi", label: "Produksi" },
     { id: "barang_keluar", label: "Barang Keluar" },
     { id: "stok", label: "Stok" },
@@ -190,10 +193,13 @@
   const kasMasuk = $derived(penjualan + pemasukanManual);
   const kasKeluar = $derived(pengeluaranManual + gajiTerbayar);
   const kasBersih = $derived(kasMasuk - kasKeluar);
+  const nilaiAset = $derived(aset.reduce((sum, item) => sum + (item.nilai_saat_ini ?? item.total_harga ?? 0), 0));
+  const nilaiPersediaanKain = $derived(stokKain.reduce((sum, item) => sum + item.stok_tersedia * (item.harga_per_unit ?? 0), 0));
   const stokJadiPcs = $derived(stokJadi.reduce((s, item) => s + item.stok_tersedia, 0));
   const stokPotonganPcs = $derived(stokPotongan.reduce((s, item) => s + item.stok_tersedia, 0));
   const stokKainTotal = $derived(stokKain.reduce((s, item) => s + item.stok_tersedia, 0));
   const nilaiGudang = $derived(stokJadi.reduce((s, item) => s + item.stok_tersedia * hargaProduksiUntukUkuran(modelMap.get(item.model_id), item.ukuran), 0));
+  const totalAset = $derived(kasBersih + nilaiAset + nilaiGudang + nilaiPersediaanKain);
 
   const incomeRows = $derived.by<MoneyRow[]>(() => {
     const map = new Map<string, number>();
@@ -335,6 +341,7 @@
         getTransaksiKeuangan(dateRange),
         getPembayaranGajiPeriode(dateRange),
         getKaryawanList(),
+        getAsetPerusahaan(),
       ]);
     } catch (error) {
       errorMsg = error instanceof Error ? error.message : "Gagal memuat laporan.";
@@ -479,8 +486,8 @@
 <div class="space-y-5">
   <div class="flex flex-wrap items-start justify-between gap-4">
     <div>
-      <h1 class="text-xl font-semibold text-gray-900">Laporan</h1>
-      <p class="mt-0.5 text-sm text-gray-500">Laporan operasional lengkap untuk produksi, barang keluar, stok, karyawan, dan tutup buku.</p>
+      <h1 class="text-xl font-semibold text-gray-900">{activeTab === "keuangan" ? "Laporan Keuangan" : "Laporan"}</h1>
+      <p class="mt-0.5 text-sm text-gray-500">{activeTab === "keuangan" ? "Laba rugi, arus kas, posisi aset, dan nilai persediaan." : "Laporan operasional lengkap untuk produksi, barang keluar, stok, karyawan, dan tutup buku."}</p>
     </div>
     <div class="flex flex-wrap items-center gap-2">
       <PeriodSelector bind:dateRange defaultPeriod="bulan_ini" />
@@ -597,6 +604,34 @@
               </Table.Body>
             </Table.Root>
           </div>
+        </div>
+      </section>
+
+      <section class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm xl:col-span-2">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <h2 class="text-sm font-semibold text-gray-800">Neraca Sederhana</h2>
+            <p class="mt-1 text-xs text-gray-500">Posisi aset berdasarkan data operasional yang tercatat.</p>
+          </div>
+          <span class="text-right text-xs text-gray-400">Total aset<strong class="mt-1 block text-base text-gray-900">{rupiah(totalAset)}</strong></span>
+        </div>
+        <div class="mt-4 divide-y divide-gray-100 rounded-lg border border-gray-100">
+          <div class="flex justify-between px-4 py-3 text-sm"><span>Kas tercatat</span><strong>{rupiah(kasBersih)}</strong></div>
+          <div class="flex justify-between px-4 py-3 text-sm"><span>Persediaan barang jadi</span><strong>{rupiah(nilaiGudang)}</strong></div>
+          <div class="flex justify-between px-4 py-3 text-sm"><span>Persediaan kain</span><strong>{rupiah(nilaiPersediaanKain)}</strong></div>
+          <div class="flex justify-between px-4 py-3 text-sm"><span>Aset tetap</span><strong>{rupiah(nilaiAset)}</strong></div>
+          <div class="flex justify-between bg-gray-50 px-4 py-3 text-sm"><span class="font-semibold">Total aset</span><strong>{rupiah(totalAset)}</strong></div>
+        </div>
+        <p class="mt-3 text-xs text-amber-700">Kewajiban dan modal belum dihitung karena modul utang/modal belum tersedia.</p>
+      </section>
+
+      <section class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
+        <h2 class="text-sm font-semibold text-gray-800">Ringkasan Arus Kas</h2>
+        <p class="mt-1 text-xs text-gray-500">Pergerakan kas pada periode laporan.</p>
+        <div class="mt-4 space-y-3">
+          <div class="flex justify-between text-sm"><span>Kas masuk</span><strong class="text-green-700">{rupiah(kasMasuk)}</strong></div>
+          <div class="flex justify-between text-sm"><span>Kas keluar</span><strong class="text-red-700">({rupiah(kasKeluar)})</strong></div>
+          <div class="flex justify-between border-t border-gray-100 pt-3 text-sm"><span class="font-semibold">Kas bersih</span><strong class={kasBersih < 0 ? "text-red-700" : "text-blue-700"}>{rupiah(kasBersih)}</strong></div>
         </div>
       </section>
     </div>
