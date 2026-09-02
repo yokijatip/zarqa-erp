@@ -5,7 +5,7 @@ import {
   query, orderBy, where,
 } from 'firebase/firestore';
 import { db } from './config';
-import type { StokPotongan, UkuranBaju } from '$lib/types';
+import { canonicalUkuran, ukuranAliases, type StokPotongan, type UkuranBaju } from '$lib/types';
 
 const COL = 'stok_potongan';
 
@@ -22,14 +22,32 @@ function buildStokPotonganDocId(modelId: string, ukuran: string, namaWarna?: str
 export async function getStokPotonganList(): Promise<StokPotongan[]> {
   const q = query(collection(db, COL), orderBy('nama_model'));
   const snap = await getDocs(q);
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as StokPotongan);
+  return mergeLegacySizes(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as StokPotongan));
+}
+
+function mergeLegacySizes(rows: StokPotongan[]): StokPotongan[] {
+  const merged = new Map<string, StokPotongan>();
+  for (const row of rows) {
+    const ukuran = canonicalUkuran(row.ukuran);
+    const key = `${row.model_id}|${row.nama_warna ?? ''}|${ukuran}`;
+    const current = merged.get(key);
+    if (!current) {
+      merged.set(key, { ...row, ukuran });
+      continue;
+    }
+    current.stok_tersedia += row.stok_tersedia;
+    current.total_masuk += row.total_masuk;
+    current.total_terpakai += row.total_terpakai;
+    current.sumber_cutting = [...(current.sumber_cutting ?? []), ...(row.sumber_cutting ?? [])];
+  }
+  return [...merged.values()];
 }
 
 // Ambil stok potongan untuk satu model (untuk dialog "dari potongan")
 export async function getStokPotonganByModel(modelId: string): Promise<StokPotongan[]> {
   const q = query(collection(db, COL), where('model_id', '==', modelId));
   const snap = await getDocs(q);
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as StokPotongan);
+  return mergeLegacySizes(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as StokPotongan));
 }
 
 // Tambah stok potongan — dipanggil saat cutting selesai dengan sisa yang disimpan
@@ -41,8 +59,8 @@ export async function tambahStokPotongan(
 ): Promise<void> {
   for (const item of detailDisimpan) {
     const q = warna?.nama_warna
-      ? query(collection(db, COL), where('model_id', '==', modelId), where('ukuran', '==', item.ukuran), where('nama_warna', '==', warna.nama_warna))
-      : query(collection(db, COL), where('model_id', '==', modelId), where('ukuran', '==', item.ukuran));
+      ? query(collection(db, COL), where('model_id', '==', modelId), where('ukuran', 'in', ukuranAliases(item.ukuran)), where('nama_warna', '==', warna.nama_warna))
+      : query(collection(db, COL), where('model_id', '==', modelId), where('ukuran', 'in', ukuranAliases(item.ukuran)));
     const snap = await getDocs(q);
     const ref = snap.empty
       ? doc(db, COL, buildStokPotonganDocId(modelId, item.ukuran, warna?.nama_warna))
@@ -86,7 +104,7 @@ export async function kurangiStokPotongan(
   const q = query(
     collection(db, COL),
     where('model_id', '==', modelId),
-    where('ukuran', '==', ukuran)
+    where('ukuran', 'in', ukuranAliases(ukuran))
   );
   const snap = await getDocs(q);
   if (snap.empty) throw new Error(`Stok potongan ukuran ${ukuran} tidak ditemukan`);

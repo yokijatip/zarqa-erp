@@ -5,7 +5,7 @@ import {
   query, orderBy, where, limit, Timestamp,
 } from 'firebase/firestore';
 import { db } from './config';
-import type { StokBarangJadi, BarangKeluar, BarangKeluarInput, RiwayatBarangJadi, TipeRiwayatBarangJadi, SumberProduksi, BatchProduksi, BarangKeluarItem } from '$lib/types';
+import { canonicalUkuran, ukuranAliases, type StokBarangJadi, type BarangKeluar, type BarangKeluarInput, type RiwayatBarangJadi, type TipeRiwayatBarangJadi, type SumberProduksi, type BatchProduksi, type BarangKeluarItem } from '$lib/types';
 
 const COL_RIWAYAT = 'riwayat_barang_jadi';
 
@@ -79,7 +79,25 @@ export function consumeSumberProduksiLots(
 export async function getStokBarangJadi(): Promise<StokBarangJadi[]> {
   const q = query(collection(db, COL_JADI), orderBy('nama_model'));
   const snap = await getDocs(q);
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as StokBarangJadi);
+  return mergeLegacySizes(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as StokBarangJadi));
+}
+
+function mergeLegacySizes(rows: StokBarangJadi[]): StokBarangJadi[] {
+  const merged = new Map<string, StokBarangJadi>();
+  for (const row of rows) {
+    const ukuran = canonicalUkuran(row.ukuran);
+    const key = `${row.model_id}|${row.nama_warna ?? ''}|${ukuran}`;
+    const current = merged.get(key);
+    if (!current) {
+      merged.set(key, { ...row, ukuran });
+      continue;
+    }
+    current.stok_tersedia += row.stok_tersedia;
+    current.total_masuk += row.total_masuk;
+    current.total_keluar += row.total_keluar;
+    current.sumber_produksi = [...(current.sumber_produksi ?? []), ...(row.sumber_produksi ?? [])];
+  }
+  return [...merged.values()];
 }
 
 // Tambah stok barang jadi setelah batch COMPLETED atau restock manual
@@ -92,8 +110,8 @@ export async function tambahStokBarangJadi(
 ): Promise<void> {
   for (const item of detailUkuran) {
     const q = warna?.nama_warna
-      ? query(collection(db, COL_JADI), where('model_id', '==', modelId), where('ukuran', '==', item.ukuran), where('nama_warna', '==', warna.nama_warna))
-      : query(collection(db, COL_JADI), where('model_id', '==', modelId), where('ukuran', '==', item.ukuran));
+      ? query(collection(db, COL_JADI), where('model_id', '==', modelId), where('ukuran', 'in', ukuranAliases(item.ukuran)), where('nama_warna', '==', warna.nama_warna))
+      : query(collection(db, COL_JADI), where('model_id', '==', modelId), where('ukuran', 'in', ukuranAliases(item.ukuran)));
     const snap = await getDocs(q);
     const ref = snap.empty
       ? doc(db, COL_JADI, buildBarangJadiDocId(modelId, item.ukuran, warna?.nama_warna))
@@ -182,8 +200,8 @@ export async function catatBarangKeluar(
   for (const item of keluarItems) {
     for (const detail of item.detail_keluar) {
       const q = item.nama_warna
-        ? query(collection(db, COL_JADI), where('model_id', '==', item.model_id), where('ukuran', '==', detail.ukuran), where('nama_warna', '==', item.nama_warna))
-        : query(collection(db, COL_JADI), where('model_id', '==', item.model_id), where('ukuran', '==', detail.ukuran));
+        ? query(collection(db, COL_JADI), where('model_id', '==', item.model_id), where('ukuran', 'in', ukuranAliases(detail.ukuran)), where('nama_warna', '==', item.nama_warna))
+        : query(collection(db, COL_JADI), where('model_id', '==', item.model_id), where('ukuran', 'in', ukuranAliases(detail.ukuran)));
       const snap = await getDocs(q);
       if (snap.empty) throw new Error(`Stok ${item.nama_model} ukuran ${detail.ukuran} tidak ditemukan`);
       stokRefs.set(`${item.model_id}|${item.nama_warna ?? ''}|${detail.ukuran}`, snap.docs[0].ref);
@@ -268,7 +286,7 @@ export async function getStokByModel(modelId: string): Promise<StokBarangJadi[]>
     where('model_id', '==', modelId)
   );
   const snap = await getDocs(q);
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as StokBarangJadi);
+  return mergeLegacySizes(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as StokBarangJadi));
 }
 
 // Kurangi stok manual (koreksi, loss, dll — dicatat ke total_keluar)
@@ -470,8 +488,8 @@ export async function prosesPendingBarangKeluar(
   const stokRefs = new Map<string, ReturnType<typeof doc>>();
   for (const detail of target.detail_keluar) {
     const q = target.nama_warna
-      ? query(collection(db, COL_JADI), where('model_id', '==', target.model_id), where('ukuran', '==', detail.ukuran), where('nama_warna', '==', target.nama_warna))
-      : query(collection(db, COL_JADI), where('model_id', '==', target.model_id), where('ukuran', '==', detail.ukuran));
+      ? query(collection(db, COL_JADI), where('model_id', '==', target.model_id), where('ukuran', 'in', ukuranAliases(detail.ukuran)), where('nama_warna', '==', target.nama_warna))
+      : query(collection(db, COL_JADI), where('model_id', '==', target.model_id), where('ukuran', 'in', ukuranAliases(detail.ukuran)));
     const snap = await getDocs(q);
     if (!snap.empty) {
       stokRefs.set(`${target.model_id}|${target.nama_warna ?? ''}|${detail.ukuran}`, snap.docs[0].ref);
@@ -631,8 +649,8 @@ export async function batalBarangKeluar(
   for (const item of keluarItems) {
     for (const detail of item.detail_keluar) {
       const q = item.nama_warna
-        ? query(collection(db, COL_JADI), where('model_id', '==', item.model_id), where('ukuran', '==', detail.ukuran), where('nama_warna', '==', item.nama_warna))
-        : query(collection(db, COL_JADI), where('model_id', '==', item.model_id), where('ukuran', '==', detail.ukuran));
+        ? query(collection(db, COL_JADI), where('model_id', '==', item.model_id), where('ukuran', 'in', ukuranAliases(detail.ukuran)), where('nama_warna', '==', item.nama_warna))
+        : query(collection(db, COL_JADI), where('model_id', '==', item.model_id), where('ukuran', 'in', ukuranAliases(detail.ukuran)));
       const snap = await getDocs(q);
       if (!snap.empty) stokRefs.set(`${item.model_id}|${item.nama_warna ?? ''}|${detail.ukuran}`, snap.docs[0].ref);
     }
@@ -714,8 +732,8 @@ export async function batalItemBarangKeluar(
   if (target.status !== 'pending') {
     for (const detail of target.detail_keluar) {
       const q = target.nama_warna
-        ? query(collection(db, COL_JADI), where('model_id', '==', target.model_id), where('ukuran', '==', detail.ukuran), where('nama_warna', '==', target.nama_warna))
-        : query(collection(db, COL_JADI), where('model_id', '==', target.model_id), where('ukuran', '==', detail.ukuran));
+        ? query(collection(db, COL_JADI), where('model_id', '==', target.model_id), where('ukuran', 'in', ukuranAliases(detail.ukuran)), where('nama_warna', '==', target.nama_warna))
+        : query(collection(db, COL_JADI), where('model_id', '==', target.model_id), where('ukuran', 'in', ukuranAliases(detail.ukuran)));
       const snap = await getDocs(q);
       if (!snap.empty) stokRefs.set(`${target.model_id}|${target.nama_warna ?? ''}|${detail.ukuran}`, snap.docs[0].ref);
     }
@@ -849,8 +867,8 @@ export async function returBarangKeluarItem(
   const stokRefs = new Map<string, ReturnType<typeof doc>>();
   for (const detail of normalized) {
     const q = target.nama_warna
-      ? query(collection(db, COL_JADI), where('model_id', '==', target.model_id), where('ukuran', '==', detail.ukuran), where('nama_warna', '==', target.nama_warna))
-      : query(collection(db, COL_JADI), where('model_id', '==', target.model_id), where('ukuran', '==', detail.ukuran));
+      ? query(collection(db, COL_JADI), where('model_id', '==', target.model_id), where('ukuran', 'in', ukuranAliases(detail.ukuran)), where('nama_warna', '==', target.nama_warna))
+      : query(collection(db, COL_JADI), where('model_id', '==', target.model_id), where('ukuran', 'in', ukuranAliases(detail.ukuran)));
     const snap = await getDocs(q);
     if (snap.empty) throw new Error(`Stok ${target.nama_model} ukuran ${detail.ukuran} tidak ditemukan`);
     stokRefs.set(`${target.model_id}|${target.nama_warna ?? ''}|${detail.ukuran}`, snap.docs[0].ref);

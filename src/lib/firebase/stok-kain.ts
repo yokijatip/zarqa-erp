@@ -25,6 +25,9 @@ function transaksiBahanBakuPayload(data: PembelianKainKeuangan) {
   return {
     tipe: 'pengeluaran',
     kategori: 'bahan_baku',
+    // Kain dicatat sebagai persediaan. Beban baru muncul melalui HPP saat barang terjual.
+    dampak_laba_rugi: false,
+    jenis_transaksi: 'pembelian_persediaan',
     tanggal: Timestamp.fromDate(data.tanggal),
     nominal: Math.max(0, Number(data.nominal) || 0),
     deskripsi: data.deskripsi.trim(),

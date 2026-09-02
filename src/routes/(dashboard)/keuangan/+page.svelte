@@ -70,6 +70,7 @@
     hpp?: number;
     labaKotor?: number;
     referensi?: string;
+    isInventoryPurchase?: boolean;
   };
 
   let reportDateRange = $state<DateRange>(getPeriodRange("semua"));
@@ -203,6 +204,7 @@
       deskripsi: trx.deskripsi,
       nominal: trx.nominal,
       referensi: trx.referensi,
+      isInventoryPurchase: trx.tipe === "pengeluaran" && (trx.kategori === "bahan_baku" || trx.dampak_laba_rugi === false),
     })),
   );
 
@@ -237,9 +239,12 @@
     const pemasukan = penjualan + pemasukanManual;
     const hpp = overviewLines.filter((line) => line.source === "penjualan").reduce((sum, line) => sum + (line.hpp ?? 0), 0);
     const pengeluaran = overviewLines
-      .filter((line) => line.tipe === "pengeluaran" && !(line.source === "gaji" && line.jenisGaji === "produksi"))
+      .filter((line) => line.tipe === "pengeluaran" && !line.isInventoryPurchase && !(line.source === "gaji" && line.jenisGaji === "produksi"))
       .reduce((sum, line) => sum + line.nominal, 0);
-    return { penjualan, pemasukanManual, pemasukan, hpp, pengeluaran, labaBersih: pemasukan - hpp - pengeluaran };
+    const pembelianPersediaan = overviewLines
+      .filter((line) => line.isInventoryPurchase)
+      .reduce((sum, line) => sum + line.nominal, 0);
+    return { penjualan, pemasukanManual, pemasukan, hpp, pengeluaran, pembelianPersediaan, labaBersih: pemasukan - hpp - pengeluaran };
   });
 
   let filteredLines = $derived.by(() => {
@@ -273,14 +278,17 @@
     const hpp = reportSalesLines.reduce((sum, line) => sum + (line.hpp ?? 0), 0);
     const pemasukanManual = reportManualLines.filter((line) => line.tipe === "pemasukan").reduce((sum, line) => sum + line.nominal, 0);
     const pembelianAset = reportManualLines.filter((line) => line.tipe === "pengeluaran" && line.kategori === "Aset").reduce((sum, line) => sum + line.nominal, 0);
-    const pengeluaranOperasional = reportManualLines.filter((line) => line.tipe === "pengeluaran" && line.kategori !== "Aset").reduce((sum, line) => sum + line.nominal, 0);
+    const pengeluaranOperasional = reportManualLines
+      .filter((line) => line.tipe === "pengeluaran" && !line.isInventoryPurchase && line.kategori !== "Aset")
+      .reduce((sum, line) => sum + line.nominal, 0);
+    const pembelianPersediaan = reportManualLines.filter((line) => line.isInventoryPurchase).reduce((sum, line) => sum + line.nominal, 0);
     const gajiTerbayar = reportPayrollLines.reduce((sum, line) => sum + line.nominal, 0);
     const gajiProduksiTerbayar = reportPayrollLines.filter((line) => line.jenisGaji === "produksi").reduce((sum, line) => sum + line.nominal, 0);
     const gajiRegulerTerbayar = reportPayrollLines.filter((line) => line.jenisGaji === "reguler").reduce((sum, line) => sum + line.nominal, 0);
     const paidRegularUids = new Set(reportPayrollLines.filter((line) => line.jenisGaji === "reguler").map((line) => line.karyawanUid));
     const gajiRegulerEstimasi = regularSalaryRows.filter((line) => !paidRegularUids.has(line.uid)).reduce((sum, line) => sum + line.nominal, 0);
     const totalBebanGaji = gajiRegulerTerbayar + gajiRegulerEstimasi;
-    const totalPengeluaranKas = pengeluaranOperasional + pembelianAset + gajiTerbayar;
+    const totalPengeluaranKas = pengeluaranOperasional + pembelianPersediaan + pembelianAset + gajiTerbayar;
     const labaKotor = penjualan - hpp;
     const labaBersih = labaKotor + pemasukanManual - pengeluaranOperasional - totalBebanGaji;
     const kasTercatat = penjualan + pemasukanManual - totalPengeluaranKas;
@@ -300,6 +308,7 @@
       pemasukanManual,
       pengeluaranOperasional,
       pembelianAset,
+      pembelianPersediaan,
       gajiTerbayar,
       gajiProduksiTerbayar,
       gajiRegulerTerbayar,
@@ -403,7 +412,7 @@
 
   let expenseBreakdown = $derived.by(() => {
     const map = new Map<string, number>();
-    for (const trx of transaksiManual.filter((item) => item.tipe === "pengeluaran")) {
+    for (const trx of transaksiManual.filter((item) => item.tipe === "pengeluaran" && item.kategori !== "bahan_baku" && item.dampak_laba_rugi !== false)) {
       const label = kategoriLabel(trx.tipe, trx.kategori);
       map.set(label, (map.get(label) ?? 0) + trx.nominal);
     }

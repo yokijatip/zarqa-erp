@@ -11,7 +11,7 @@ import {
 import { db } from './config';
 import { createRejectItemsInTransaction } from './reject-items';
 import { appendSumberProduksiLot } from './barang-jadi';
-import type { BatchProduksi, BatchProduksiInput, StatusBatch, RiwayatProses, PenugasanWorker, DetailUkuran, KainDigunakan, ModelBaju, SumberCutting, RejectAttribusi, SumberProduksi } from '$lib/types';
+import { ukuranAliases, type BatchProduksi, type BatchProduksiInput, type StatusBatch, type RiwayatProses, type PenugasanWorker, type DetailUkuran, type KainDigunakan, type ModelBaju, type SumberCutting, type RejectAttribusi, type SumberProduksi } from '$lib/types';
 
 const COL = 'batch_produksi';
 
@@ -306,8 +306,8 @@ export async function createBatchDariPotongan(
 
   for (const du of data.detail_ukuran) {
     const q = data.nama_warna
-      ? query(collection(db, 'stok_potongan'), where('model_id', '==', data.model_id), where('ukuran', '==', du.ukuran), where('nama_warna', '==', data.nama_warna))
-      : query(collection(db, 'stok_potongan'), where('model_id', '==', data.model_id), where('ukuran', '==', du.ukuran));
+      ? query(collection(db, 'stok_potongan'), where('model_id', '==', data.model_id), where('ukuran', 'in', ukuranAliases(du.ukuran)), where('nama_warna', '==', data.nama_warna))
+      : query(collection(db, 'stok_potongan'), where('model_id', '==', data.model_id), where('ukuran', 'in', ukuranAliases(du.ukuran)));
     const snap = await getDocs(q);
     if (snap.empty) throw new Error(`Stok potongan ukuran ${du.ukuran} tidak ditemukan`);
     stokPotonganRefs.set(du.ukuran, snap.docs[0].ref);
@@ -748,8 +748,8 @@ export async function sinkronStokPotonganBatch(batchId: string): Promise<void> {
   const stokRefs = new Map<string, ReturnType<typeof doc>>();
   for (const item of detailBerhasil) {
     const q = batch.nama_warna
-      ? query(collection(db, 'stok_potongan'), where('model_id', '==', batch.model_id), where('ukuran', '==', item.ukuran), where('nama_warna', '==', batch.nama_warna))
-      : query(collection(db, 'stok_potongan'), where('model_id', '==', batch.model_id), where('ukuran', '==', item.ukuran));
+      ? query(collection(db, 'stok_potongan'), where('model_id', '==', batch.model_id), where('ukuran', 'in', ukuranAliases(item.ukuran)), where('nama_warna', '==', batch.nama_warna))
+      : query(collection(db, 'stok_potongan'), where('model_id', '==', batch.model_id), where('ukuran', 'in', ukuranAliases(item.ukuran)));
     const snap = await getDocs(q);
     const ref = snap.empty
       ? doc(db, 'stok_potongan', buildStokPotonganDocId(batch.model_id, item.ukuran, batch.nama_warna))
@@ -862,8 +862,8 @@ export async function completeBatchProduksi(
   const stokBarangJadiRefs = new Map<string, ReturnType<typeof doc>>();
   for (const item of detailBerhasil) {
     const q = batch.nama_warna
-      ? query(collection(db, 'stok_barang_jadi'), where('model_id', '==', batch.model_id), where('ukuran', '==', item.ukuran), where('nama_warna', '==', batch.nama_warna))
-      : query(collection(db, 'stok_barang_jadi'), where('model_id', '==', batch.model_id), where('ukuran', '==', item.ukuran));
+      ? query(collection(db, 'stok_barang_jadi'), where('model_id', '==', batch.model_id), where('ukuran', 'in', ukuranAliases(item.ukuran)), where('nama_warna', '==', batch.nama_warna))
+      : query(collection(db, 'stok_barang_jadi'), where('model_id', '==', batch.model_id), where('ukuran', 'in', ukuranAliases(item.ukuran)));
     const snap = await getDocs(q);
     const ref = snap.empty
       ? doc(db, 'stok_barang_jadi', buildBarangJadiId(batch.model_id, item.ukuran, batch.nama_warna))

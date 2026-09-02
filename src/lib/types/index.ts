@@ -115,9 +115,24 @@ export type StokKainInput = Omit<StokKain, 'id' | 'stok_terpakai' | 'updatedAt'>
 
 // ─── MODEL BAJU ──────────────────────────────────────────────────
 
-export type UkuranBaju = 'XS' | 'S' | 'M' | 'L' | 'XL' | 'XXL';
+export type UkuranBaju = 'XS' | 'M/S' | 'L/XL' | 'XXL';
 
-export const UKURAN_ORDER: UkuranBaju[] = ['XS', 'S', 'M', 'L', 'XL', 'XXL'];
+export const UKURAN_ORDER: UkuranBaju[] = ['XS', 'M/S', 'L/XL', 'XXL'];
+
+// Alias ukuran lama dipertahankan untuk membaca histori Firestore.
+export function canonicalUkuran(value: string): UkuranBaju {
+  if (value === 'S' || value === 'M' || value === 'M/S') return 'M/S';
+  if (value === 'L' || value === 'XL' || value === 'L/XL') return 'L/XL';
+  if (value === 'XS' || value === 'XXL') return value;
+  return value as UkuranBaju;
+}
+
+export function ukuranAliases(value: string): string[] {
+  const ukuran = canonicalUkuran(value);
+  if (ukuran === 'M/S') return ['M/S', 'M', 'S'];
+  if (ukuran === 'L/XL') return ['L/XL', 'L', 'XL'];
+  return [ukuran];
+}
 
 export interface WarnaTersedia {
   warna_id: string;
@@ -479,6 +494,9 @@ export interface TransaksiKeuangan {
   metode?: 'cash' | 'transfer' | 'e-wallet' | 'lainnya';
   referensi?: string;
   catatan?: string;
+  /** Pembelian persediaan mengurangi kas, bukan laba rugi saat dibeli. */
+  dampak_laba_rugi?: boolean;
+  jenis_transaksi?: 'pembelian_persediaan' | 'operasional';
   dibuat_oleh_uid?: string;
   dibuat_oleh_nama?: string;
   createdAt?: Timestamp;

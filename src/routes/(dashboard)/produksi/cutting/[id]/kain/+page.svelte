@@ -10,6 +10,7 @@
     type KainDigunakan,
     type ModelBaju,
     type StokKain,
+    canonicalUkuran,
     type UkuranBaju,
   } from "$lib/types";
   import * as Select from "$lib/components/ui/select";
@@ -137,7 +138,9 @@
       batch = batchData;
       model = models.find((item) => item.id === batchData?.model_id) ?? null;
       stokKainList = kain;
-      fUkuran = (batchData?.detail_ukuran[0]?.ukuran ?? "") as UkuranBaju | "";
+      fUkuran = batchData?.detail_ukuran[0]?.ukuran
+        ? canonicalUkuran(batchData.detail_ukuran[0].ukuran)
+        : "";
       fKain = [];
       addKain();
       if (!batchData) errorMsg = "Batch tidak ditemukan.";
@@ -214,7 +217,7 @@
             <Select.Root type="single" value={fUkuran || undefined} onValueChange={(value) => (fUkuran = (value ?? "") as UkuranBaju | "")}>
               <Select.Trigger class="w-full">{fUkuran || "Pilih ukuran"}</Select.Trigger>
               <Select.Content preventScroll={false}>
-                {#each model?.ukuran_tersedia ?? [] as ukuran}
+                {#each [...new Set((model?.ukuran_tersedia ?? []).map((ukuran) => canonicalUkuran(ukuran)))] as ukuran}
                   <Select.Item value={ukuran}>{ukuran}</Select.Item>
                 {/each}
               </Select.Content>

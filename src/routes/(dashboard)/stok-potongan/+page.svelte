@@ -14,7 +14,7 @@
   import PencilIcon from "@lucide/svelte/icons/pencil";
   import Trash2Icon from "@lucide/svelte/icons/trash-2";
 
-  const URUTAN_UKURAN: UkuranBaju[] = ['XS', 'S', 'M', 'L', 'XL', 'XXL'];
+  const URUTAN_UKURAN: UkuranBaju[] = ['XS', 'M/S', 'L/XL', 'XXL'];
 
   // ── State ──────────────────────────────────────────────────────────
   let stokList = $state<StokPotongan[]>([]);

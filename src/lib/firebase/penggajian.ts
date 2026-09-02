@@ -11,6 +11,7 @@ import { collectionGroup, getDocs, getDoc, doc, collection, addDoc, serverTimest
 import { db } from './config';
 import { consumeSumberCuttingLots } from './batch-produksi';
 import { getKaryawanList } from './karyawan';
+import { canonicalUkuran } from '$lib/types';
 import type {
   RiwayatProses,
   StatusBatch,
@@ -128,7 +129,7 @@ async function getBatchMap(batchIds: string[]): Promise<Map<string, BatchProduks
 
 // Cari lot-lot sumber cutting
 function cariSumberCutting(batch: BatchProduksi, ukuran: string, qty: number): PenggajianSumberLot[] {
-  const lotUkuran = (batch.sumber_cutting ?? []).filter((l) => (l.ukuran ?? '') === ukuran);
+  const lotUkuran = (batch.sumber_cutting ?? []).filter((l) => canonicalUkuran(l.ukuran ?? '') === canonicalUkuran(ukuran));
   if (lotUkuran.length > 0) {
     const { consumed } = consumeSumberCuttingLots(lotUkuran, qty);
     return consumed.map((l) => ({
@@ -391,14 +392,14 @@ export function hitungGajiKaryawan(
 
     // Add warna+ukuran detail
     const existingWarnaUkuran = modelEntry.detail_warna_ukuran.find(
-      w => (w.nama_warna ?? '') === (b.nama_warna ?? '') && w.ukuran === b.ukuran
+      w => (w.nama_warna ?? '') === (b.nama_warna ?? '') && canonicalUkuran(w.ukuran) === canonicalUkuran(b.ukuran)
     );
     if (existingWarnaUkuran) {
       existingWarnaUkuran.pcs += b.pcs;
     } else {
       modelEntry.detail_warna_ukuran.push({
         nama_warna: b.nama_warna,
-        ukuran: b.ukuran,
+        ukuran: canonicalUkuran(b.ukuran),
         pcs: b.pcs,
       });
     }

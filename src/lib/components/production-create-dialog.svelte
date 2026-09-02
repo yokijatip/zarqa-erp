@@ -13,6 +13,7 @@
   import { currentUser } from "$lib/stores/auth.store";
   import {
     UKURAN_ORDER,
+    canonicalUkuran,
     type BatchProduksi,
     type ModelBaju,
     type SumberCutting,
@@ -96,6 +97,9 @@
   let selectedModel = $derived(
     modelList.find((model) => model.id === fModelId) ?? null,
   );
+  let selectedModelUkuran = $derived(
+    [...new Set((selectedModel?.ukuran_tersedia ?? []).map((ukuran) => canonicalUkuran(ukuran)))],
+  );
   let stokPotonganGroups = $derived.by(() => {
     const map = new Map<string, StokPotonganGroup>();
 
@@ -164,7 +168,7 @@
   let ukuranTersedia = $derived(
     mode === "jahit"
       ? (selectedPotonganGroup?.ukuran_tersedia ?? [])
-      : (selectedModel?.ukuran_tersedia ?? []),
+      : selectedModelUkuran,
   );
 
   let stokKainGroups = $derived.by(() => {
@@ -198,6 +202,16 @@
   function applyDefaultYardPerPcs() {
     const value = defaultYardPerPcs();
     fKain = fKain.map((k) => ({ ...k, yard_per_pcs: value }));
+  }
+
+  function updateKainField(
+    index: number,
+    field: "jumlah_dipakai" | "yard_per_pcs",
+    value: string,
+  ) {
+    fKain = fKain.map((kain, currentIndex) =>
+      currentIndex === index ? { ...kain, [field]: value } : kain,
+    );
   }
 
   // Total yard kain yang dipakai (sum dari semua kain entry) — hanya info,
@@ -352,7 +366,12 @@
     loadingModels = true;
     try {
       const allModels = await modelBajuCache.get();
-      modelList = allModels.filter((model) => model.aktif);
+      modelList = allModels
+        .filter((model) => model.aktif)
+        .map((model) => ({
+          ...model,
+          ukuran_tersedia: [...new Set(model.ukuran_tersedia.map((ukuran) => canonicalUkuran(ukuran)))],
+        }));
     } finally {
       loadingModels = false;
     }
@@ -722,7 +741,7 @@
                 {fUkuran || "— Pilih ukuran —"}
               </Select.Trigger>
               <Select.Content preventScroll={false}>
-                {#each selectedModel?.ukuran_tersedia ?? [] as ukuran}
+                {#each selectedModelUkuran as ukuran}
                   <Select.Item value={ukuran}>{ukuran}</Select.Item>
                 {/each}
               </Select.Content>
@@ -971,7 +990,8 @@
                           type="number"
                           step="0.1"
                           min="0"
-                          bind:value={kainEntry.jumlah_dipakai}
+                          value={kainEntry.jumlah_dipakai}
+                          oninput={(event) => updateKainField(i, "jumlah_dipakai", (event.currentTarget as HTMLInputElement).value)}
                           placeholder="0"
                           class="h-8 w-full rounded-md border border-gray-200 bg-white px-3 text-xs text-gray-700 placeholder:text-gray-400"
                         />
@@ -984,7 +1004,8 @@
                           type="number"
                           step="0.1"
                           min="0"
-                          bind:value={kainEntry.yard_per_pcs}
+                          value={kainEntry.yard_per_pcs}
+                          oninput={(event) => updateKainField(i, "yard_per_pcs", (event.currentTarget as HTMLInputElement).value)}
                           placeholder="2.4"
                           class="h-8 w-full rounded-md border border-gray-200 bg-white px-3 text-xs text-gray-700 placeholder:text-gray-400"
                         />

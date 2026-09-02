@@ -1,4 +1,4 @@
-import type { BarangKeluar, BarangKeluarItem, ModelBaju, UkuranBaju } from '$lib/types';
+import { canonicalUkuran, type BarangKeluar, type BarangKeluarItem, type ModelBaju, type UkuranBaju } from '$lib/types';
 
 export type SalesItemRow = {
   listId: string;
@@ -112,11 +112,11 @@ function modelPrice(modelList: ModelBaju[], modelId: string, modelName?: string)
 }
 
 export function hargaJualUntukUkuran(model: ModelBaju | undefined, ukuran: string): number {
-  return model?.harga_jual_per_ukuran?.[ukuran as UkuranBaju] ?? model?.harga_jual ?? 0;
+  return model?.harga_jual_per_ukuran?.[canonicalUkuran(ukuran)] ?? model?.harga_jual ?? 0;
 }
 
 export function hargaProduksiUntukUkuran(model: ModelBaju | undefined, ukuran: string): number {
-  return model?.harga_produksi_per_ukuran?.[ukuran as UkuranBaju] ?? model?.harga_produksi ?? 0;
+  return model?.harga_produksi_per_ukuran?.[canonicalUkuran(ukuran)] ?? model?.harga_produksi ?? 0;
 }
 
 function effectivePrice(snapshot: number | undefined, fallback: number): number {
