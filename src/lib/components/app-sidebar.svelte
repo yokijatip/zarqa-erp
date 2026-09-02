@@ -100,7 +100,7 @@
       icon: BarChartIcon,
       items: [
         { title: "Laporan Keuangan", url: "/laporan?tab=keuangan" },
-        { title: "Laporan Gaji", url: "/karyawan/penggajian" },
+        { title: "Laporan Gaji", url: "/laporan/gaji" },
         { title: "Aktivitas Akun", url: "/laporan/aktivitas" },
       ],
     },
