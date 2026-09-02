@@ -43,9 +43,7 @@
   let fDeskripsi = $state("");
   let fUkuran = $state<UkuranBaju[]>([]);
   let fWarna = $state<WarnaTersedia[]>([]);
-  let fHargaJual = $state("");
   let fHargaJualByUkuran = $state<Partial<Record<UkuranBaju, string>>>({});
-  let fHargaProduksi = $state("");
   let fHargaProduksiByUkuran = $state<Partial<Record<UkuranBaju, string>>>({});
   let fKebutuhanYard = $state<Partial<Record<UkuranBaju, string>>>({});
   let fTarifCutting = $state("");
@@ -110,9 +108,7 @@
     fDeskripsi = "";
     fUkuran = [];
     fWarna = [];
-    fHargaJual = "";
     fHargaJualByUkuran = {};
-    fHargaProduksi = "";
     fHargaProduksiByUkuran = {};
     fKebutuhanYard = {};
     fTarifCutting = "";
@@ -134,14 +130,12 @@
     fDeskripsi = model.deskripsi ?? "";
     fUkuran = [...model.ukuran_tersedia];
     fWarna = [...(model.warna_tersedia ?? [])];
-    fHargaJual = model.harga_jual != null ? String(model.harga_jual) : "";
     fHargaJualByUkuran = Object.fromEntries(
       Object.entries(model.harga_jual_per_ukuran ?? {}).map(([ukuran, value]) => [
         ukuran,
         value != null ? String(value) : "",
       ]),
     ) as Partial<Record<UkuranBaju, string>>;
-    fHargaProduksi = model.harga_produksi != null ? String(model.harga_produksi) : "";
     fHargaProduksiByUkuran = Object.fromEntries(
       Object.entries(model.harga_produksi_per_ukuran ?? {}).map(([ukuran, value]) => [ukuran, value != null ? String(value) : ""]),
     ) as Partial<Record<UkuranBaju, string>>;
@@ -217,13 +211,13 @@
             .map((ukuran) => [ukuran, Number(fKebutuhanYard[ukuran]) || 0] as const)
             .filter(([, value]) => value > 0),
         ),
-        harga_jual: Number(fHargaJual) || 0,
+        harga_jual: 0,
         harga_jual_per_ukuran: Object.fromEntries(
           fUkuran
             .map((ukuran) => [ukuran, Number(fHargaJualByUkuran[ukuran]) || 0] as const)
             .filter(([, value]) => value > 0),
         ),
-        harga_produksi: Number(fHargaProduksi) || 0,
+        harga_produksi: 0,
         harga_produksi_per_ukuran: Object.fromEntries(
           fUkuran
             .map((ukuran) => [ukuran, Number(fHargaProduksiByUkuran[ukuran]) || 0] as const)
@@ -637,7 +631,7 @@
                         id={`harga-produksi-${ukuran}`}
                         type="number"
                         min="0"
-                        placeholder={fHargaProduksi || "0"}
+                        placeholder="0"
                         value={fHargaProduksiByUkuran[ukuran] ?? ""}
                         oninput={(e) => {
                           fHargaProduksiByUkuran = {
@@ -1044,29 +1038,13 @@
         <!-- Harga (Opsional) -->
         <div class="rounded-lg border border-gray-200 bg-gray-50/70 p-3.5 space-y-2.5">
           <div>
-            <p class="text-xs font-semibold text-gray-800">Harga Model (Opsional)</p>
-            <p class="text-[11px] text-gray-500">Harga jual dan estimasi harga produksi per pcs.</p>
-          </div>
-          <div class="grid grid-cols-2 gap-2.5">
-            <div>
-              <label class="block text-[11px] font-medium text-gray-700 mb-1" for="harga-jual-model">Harga Jual</label>
-              <div class="relative">
-                <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-gray-400">Rp</span>
-                <Input id="harga-jual-model" type="number" min="0" placeholder="0" bind:value={fHargaJual} class="pl-7 text-xs h-8" />
-              </div>
-            </div>
-            <div>
-              <label class="block text-[11px] font-medium text-gray-700 mb-1" for="harga-produksi-model">Harga Produksi</label>
-              <div class="relative">
-                <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-gray-400">Rp</span>
-                <Input id="harga-produksi-model" type="number" min="0" placeholder="0" bind:value={fHargaProduksi} class="pl-7 text-xs h-8" />
-              </div>
-            </div>
+            <p class="text-xs font-semibold text-gray-800">Harga per Ukuran (Opsional)</p>
+            <p class="text-[11px] text-gray-500">Masukkan harga jual dan harga produksi untuk setiap ukuran.</p>
           </div>
           {#if fUkuran.length > 0}
             <div class="border-t border-gray-200 pt-2.5">
               <p class="mb-1.5 text-[11px] font-medium text-gray-700">Harga jual per ukuran</p>
-              <p class="mb-2 text-[11px] text-gray-500">Kosongkan jika memakai harga jual umum di atas.</p>
+              <p class="mb-2 text-[11px] text-gray-500">Harga jual tiap ukuran.</p>
               <div class="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
                 {#each fUkuran as ukuran}
                   <div>
@@ -1079,11 +1057,41 @@
                         id={`harga-jual-${ukuran}`}
                         type="number"
                         min="0"
-                        placeholder={fHargaJual || "0"}
+                        placeholder="0"
                         value={fHargaJualByUkuran[ukuran] ?? ""}
                         oninput={(e) => {
                           fHargaJualByUkuran = {
                             ...fHargaJualByUkuran,
+                            [ukuran]: (e.currentTarget as HTMLInputElement).value,
+                          };
+                        }}
+                        class="h-8 pl-7 text-xs"
+                      />
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            </div>
+            <div class="border-t border-gray-200 pt-2.5">
+              <p class="mb-1.5 text-[11px] font-medium text-gray-700">Harga produksi per ukuran</p>
+              <p class="mb-2 text-[11px] text-gray-500">Harga pokok produksi tiap ukuran.</p>
+              <div class="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+                {#each fUkuran as ukuran}
+                  <div>
+                    <label class="mb-1 block text-[11px] font-medium text-gray-700" for={`harga-produksi-${ukuran}`}>
+                      {ukuran}
+                    </label>
+                    <div class="relative">
+                      <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-gray-400">Rp</span>
+                      <Input
+                        id={`harga-produksi-${ukuran}`}
+                        type="number"
+                        min="0"
+                        placeholder="0"
+                        value={fHargaProduksiByUkuran[ukuran] ?? ""}
+                        oninput={(e) => {
+                          fHargaProduksiByUkuran = {
+                            ...fHargaProduksiByUkuran,
                             [ukuran]: (e.currentTarget as HTMLInputElement).value,
                           };
                         }}

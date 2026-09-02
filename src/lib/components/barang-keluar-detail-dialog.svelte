@@ -39,10 +39,20 @@
         ];
   }
 
-  function itemSummary(item: BarangKeluarItem): string {
-    return item.detail_keluar
-      .map((d) => `${d.ukuran}: ${d.jumlah_pcs}`)
-      .join(", ");
+  function modelForItem(item: BarangKeluarItem): ModelBaju | undefined {
+    return modelList.find((model) => model.id === item.model_id) ??
+      modelList.find((model) => model.nama_model.trim().toLowerCase() === item.nama_model.trim().toLowerCase());
+  }
+
+  function priceForDetail(item: BarangKeluarItem, ukuran: string): number {
+    const detail = item.detail_keluar.find((entry) => entry.ukuran === ukuran);
+    const model = modelForItem(item);
+    const fallback = hargaJualUntukUkuran(model, ukuran);
+    return detail?.harga_jual != null && detail.harga_jual > 0 ? detail.harga_jual : fallback;
+  }
+
+  function totalItemJual(item: BarangKeluarItem): number {
+    return item.detail_keluar.reduce((sum, detail) => sum + detail.jumlah_pcs * priceForDetail(item, detail.ukuran), 0);
   }
 
   function escapeHtml(value: unknown): string {
@@ -331,9 +341,11 @@
                     <p class="text-sm font-medium text-gray-800">
                       {item.nama_model}{item.nama_warna ? ` - ${item.nama_warna}` : ""}
                     </p>
-                    <p class="mt-0.5 text-xs text-gray-500">
-                      {itemSummary(item)}
-                    </p>
+                    <div class="mt-1 space-y-0.5 text-xs text-gray-500">
+                      {#each item.detail_keluar as detail}
+                        <p>{detail.ukuran}: {detail.jumlah_pcs} pcs x {formatRupiah(priceForDetail(item, detail.ukuran))}</p>
+                      {/each}
+                    </div>
                   </div>
                   <span
                     class="rounded-full px-2 py-0.5 text-xs font-medium {item.status === 'pending'
@@ -348,6 +360,10 @@
                     {item.alasan_pending}
                   </p>
                 {/if}
+                <div class="mt-2 flex items-center justify-between border-t border-gray-200 pt-2 text-xs">
+                  <span class="text-gray-500">Total penjualan</span>
+                  <span class="font-semibold text-green-700">{formatRupiah(item.status === "pending" ? 0 : totalItemJual(item))}</span>
+                </div>
                 {#if (item.status === "pending" && onResolvePending) || onCancelItem}
                   <div class="mt-2 flex justify-end gap-2">
                     <Button

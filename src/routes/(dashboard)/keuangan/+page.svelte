@@ -798,35 +798,6 @@
         valueClass={summary.labaKotor < 0 ? "text-red-600" : "text-gray-900"}
       />
     </div>
-  {:else if pageMode === "pemasukan"}
-    <div class="mb-5 grid grid-cols-1 gap-4 md:grid-cols-3">
-      <StatCard
-        title="Penjualan"
-        value={rupiah(summary.penjualan)}
-        icon={TrendingUpIcon}
-        {loading}
-        footerSubtext="otomatis dari barang keluar"
-        class="border-green-100 bg-green-50"
-        valueClass="text-green-700"
-      />
-      <StatCard
-        title="Pemasukan Lain"
-        value={rupiah(summary.pemasukanManual)}
-        icon={BanknoteIcon}
-        {loading}
-        footerSubtext="input manual"
-        class="border-blue-100 bg-blue-50"
-        valueClass="text-blue-700"
-      />
-      <StatCard
-        title="Total Masuk"
-        value={rupiah(summary.penjualan + summary.pemasukanManual)}
-        icon={WalletIcon}
-        {loading}
-        footerSubtext={`${incomeLines.length} transaksi`}
-        valueClass="text-gray-900"
-      />
-    </div>
   {:else}
     <div class="mb-5 grid grid-cols-1 gap-4 md:grid-cols-3">
       <StatCard
@@ -1032,8 +1003,9 @@
             <p class="mt-2 text-xl font-bold text-blue-800">{rupiah(summary.pemasukanManual)}</p>
           </div>
           <div class="rounded-xl bg-gray-50 p-4">
-            <p class="text-xs text-gray-500">Jumlah Transaksi</p>
-            <p class="mt-2 text-xl font-bold text-gray-900">{incomeLines.length}</p>
+            <p class="text-xs text-gray-500">Total Masuk</p>
+            <p class="mt-2 text-xl font-bold text-gray-900">{rupiah(summary.penjualan + summary.pemasukanManual)}</p>
+            <p class="mt-1 text-[11px] text-gray-400">{incomeLines.length} transaksi</p>
           </div>
         </div>
         <div class="mt-5 space-y-3">
