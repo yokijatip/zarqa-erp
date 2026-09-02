@@ -616,36 +616,6 @@
                 {/each}
               </div>
             </div>
-            <div class="border-t border-gray-200 pt-2.5">
-              <p class="mb-1.5 text-[11px] font-medium text-gray-700">Harga produksi per ukuran</p>
-              <p class="mb-2 text-[11px] text-gray-500">Kosongkan jika memakai harga produksi umum di atas.</p>
-              <div class="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
-                {#each fUkuran as ukuran}
-                  <div>
-                    <label class="mb-1 block text-[11px] font-medium text-gray-700" for={`harga-produksi-${ukuran}`}>
-                      {ukuran}
-                    </label>
-                    <div class="relative">
-                      <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-gray-400">Rp</span>
-                      <Input
-                        id={`harga-produksi-${ukuran}`}
-                        type="number"
-                        min="0"
-                        placeholder="0"
-                        value={fHargaProduksiByUkuran[ukuran] ?? ""}
-                        oninput={(e) => {
-                          fHargaProduksiByUkuran = {
-                            ...fHargaProduksiByUkuran,
-                            [ukuran]: (e.currentTarget as HTMLInputElement).value,
-                          };
-                        }}
-                        class="h-8 pl-7 text-xs"
-                      />
-                    </div>
-                  </div>
-                {/each}
-              </div>
-            </div>
           {/if}
 
           {#if Object.values(model.kebutuhan_yard_per_pcs ?? {}).some((v) => (v ?? 0) > 0)}
@@ -663,22 +633,32 @@
             </div>
           {/if}
 
-          <!-- Harga -->
-          {#if (model.harga_jual || model.harga_produksi)}
-            <div>
-              <p class="mb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
-                Harga
-              </p>
-              <div class="flex flex-wrap gap-1.5 text-xs">
-                {#if model.harga_jual}
-                  <span class="rounded-md border border-green-100 bg-green-50 px-2 py-0.5 font-medium text-green-700">Jual: Rp{model.harga_jual.toLocaleString("id-ID")}</span>
-                {/if}
-                {#if model.harga_produksi}
-                  <span class="rounded-md border border-gray-200 bg-gray-50 px-2 py-0.5 font-medium text-gray-700">Produksi: Rp{model.harga_produksi.toLocaleString("id-ID")}</span>
-                {/if}
-              </div>
+          <!-- Harga per ukuran -->
+          <div class="border-t border-gray-100 pt-2.5">
+            <p class="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+              Harga Jual / Ukuran
+            </p>
+            <div class="flex flex-wrap gap-1.5 text-xs">
+              {#each UKURAN_ORDER.filter((u) => model.ukuran_tersedia.includes(u)) as u}
+                <span class="rounded-md border border-green-100 bg-green-50 px-2 py-0.5 font-medium text-green-700">
+                  {u}: {model.harga_jual_per_ukuran?.[u] ? `Rp${model.harga_jual_per_ukuran[u].toLocaleString("id-ID")}` : "-"}
+                </span>
+              {/each}
             </div>
-          {/if}
+          </div>
+
+          <div>
+            <p class="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+              Harga Produksi / Ukuran
+            </p>
+            <div class="flex flex-wrap gap-1.5 text-xs">
+              {#each UKURAN_ORDER.filter((u) => model.ukuran_tersedia.includes(u)) as u}
+                <span class="rounded-md border border-orange-100 bg-orange-50 px-2 py-0.5 font-medium text-orange-700">
+                  {u}: {model.harga_produksi_per_ukuran?.[u] ? `Rp${model.harga_produksi_per_ukuran[u].toLocaleString("id-ID")}` : "-"}
+                </span>
+              {/each}
+            </div>
+          </div>
 
           <!-- Tarif Default -->
           {#if (model.tarif_cutting || model.tarif_jahit || model.tarif_steam)}

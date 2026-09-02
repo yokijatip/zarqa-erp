@@ -224,10 +224,14 @@
   let reportLines = $derived(allLines.filter((line) => inDateRange(line.tanggal, reportDateRange)));
   let overviewLines = $derived(allLines.filter((line) => inDateRange(line.tanggal, overviewDateRange)));
   let overviewSummary = $derived.by(() => {
-    const pemasukan = overviewLines.filter((line) => line.tipe === "pemasukan").reduce((sum, line) => sum + line.nominal, 0);
+    const penjualan = overviewLines.filter((line) => line.source === "penjualan").reduce((sum, line) => sum + line.nominal, 0);
+    const pemasukanManual = overviewLines
+      .filter((line) => line.source === "manual" && line.tipe === "pemasukan")
+      .reduce((sum, line) => sum + line.nominal, 0);
+    const pemasukan = penjualan + pemasukanManual;
     const hpp = overviewLines.filter((line) => line.source === "penjualan").reduce((sum, line) => sum + (line.hpp ?? 0), 0);
     const pengeluaran = overviewLines.filter((line) => line.tipe === "pengeluaran").reduce((sum, line) => sum + line.nominal, 0);
-    return { pemasukan, hpp, pengeluaran, labaBersih: pemasukan - hpp - pengeluaran };
+    return { penjualan, pemasukanManual, pemasukan, hpp, pengeluaran, labaBersih: pemasukan - hpp - pengeluaran };
   });
 
   let filteredLines = $derived.by(() => {
@@ -774,7 +778,7 @@
         <div class="mt-5 grid grid-cols-3 gap-2 text-xs">
           <div class="rounded-lg bg-white/10 px-3 py-2">
             <p class="text-gray-400">Penjualan</p>
-            <p class="mt-1 font-semibold text-green-300">{rupiah(overviewSummary.pemasukan)}</p>
+            <p class="mt-1 font-semibold text-green-300">{rupiah(overviewSummary.penjualan)}</p>
           </div>
           <div class="rounded-lg bg-white/10 px-3 py-2">
             <p class="text-gray-400">HPP</p>
@@ -789,10 +793,10 @@
 
       <StatCard
         title="Penjualan"
-        value={rupiah(overviewSummary.pemasukan)}
+        value={rupiah(overviewSummary.penjualan)}
         icon={TrendingUpIcon}
         {loading}
-        footerSubtext={`${incomeLines.length} transaksi masuk`}
+        footerSubtext={`${overviewLines.filter((line) => line.source === "penjualan").length} transaksi penjualan`}
         class="border-green-100 bg-green-50"
         valueClass="text-green-700"
       />
