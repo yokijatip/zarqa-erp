@@ -608,6 +608,36 @@
     );
   });
 
+  const PAGE_SIZE = 100;
+  let currentPage = $state(1);
+  let totalPages = $derived(Math.max(1, Math.ceil(filteredRiwayat.length / PAGE_SIZE)));
+  let paginatedRiwayat = $derived(
+    filteredRiwayat.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE),
+  );
+  let pageNumbers = $derived.by((): Array<number | "..."> => {
+    if (totalPages <= 7) return Array.from({ length: totalPages }, (_, i) => i + 1);
+    const pages: Array<number | "..."> = [1];
+    if (currentPage > 4) pages.push("...");
+    const start = Math.max(2, currentPage - 1);
+    const end = Math.min(totalPages - 1, currentPage + 1);
+    for (let page = start; page <= end; page++) pages.push(page);
+    if (currentPage < totalPages - 3) pages.push("...");
+    pages.push(totalPages);
+    return pages;
+  });
+
+  $effect(() => {
+    filteredRiwayat.length;
+    dateRange?.start;
+    dateRange?.end;
+    searchQuery;
+    currentPage = 1;
+  });
+
+  $effect(() => {
+    if (currentPage > totalPages) currentPage = totalPages;
+  });
+
   function jumlahWarna(warnaKey: string, ukuran: UkuranBaju): number {
     return fJumlahByWarna[warnaKey]?.[ukuran] ?? 0;
   }
@@ -694,7 +724,7 @@
   function listTitle(r: BarangKeluar): string {
     const items = listItems(r);
     if (items.length <= 1) return items[0]?.nama_model ?? r.nama_model;
-    return `${items.length} barang`;
+    return `${items.length} detail barang`;
   }
 
   // ── Helpers ────────────────────────────────────────────────────────
@@ -1283,7 +1313,7 @@
         </Table.Row>
       </Table.Header>
       <Table.Body>
-        {#each filteredRiwayat as r}
+        {#each paginatedRiwayat as r}
           <Table.Row>
             <Table.Cell>
               <p class="text-sm text-gray-700">
@@ -1296,7 +1326,7 @@
             <Table.Cell>
               <p class="text-sm font-medium text-gray-800">{listTitle(r)}</p>
               <p class="mt-0.5 text-xs text-gray-400">
-                {listItems(r).length} item pencatatan
+                {listItems(r).length} baris pencatatan dalam satu list
               </p>
             </Table.Cell>
             <Table.Cell>
@@ -1384,7 +1414,9 @@
       class="flex items-center justify-between border-t border-gray-100 bg-gray-50 px-5 py-3"
     >
       <p class="text-xs text-gray-400">
-        Menampilkan {filteredRiwayat.length} dari {riwayat.length} pengiriman total
+        Menampilkan {filteredRiwayat.length === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1}
+        -{Math.min(currentPage * PAGE_SIZE, filteredRiwayat.length)} dari {filteredRiwayat.length}
+        pengiriman
       </p>
       <p class="text-xs text-gray-400">
         Total: <span class="font-semibold text-gray-700"
@@ -1392,6 +1424,44 @@
         >
       </p>
     </div>
+    {#if totalPages > 1}
+      <div class="flex flex-wrap items-center justify-center gap-1 border-t border-gray-100 px-5 py-3">
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label="Halaman sebelumnya"
+          disabled={currentPage === 1}
+          onclick={() => (currentPage = Math.max(1, currentPage - 1))}
+        >
+          Sebelumnya
+        </Button>
+        {#each pageNumbers as page}
+          {#if page === "..."}
+            <span class="px-1 text-sm text-gray-400">...</span>
+          {:else}
+            <Button
+              variant={currentPage === page ? "default" : "outline"}
+              size="sm"
+              class="min-w-9"
+              aria-label={`Halaman ${page}`}
+              aria-current={currentPage === page ? "page" : undefined}
+              onclick={() => (currentPage = page)}
+            >
+              {page}
+            </Button>
+          {/if}
+        {/each}
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label="Halaman berikutnya"
+          disabled={currentPage === totalPages}
+          onclick={() => (currentPage = Math.min(totalPages, currentPage + 1))}
+        >
+          Berikutnya
+        </Button>
+      </div>
+    {/if}
   {/if}
 </div>
 

@@ -130,6 +130,8 @@
       masuk_produksi: "Masuk dari produksi",
       masuk_restock: "Restock barang jadi",
       masuk_stok_awal: "Stok awal barang jadi",
+      masuk_retur: "Barang retur masuk",
+      masuk_lainnya: "Penambahan stok lainnya",
       kurangi_manual: "Kurangi manual",
       set_manual: "Set stok manual",
       barang_keluar: "Barang keluar",

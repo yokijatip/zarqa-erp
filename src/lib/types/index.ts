@@ -348,6 +348,8 @@ export type TipeRiwayatBarangJadi =
   | 'masuk_produksi'
   | 'masuk_restock'
   | 'masuk_stok_awal'
+  | 'masuk_retur'
+  | 'masuk_lainnya'
   | 'kurangi_manual'
   | 'set_manual'
   | 'barang_keluar'

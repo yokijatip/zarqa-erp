@@ -165,10 +165,12 @@
 
   let kainUsageData = $derived.by((): Array<[string, KainUsageEntry]> => {
     const map = new Map<string, KainUsageEntry>();
+    const existingKainIds = new Set(stokList.map((kain) => kain.id));
     for (const batch of analyticsBatches) {
       if (batch.dari_potongan) continue;
       if (!STATUSES_KAIN_DIPOTONG.has(batch.status)) continue; // kain belum dipotong
       for (const k of batch.kain_digunakan) {
+        if (!existingKainIds.has(k.kain_id)) continue;
         if (!map.has(k.kain_id)) {
           map.set(k.kain_id, {
             nama: k.nama_kain,
@@ -197,6 +199,10 @@
     return [...map.entries()].sort((a, b) => b[1].total - a[1].total);
   });
 
+  function kainColor(kainId: string, index: number): string {
+    return stokList.find((kain) => kain.id === kainId)?.kode_hex_warna ?? CHART_COLORS[index % CHART_COLORS.length];
+  }
+
   $effect(() => {
     const canvas = chartCanvas;
     const data = kainUsageData;
@@ -209,13 +215,8 @@
         datasets: [
           {
             data: data.map(([, v]) => v.total),
-            backgroundColor: data.map(
-              (_, i) => CHART_COLORS[i % CHART_COLORS.length],
-            ),
-            borderColor: data.map(
-              (_, i) =>
-                CHART_COLORS[i % CHART_COLORS.length].replace("0.75", "1"),
-            ),
+            backgroundColor: data.map(([kainId], i) => kainColor(kainId, i)),
+            borderColor: data.map(([kainId], i) => kainColor(kainId, i)),
             borderWidth: 1,
             borderRadius: 4,
           },
@@ -761,6 +762,7 @@
 </div>
 
 <!-- ── Analytics Section ─────────────────────────────────────── -->
+{#if stokList.length > 0}
 <div
   class="mb-5 overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm"
 >
@@ -836,13 +838,13 @@
     <div class="p-5">
       <!-- Summary total -->
       <div class="mb-4 flex flex-wrap gap-3">
-        {#each kainUsageData as [, usage], i}
+        {#each kainUsageData as [kainId, usage], i}
           <div
             class="flex items-center gap-2 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2"
           >
             <span
               class="inline-block h-3 w-3 shrink-0 rounded-full"
-              style="background-color: {CHART_COLORS[i % CHART_COLORS.length]}"
+              style="background-color: {kainColor(kainId, i)}"
             ></span>
             <span class="text-xs text-gray-600">{usage.nama}</span>
             <span class="text-xs font-semibold text-gray-800">
@@ -871,9 +873,7 @@
             {#each kainUsageData as [kainId, usage], i}
               <div
                 class="rounded-xl border border-gray-100 p-4"
-                style="border-left: 3px solid {CHART_COLORS[
-                  i % CHART_COLORS.length
-                ]}"
+                style="border-left: 3px solid {kainColor(kainId, i)}"
               >
                 <p class="mb-2 text-sm font-semibold text-gray-800">
                   {usage.nama}
@@ -905,9 +905,7 @@
                         >
                           <div
                             class="h-full rounded-full"
-                            style="width: {pct}%; background-color: {CHART_COLORS[
-                              i % CHART_COLORS.length
-                            ]}"
+                            style="width: {pct}%; background-color: {kainColor(kainId, i)}"
                           ></div>
                         </div>
                       </div>
@@ -927,6 +925,7 @@
     </div>
   {/if}
 </div>
+{/if}
 
 <!-- ── Filter & Sort Bar ──────────────────────────────────────── -->
 <div class="mb-4 flex flex-wrap items-center gap-3">

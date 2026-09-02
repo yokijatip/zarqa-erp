@@ -42,8 +42,13 @@
   let riwayatMasuk = $state<RiwayatBarangJadi[]>([]);
 
   // Filter tanggal untuk Riwayat Masuk (dari — sampai), kosong = tampilkan semua
-  let filterDari = $state("");
-  let filterSampai = $state("");
+  let filterMasukDari = $state("");
+  let filterMasukSampai = $state("");
+  let filterKeluarDari = $state("");
+  let filterKeluarSampai = $state("");
+  const HISTORY_PAGE_SIZE = 50;
+  let masukPage = $state(1);
+  let keluarPage = $state(1);
 
   // Cache detail batch (nama tukang cutting + timeline lengkap) per batch_id, di-fetch lazy saat card di-expand
   type BatchTimelineEntry = {
@@ -69,10 +74,12 @@
   let successMsg = $state<string | null>(null);
 
   type DialogMode = "restock" | "kurangi" | "edit";
+  type SumberMasuk = "stok_awal" | "restock" | "retur" | "lainnya";
   let openDialog = $state(false);
   let dialogMode = $state<DialogMode>("restock");
   let selectedItem = $state<StokBarangJadi | null>(null);
-let fJumlah = $state(0);
+  let fJumlah = $state(0);
+  let fSumberMasuk = $state<SumberMasuk>("restock");
 
   // Selected color from URL query param
   let selectedColor = $state<string | null>(null);
@@ -206,9 +213,18 @@ let fJumlah = $state(0);
     return itemMatchesCurrentView(legacyItem) ? [legacyItem] : [];
   }
 
-  let riwayatKeluarTampil = $derived.by(() =>
-    riwayatKeluar.filter((r) => itemsForCurrentView(r).length > 0),
+  let riwayatKeluarTerfilter = $derived.by(() => {
+    const dari = filterKeluarDari ? new Date(filterKeluarDari + "T00:00:00").getTime() : -Infinity;
+    const sampai = filterKeluarSampai ? new Date(filterKeluarSampai + "T23:59:59").getTime() : Infinity;
+    return riwayatKeluar.filter((r) => {
+      const waktu = tsMillis(r.tanggal_keluar);
+      return waktu >= dari && waktu <= sampai && itemsForCurrentView(r).length > 0;
+    });
+  });
+  let riwayatKeluarTampil = $derived(
+    riwayatKeluarTerfilter.slice((keluarPage - 1) * HISTORY_PAGE_SIZE, keluarPage * HISTORY_PAGE_SIZE),
   );
+  let keluarTotalPages = $derived(Math.max(1, Math.ceil(riwayatKeluarTerfilter.length / HISTORY_PAGE_SIZE)));
 
   function totalItemPcsByStatus(
     items: BarangKeluarItem[],
@@ -339,6 +355,8 @@ let fJumlah = $state(0);
     masuk_produksi: "Dari Produksi",
     masuk_restock: "Restock",
     masuk_stok_awal: "Stok Awal",
+    masuk_retur: "Retur",
+    masuk_lainnya: "Lainnya",
     kurangi_manual: "Kurangi Manual",
     set_manual: "Set Manual",
     reject_diperbaiki: "Reject Diperbaiki",
@@ -347,6 +365,8 @@ let fJumlah = $state(0);
     masuk_produksi: "bg-teal-100 text-teal-700",
     masuk_restock: "bg-blue-100 text-blue-700",
     masuk_stok_awal: "bg-purple-100 text-purple-700",
+    masuk_retur: "bg-amber-100 text-amber-700",
+    masuk_lainnya: "bg-gray-100 text-gray-600",
     kurangi_manual: "bg-red-100 text-red-600",
     set_manual: "bg-gray-100 text-gray-600",
     reject_diperbaiki: "bg-teal-100 text-teal-700",
@@ -428,12 +448,12 @@ let fJumlah = $state(0);
 
   // Filter berdasarkan warna aktif + rentang tanggal (kalau diisi)
   let riwayatMasukTerfilter = $derived.by(() => {
-    if (!filterDari && !filterSampai) return riwayatMasukUntukWarna;
-    const dari = filterDari
-      ? new Date(filterDari + "T00:00:00").getTime()
+    if (!filterMasukDari && !filterMasukSampai) return riwayatMasukUntukWarna;
+    const dari = filterMasukDari
+      ? new Date(filterMasukDari + "T00:00:00").getTime()
       : -Infinity;
-    const sampai = filterSampai
-      ? new Date(filterSampai + "T23:59:59").getTime()
+    const sampai = filterMasukSampai
+      ? new Date(filterMasukSampai + "T23:59:59").getTime()
       : Infinity;
     return riwayatMasukUntukWarna.filter((r) => {
       const t = tsMillis(r.timestamp);
@@ -470,6 +490,31 @@ let fJumlah = $state(0);
     return [...map.values()].sort(
       (a, b) => tsMillis(b.timestamp) - tsMillis(a.timestamp),
     );
+  });
+  let riwayatMasukTampil = $derived(
+    riwayatMasukGrouped.slice((masukPage - 1) * HISTORY_PAGE_SIZE, masukPage * HISTORY_PAGE_SIZE),
+  );
+  let masukTotalPages = $derived(Math.max(1, Math.ceil(riwayatMasukGrouped.length / HISTORY_PAGE_SIZE)));
+
+  $effect(() => {
+    riwayatMasukGrouped.length;
+    filterMasukDari;
+    filterMasukSampai;
+    selectedColor;
+    masukPage = 1;
+  });
+
+  $effect(() => {
+    riwayatKeluarTerfilter.length;
+    filterKeluarDari;
+    filterKeluarSampai;
+    selectedColor;
+    keluarPage = 1;
+  });
+
+  $effect(() => {
+    if (masukPage > masukTotalPages) masukPage = masukTotalPages;
+    if (keluarPage > keluarTotalPages) keluarPage = keluarTotalPages;
   });
 
   // Prefetch nama tukang cutting untuk tiap batch begitu muncul di list,
@@ -662,6 +707,7 @@ let fJumlah = $state(0);
     dialogMode = mode;
     selectedItem = item;
     fJumlah = mode === "edit" ? item.stok_tersedia : 0;
+    fSumberMasuk = "restock";
     openDialog = true;
   }
 
@@ -674,6 +720,12 @@ let fJumlah = $state(0);
 
       if (dialogMode === "restock") {
         if (fJumlah <= 0) throw new Error("Jumlah harus lebih dari 0");
+        const sumberMeta = {
+          stok_awal: { tipe: "masuk_stok_awal" as const, catatan: "Stok awal" },
+          restock: { tipe: "masuk_restock" as const, catatan: "Restock manual" },
+          retur: { tipe: "masuk_retur" as const, catatan: "Barang retur" },
+          lainnya: { tipe: "masuk_lainnya" as const, catatan: "Penambahan stok lainnya" },
+        }[fSumberMasuk];
         await tambahStokBarangJadi(
           selectedItem.model_id,
           selectedItem.nama_model,
@@ -682,7 +734,7 @@ let fJumlah = $state(0);
             nama_warna: selectedItem.nama_warna,
             kode_hex_warna: selectedItem.kode_hex_warna,
           },
-          { uid, nama, tipe: "masuk_restock", catatan: "Restock manual" },
+          { uid, nama, tipe: sumberMeta.tipe, catatan: sumberMeta.catatan },
         );
         showSuccess(
           `+${fJumlah} pcs berhasil ditambahkan ke stok ukuran ${selectedItem.ukuran}.`,
@@ -1114,20 +1166,20 @@ let fJumlah = $state(0);
         <span class="text-gray-400">Dari</span>
         <input
           type="date"
-          bind:value={filterDari}
+          bind:value={filterMasukDari}
           class="rounded-lg border border-gray-200 px-2 py-1 text-xs text-gray-700 focus:border-teal-400 focus:outline-none"
         />
         <span class="text-gray-400">Sampai</span>
         <input
           type="date"
-          bind:value={filterSampai}
+          bind:value={filterMasukSampai}
           class="rounded-lg border border-gray-200 px-2 py-1 text-xs text-gray-700 focus:border-teal-400 focus:outline-none"
         />
-        {#if filterDari || filterSampai}
+        {#if filterMasukDari || filterMasukSampai}
           <button
             onclick={() => {
-              filterDari = "";
-              filterSampai = "";
+              filterMasukDari = "";
+              filterMasukSampai = "";
             }}
             class="text-teal-600 hover:underline"
           >
@@ -1149,7 +1201,7 @@ let fJumlah = $state(0);
       </div>
     {:else}
       <div class="space-y-3">
-        {#each riwayatMasukGrouped as group}
+        {#each riwayatMasukTampil as group}
           {@const isBatch = group.tipe === "masuk_produksi" && !!group.batch_id}
           {@const isExpanded = expandedBatchId === group.key}
           {@const first = group.items[0]}
@@ -1361,17 +1413,34 @@ let fJumlah = $state(0);
         {/each}
       </div>
       <p class="mt-2 text-right text-[11px] text-gray-300">
-        Menampilkan {riwayatMasukGrouped.length} entri ({riwayatMasukTerfilter.length}
-        catatan)
+        Menampilkan {Math.min((masukPage - 1) * HISTORY_PAGE_SIZE + 1, riwayatMasukGrouped.length)}-{Math.min(masukPage * HISTORY_PAGE_SIZE, riwayatMasukGrouped.length)} dari {riwayatMasukGrouped.length} entri
       </p>
+      {#if masukTotalPages > 1}
+        <div class="mt-3 flex items-center justify-end gap-2">
+          <Button variant="outline" size="sm" disabled={masukPage === 1} onclick={() => (masukPage = Math.max(1, masukPage - 1))}>Sebelumnya</Button>
+          <span class="text-xs text-gray-500">Halaman {masukPage} / {masukTotalPages}</span>
+          <Button variant="outline" size="sm" disabled={masukPage === masukTotalPages} onclick={() => (masukPage = Math.min(masukTotalPages, masukPage + 1))}>Berikutnya</Button>
+        </div>
+      {/if}
     {/if}
   </div>
 
   <!-- ── Riwayat Keluar ───────────────────────────────────────────── -->
   <div class="mt-6">
-    <h2 class="mb-3 text-sm font-semibold text-gray-700">Riwayat Keluar</h2>
+    <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+      <h2 class="text-sm font-semibold text-gray-700">Riwayat Keluar</h2>
+      <div class="flex flex-wrap items-center gap-2 text-xs">
+        <span class="text-gray-400">Dari</span>
+        <input type="date" bind:value={filterKeluarDari} class="rounded-lg border border-gray-200 px-2 py-1 text-xs text-gray-700 focus:border-teal-400 focus:outline-none" />
+        <span class="text-gray-400">Sampai</span>
+        <input type="date" bind:value={filterKeluarSampai} class="rounded-lg border border-gray-200 px-2 py-1 text-xs text-gray-700 focus:border-teal-400 focus:outline-none" />
+        {#if filterKeluarDari || filterKeluarSampai}
+          <button onclick={() => { filterKeluarDari = ""; filterKeluarSampai = ""; }} class="text-teal-600 hover:underline">Reset</button>
+        {/if}
+      </div>
+    </div>
 
-    {#if riwayatKeluarTampil.length === 0}
+    {#if riwayatKeluarTerfilter.length === 0}
       <div
         class="flex items-center gap-3 rounded-xl border border-gray-100 bg-white px-5 py-6 text-sm text-gray-400 shadow-sm"
       >
@@ -1473,8 +1542,15 @@ let fJumlah = $state(0);
         {/each}
       </div>
       <p class="mt-2 text-right text-[11px] text-gray-300">
-        Menampilkan {riwayatKeluarTampil.length} catatan terbaru
+        Menampilkan {Math.min((keluarPage - 1) * HISTORY_PAGE_SIZE + 1, riwayatKeluarTerfilter.length)}-{Math.min(keluarPage * HISTORY_PAGE_SIZE, riwayatKeluarTerfilter.length)} dari {riwayatKeluarTerfilter.length} catatan
       </p>
+      {#if keluarTotalPages > 1}
+        <div class="mt-3 flex items-center justify-end gap-2">
+          <Button variant="outline" size="sm" disabled={keluarPage === 1} onclick={() => (keluarPage = Math.max(1, keluarPage - 1))}>Sebelumnya</Button>
+          <span class="text-xs text-gray-500">Halaman {keluarPage} / {keluarTotalPages}</span>
+          <Button variant="outline" size="sm" disabled={keluarPage === keluarTotalPages} onclick={() => (keluarPage = Math.min(keluarTotalPages, keluarPage + 1))}>Berikutnya</Button>
+        </div>
+      {/if}
     {/if}
   </div>
 {/if}
@@ -1537,6 +1613,21 @@ let fJumlah = $state(0);
         {/if}
 
         <div>
+          {#if dialogMode === "restock"}
+            <label class="mb-1.5 block text-sm font-medium text-gray-700" for="dialog-sumber-masuk">
+              Sumber penambahan stok
+            </label>
+            <select
+              id="dialog-sumber-masuk"
+              bind:value={fSumberMasuk}
+              class="mb-3 h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-700 outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-100"
+            >
+              <option value="stok_awal">Stok Awal</option>
+              <option value="restock">Restock</option>
+              <option value="retur">Retur</option>
+              <option value="lainnya">Lainnya</option>
+            </select>
+          {/if}
           <label
             class="mb-1.5 block text-sm font-medium text-gray-700"
             for="dialog-jumlah"

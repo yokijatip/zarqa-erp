@@ -169,7 +169,10 @@
 
   function getModelStatus(model: ModelGroup): "kosong" | "kritis" | "low" | "aman" {
     const total = getModelTotal(model);
-    if (total === 0) return "kosong";
+    const hasEmptySize = [...model.colors.values()].some((color) =>
+      color.items.some((item) => item.stok_tersedia === 0),
+    );
+    if (total === 0 || hasEmptySize) return "kosong";
     const hasKritis = [...model.colors.values()].some((c) =>
       c.items.some((i) => i.stok_tersedia > 0 && i.stok_tersedia <= KRITIS_THRESHOLD),
     );
@@ -183,7 +186,7 @@
 
   function getColorStatus(color: ColorGroup): "kosong" | "kritis" | "low" | "aman" {
     const total = getColorTotal(color);
-    if (total === 0) return "kosong";
+    if (total === 0 || color.items.some((item) => item.stok_tersedia === 0)) return "kosong";
     const hasKritis = color.items.some(
       (i) => i.stok_tersedia > 0 && i.stok_tersedia <= KRITIS_THRESHOLD,
     );

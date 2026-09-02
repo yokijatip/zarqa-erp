@@ -50,7 +50,6 @@
         { title: "Stok Potongan", url: "/stok-potongan" },
         { title: "Barang Jadi", url: "/barang-jadi" },
         { title: "Barang Keluar", url: "/barang-keluar" },
-        { title: "Retur Penjualan", url: "/penjualan/retur" },
         { title: "Warna", url: "/warna" },
       ],
     },
