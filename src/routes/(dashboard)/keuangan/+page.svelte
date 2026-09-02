@@ -55,6 +55,7 @@
   import PlusIcon from "@lucide/svelte/icons/plus";
   import PencilIcon from "@lucide/svelte/icons/pencil";
   import Trash2Icon from "@lucide/svelte/icons/trash-2";
+  import ChevronDownIcon from "@lucide/svelte/icons/chevron-down";
 
   type FinanceLine = {
     source: "penjualan" | "manual" | "gaji";
@@ -91,6 +92,7 @@
   let activeTab = $state<"semua" | TipeTransaksiKeuangan>("semua");
   let activePanel = $state<"transaksi" | "aset" | "gudang">("transaksi");
   let searchQuery = $state("");
+  let expandedGudangModels = $state<Set<string>>(new Set());
 
   function inDateRange(value: Date | null, range: DateRange): boolean {
     if (!range || !value) return !range;
@@ -307,22 +309,40 @@
   let inventoryRows = $derived.by(() => {
     const map = new Map<
       string,
-      { model: string; pcs: number; nilaiProduksi: number; nilaiJual: number; incompletePrice: boolean }
+      {
+        key: string;
+        model: string;
+        pcs: number;
+        nilaiProduksi: number;
+        nilaiJual: number;
+        incompletePrice: boolean;
+        details: Array<{ ukuran: string; stok: number; nilaiProduksi: number; nilaiJual: number; hargaProduksi: number; hargaJual: number }>;
+      }
     >();
     for (const stok of stokBarangJadi) {
       const model = modelMap.get(stok.model_id) ?? modelNameMap.get(stok.nama_model.toLowerCase());
       const key = stok.model_id || stok.nama_model;
       const row =
         map.get(key) ??
-        { model: stok.nama_model, pcs: 0, nilaiProduksi: 0, nilaiJual: 0, incompletePrice: false };
+        { key, model: stok.nama_model, pcs: 0, nilaiProduksi: 0, nilaiJual: 0, incompletePrice: false, details: [] };
+      const hargaProduksi = hargaProduksiUntukUkuran(model, stok.ukuran);
+      const hargaJual = hargaJualUntukUkuran(model, stok.ukuran);
       row.pcs += stok.stok_tersedia;
-      row.nilaiProduksi += stok.stok_tersedia * hargaProduksiUntukUkuran(model, stok.ukuran);
-      row.nilaiJual += stok.stok_tersedia * hargaJualUntukUkuran(model, stok.ukuran);
-      if (!hargaProduksiUntukUkuran(model, stok.ukuran) || !hargaJualUntukUkuran(model, stok.ukuran)) row.incompletePrice = true;
+      row.nilaiProduksi += stok.stok_tersedia * hargaProduksi;
+      row.nilaiJual += stok.stok_tersedia * hargaJual;
+      row.details.push({ ukuran: stok.ukuran, stok: stok.stok_tersedia, nilaiProduksi: stok.stok_tersedia * hargaProduksi, nilaiJual: stok.stok_tersedia * hargaJual, hargaProduksi, hargaJual });
+      if (!hargaProduksi || !hargaJual) row.incompletePrice = true;
       map.set(key, row);
     }
     return [...map.values()].sort((a, b) => b.nilaiProduksi - a.nilaiProduksi);
   });
+
+  function toggleGudangModel(key: string) {
+    const next = new Set(expandedGudangModels);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    expandedGudangModels = next;
+  }
 
   let regularSalaryRows = $derived.by(() =>
     karyawanList
@@ -1136,7 +1156,15 @@
               size="sm"
               variant={activePanel === panel[0] ? "default" : "outline"}
               onclick={() => (activePanel = panel[0] as typeof activePanel)}
+              class="gap-2"
             >
+              {#if panel[0] === "transaksi"}
+                <ReceiptIcon class="h-4 w-4" />
+              {:else if panel[0] === "aset"}
+                <LandmarkIcon class="h-4 w-4" />
+              {:else}
+                <BoxesIcon class="h-4 w-4" />
+              {/if}
               {panel[1]}
             </Button>
           {/each}
@@ -1332,9 +1360,15 @@
           <h2 class="text-sm font-semibold text-gray-800">Tabungan Gudang</h2>
           <p class="mt-0.5 text-xs text-gray-400">Nilai utama memakai harga produksi. Nilai jual hanya estimasi potensi omzet.</p>
         </div>
-        <div class="text-right">
-          <p class="text-xs text-gray-400">Estimasi nilai jual</p>
-          <p class="font-bold text-gray-900">{rupiah(summary.gudangJual)}</p>
+        <div class="flex flex-wrap justify-end gap-5 text-right">
+          <div>
+            <p class="text-xs text-gray-400">Estimasi nilai produksi</p>
+            <p class="font-bold text-teal-700">{rupiah(summary.gudangProduksi)}</p>
+          </div>
+          <div>
+            <p class="text-xs text-gray-400">Estimasi nilai jual</p>
+            <p class="font-bold text-gray-900">{rupiah(summary.gudangJual)}</p>
+          </div>
         </div>
       </div>
       {#if inventoryRows.length === 0}
@@ -1347,22 +1381,47 @@
               <Table.Head class="w-[12%] text-right">Stok</Table.Head>
               <Table.Head class="w-[18%] text-right">Nilai Produksi</Table.Head>
               <Table.Head class="w-[18%] text-right">Estimasi Jual</Table.Head>
-              <Table.Head class="w-[16%] text-center">Status Harga</Table.Head>
+              <Table.Head class="w-[16%] text-center">Kelengkapan Harga</Table.Head>
             </Table.Row>
           </Table.Header>
           <Table.Body>
             {#each inventoryRows as row}
+              {@const isExpanded = expandedGudangModels.has(row.key)}
               <Table.Row>
-                <Table.Cell class="font-medium text-gray-900">{row.model}</Table.Cell>
+                <Table.Cell class="font-medium text-gray-900">
+                  <button class="inline-flex items-center gap-2 text-left hover:text-teal-700" onclick={() => toggleGudangModel(row.key)}>
+                    <ChevronDownIcon class="h-4 w-4 transition-transform {isExpanded ? 'rotate-180' : ''}" />
+                    {row.model}
+                  </button>
+                </Table.Cell>
                 <Table.Cell class="text-right">{row.pcs.toLocaleString("id-ID")} pcs</Table.Cell>
                 <Table.Cell class="text-right font-semibold text-teal-700">{rupiah(row.nilaiProduksi)}</Table.Cell>
                 <Table.Cell class="text-right text-gray-700">{rupiah(row.nilaiJual)}</Table.Cell>
                 <Table.Cell class="text-center">
                   <span class="rounded-full px-2.5 py-0.5 text-xs font-semibold {row.incompletePrice ? 'bg-yellow-100 text-yellow-700' : 'bg-green-100 text-green-700'}">
-                    {row.incompletePrice ? "Ada harga 0" : "Lengkap"}
+                    {row.incompletePrice ? "Belum lengkap" : "Lengkap"}
                   </span>
                 </Table.Cell>
               </Table.Row>
+              {#if isExpanded}
+                <Table.Row class="bg-gray-50/70">
+                  <Table.Cell colspan={5} class="p-0">
+                    <div class="grid gap-2 px-5 py-3 sm:grid-cols-2 lg:grid-cols-4">
+                      {#each row.details as detail}
+                        <div class="rounded-lg border border-gray-100 bg-white px-3 py-2 text-xs">
+                          <div class="flex items-center justify-between font-semibold text-gray-800">
+                            <span>{detail.ukuran}</span>
+                            <span>{detail.stok.toLocaleString("id-ID")} pcs</span>
+                          </div>
+                          <p class="mt-1 text-teal-700">Produksi: {rupiah(detail.nilaiProduksi)}</p>
+                          <p class="text-gray-600">Jual: {rupiah(detail.nilaiJual)}</p>
+                          <p class="mt-1 text-[11px] text-gray-400">{rupiah(detail.hargaProduksi)} produksi/pcs · {rupiah(detail.hargaJual)} jual/pcs</p>
+                        </div>
+                      {/each}
+                    </div>
+                  </Table.Cell>
+                </Table.Row>
+              {/if}
             {/each}
           </Table.Body>
         </Table.Root>
