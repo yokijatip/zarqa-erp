@@ -6,6 +6,7 @@ import {
   getDoc,
   getDocs,
   orderBy,
+  limit,
   query,
   serverTimestamp,
   Timestamp,
@@ -21,10 +22,13 @@ import type {
   TransaksiKeuangan,
   TransaksiKeuanganInput,
   TipeTransaksiKeuangan,
+  BudgetBulanan,
+  BudgetBulananInput,
 } from '$lib/types';
 
 const COL = 'transaksi_keuangan';
 const COL_ASET = 'aset_perusahaan';
+const COL_BUDGET = 'budget_bulanan';
 
 export const KATEGORI_PEMASUKAN: Record<KategoriPemasukan, string> = {
   penjualan_manual: 'Penjualan Manual',
@@ -137,6 +141,51 @@ export async function getTransaksiKeuangan(
 
   const snap = await getDocs(q);
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as TransaksiKeuangan);
+}
+
+export async function getBudgetBulanan(bulan?: string): Promise<BudgetBulanan[]> {
+  const base = collection(db, COL_BUDGET);
+  const q = bulan
+    ? query(base, where('bulan', '==', bulan))
+    : query(base, orderBy('bulan', 'desc'));
+  const snap = await getDocs(q);
+  return snap.docs
+    .map((item) => ({ id: item.id, ...item.data() }) as BudgetBulanan)
+    .sort((a, b) => a.kategori.localeCompare(b.kategori));
+}
+
+export async function addBudgetBulanan(data: BudgetBulananInput): Promise<string> {
+  const existing = await getDocs(query(
+    collection(db, COL_BUDGET),
+    where('bulan', '==', data.bulan),
+    where('kategori', '==', data.kategori),
+    limit(1),
+  ));
+  if (!existing.empty) throw new Error('Budget untuk kategori dan bulan tersebut sudah ada.');
+  const ref = await addDoc(collection(db, COL_BUDGET), {
+    bulan: data.bulan,
+    kategori: data.kategori,
+    nominal: Math.max(0, Number(data.nominal) || 0),
+    ...(cleanText(data.catatan) ? { catatan: cleanText(data.catatan) } : {}),
+    ...(data.dibuat_oleh_uid ? { dibuat_oleh_uid: data.dibuat_oleh_uid } : {}),
+    ...(data.dibuat_oleh_nama ? { dibuat_oleh_nama: data.dibuat_oleh_nama } : {}),
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+  return ref.id;
+}
+
+export async function updateBudgetBulanan(id: string, data: Partial<BudgetBulananInput>): Promise<void> {
+  const payload: Record<string, unknown> = { updatedAt: serverTimestamp() };
+  if (data.bulan !== undefined) payload.bulan = data.bulan;
+  if (data.kategori !== undefined) payload.kategori = data.kategori;
+  if (data.nominal !== undefined) payload.nominal = Math.max(0, Number(data.nominal) || 0);
+  if (data.catatan !== undefined) payload.catatan = cleanText(data.catatan) ?? '';
+  await updateDoc(doc(db, COL_BUDGET, id), payload);
+}
+
+export async function deleteBudgetBulanan(id: string): Promise<void> {
+  await deleteDoc(doc(db, COL_BUDGET, id));
 }
 
 export async function addAsetPerusahaan(

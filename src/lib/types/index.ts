@@ -503,6 +503,20 @@ export interface TransaksiKeuangan {
   updatedAt?: Timestamp;
 }
 
+export interface BudgetBulanan {
+  id: string;
+  bulan: string;
+  kategori: KategoriPengeluaran;
+  nominal: number;
+  catatan?: string;
+  dibuat_oleh_uid?: string;
+  dibuat_oleh_nama?: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export type BudgetBulananInput = Omit<BudgetBulanan, 'id' | 'createdAt' | 'updatedAt'>;
+
 export type TransaksiKeuanganInput = Omit<
   TransaksiKeuangan,
   'id' | 'tanggal' | 'createdAt' | 'updatedAt'

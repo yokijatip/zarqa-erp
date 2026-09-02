@@ -27,6 +27,7 @@
     '/barang-keluar':    [{ label: 'Gudang', href: '/gudang' }, { label: 'Barang Keluar' }],
     '/barang-keluar/catat': [{ label: 'Gudang', href: '/gudang' }, { label: 'Barang Keluar', href: '/barang-keluar' }, { label: 'Input' }],
     '/keuangan':         [{ label: 'Keuangan' }],
+    '/keuangan/budget':  [{ label: 'Keuangan', href: '/keuangan' }, { label: 'Budget Bulanan' }],
     '/laporan':          [{ label: 'Laporan' }],
     '/laporan/aktivitas': [{ label: 'Laporan', href: '/laporan' }, { label: 'Aktivitas Akun' }],
     '/penjualan':        [{ label: 'Penjualan' }],
