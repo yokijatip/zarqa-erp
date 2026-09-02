@@ -59,6 +59,11 @@
       item.items.some((sub) => !sub.comingSoon && $page.url.pathname.startsWith(sub.url))
     );
   }
+
+  function isSubActive(sub: SubItem): boolean {
+    const currentUrl = `${$page.url.pathname}${$page.url.search}`;
+    return currentUrl === sub.url || ($page.url.pathname === sub.url && !sub.url.includes("?"));
+  }
 </script>
 
 <Sidebar.Group>
@@ -130,7 +135,7 @@
               <Sidebar.MenuSub>
                 {#each item.items as sub}
                   {@const disabled = item.comingSoon || sub.comingSoon}
-                  {@const subActive = $page.url.pathname === sub.url && !disabled}
+                  {@const subActive = isSubActive(sub) && !disabled}
                   <Sidebar.MenuSubItem>
                     <Sidebar.MenuSubButton
                       isActive={subActive}

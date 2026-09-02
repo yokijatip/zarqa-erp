@@ -99,7 +99,6 @@
       url: "/laporan",
       icon: BarChartIcon,
       items: [
-        { title: "Ringkasan Laporan", url: "/laporan" },
         { title: "Laporan Keuangan", url: "/laporan?tab=keuangan" },
         { title: "Laporan Gaji", url: "/karyawan/penggajian" },
         { title: "Aktivitas Akun", url: "/laporan/aktivitas" },

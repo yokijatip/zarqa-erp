@@ -7,7 +7,6 @@
   import { getKaryawanList } from "$lib/firebase/karyawan";
   import { getPembayaranGajiPeriode, type PembayaranGajiRecord } from "$lib/firebase/penggajian";
   import { getAsetPerusahaan, getTransaksiKeuangan, kategoriLabel } from "$lib/firebase/keuangan";
-  import { page } from "$app/stores";
   import { type DateRange, getPeriodRange } from "$lib/period";
   import type {
     BarangKeluar,
@@ -37,7 +36,7 @@
   type MoneyRow = { label: string; value: number; color: string };
 
   let dateRange = $state<DateRange>(getPeriodRange("bulan_ini"));
-  let activeTab = $state<ReportTab>($page.url.searchParams.get("tab") === "keuangan" ? "keuangan" : "ringkasan");
+  let activeTab = $state<ReportTab>("keuangan");
   let loading = $state(true);
   let exporting = $state(false);
   let errorMsg = $state<string | null>(null);
@@ -54,7 +53,6 @@
   let aset = $state<AsetPerusahaan[]>([]);
 
   const tabs: Array<{ id: ReportTab; label: string }> = [
-    { id: "ringkasan", label: "Ringkasan" },
     { id: "keuangan", label: "Laporan Keuangan" },
     { id: "produksi", label: "Produksi" },
     { id: "barang_keluar", label: "Barang Keluar" },
