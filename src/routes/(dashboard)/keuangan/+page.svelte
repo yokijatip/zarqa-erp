@@ -1387,12 +1387,23 @@
           <Table.Body>
             {#each inventoryRows as row}
               {@const isExpanded = expandedGudangModels.has(row.key)}
-              <Table.Row>
+              <Table.Row
+                class="cursor-pointer transition-colors hover:bg-gray-50"
+                role="button"
+                tabindex={0}
+                onclick={() => toggleGudangModel(row.key)}
+                onkeydown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    toggleGudangModel(row.key);
+                  }
+                }}
+              >
                 <Table.Cell class="font-medium text-gray-900">
-                  <button class="inline-flex items-center gap-2 text-left hover:text-teal-700" onclick={() => toggleGudangModel(row.key)}>
+                  <span class="inline-flex items-center gap-2 hover:text-teal-700">
                     <ChevronDownIcon class="h-4 w-4 transition-transform {isExpanded ? 'rotate-180' : ''}" />
                     {row.model}
-                  </button>
+                  </span>
                 </Table.Cell>
                 <Table.Cell class="text-right">{row.pcs.toLocaleString("id-ID")} pcs</Table.Cell>
                 <Table.Cell class="text-right font-semibold text-teal-700">{rupiah(row.nilaiProduksi)}</Table.Cell>
@@ -1408,7 +1419,7 @@
                   <Table.Cell colspan={5} class="p-0">
                     <div class="grid gap-2 px-5 py-3 sm:grid-cols-2 lg:grid-cols-4">
                       {#each row.details as detail}
-                        <div class="rounded-lg border border-gray-100 bg-white px-3 py-2 text-xs">
+                        <a href={`/barang-jadi/${row.key}`} class="block rounded-lg border border-gray-100 bg-white px-3 py-2 text-xs transition hover:border-teal-200 hover:bg-teal-50/30" onclick={(event) => event.stopPropagation()}>
                           <div class="flex items-center justify-between font-semibold text-gray-800">
                             <span>{detail.ukuran}</span>
                             <span>{detail.stok.toLocaleString("id-ID")} pcs</span>
@@ -1416,7 +1427,7 @@
                           <p class="mt-1 text-teal-700">Produksi: {rupiah(detail.nilaiProduksi)}</p>
                           <p class="text-gray-600">Jual: {rupiah(detail.nilaiJual)}</p>
                           <p class="mt-1 text-[11px] text-gray-400">{rupiah(detail.hargaProduksi)} produksi/pcs · {rupiah(detail.hargaJual)} jual/pcs</p>
-                        </div>
+                        </a>
                       {/each}
                     </div>
                   </Table.Cell>
