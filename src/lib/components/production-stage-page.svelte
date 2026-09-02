@@ -32,6 +32,8 @@
   import LoaderIcon from "@lucide/svelte/icons/loader";
   import PackageIcon from "@lucide/svelte/icons/package";
   import CheckCircleIcon from "@lucide/svelte/icons/check-circle";
+  import ChevronLeftIcon from "@lucide/svelte/icons/chevron-left";
+  import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
 
   let { config }: { config: ProductionStageConfig } = $props();
 
@@ -55,6 +57,8 @@
   let stockLoading = $state(false);
   let errorMsg = $state<string | null>(null);
   let searchQuery = $state("");
+  const PAGE_SIZE = 10;
+  let currentPage = $state(1);
 
   // Quick-action dialog (steam inline popup)
   let quickOpen = $state(false);
@@ -206,6 +210,25 @@
       list = list.filter((batch) => batch.nama_model.toLowerCase().includes(q));
     }
     return list;
+  });
+
+  let totalPages = $derived(Math.max(1, Math.ceil(filteredBatches.length / PAGE_SIZE)));
+  let visibleBatches = $derived(
+    filteredBatches.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE),
+  );
+
+  function setSearchQuery(value: string) {
+    searchQuery = value;
+    currentPage = 1;
+  }
+
+  function setPage(page: number) {
+    currentPage = Math.max(1, Math.min(page, totalPages));
+  }
+
+  $effect(() => {
+    filteredBatches.length;
+    if (currentPage > totalPages) currentPage = totalPages;
   });
 
   let readyCount = $derived(
@@ -501,7 +524,8 @@
     </svg>
     <input
       type="text"
-      bind:value={searchQuery}
+      value={searchQuery}
+      oninput={(event) => setSearchQuery((event.currentTarget as HTMLInputElement).value)}
       placeholder="Cari nama model..."
       class="w-full rounded-lg border border-gray-200 bg-white py-2 pl-9 pr-4 text-sm text-gray-700 placeholder:text-gray-400 focus:outline-none"
     />
@@ -560,7 +584,7 @@
             </Table.Row>
           </Table.Header>
           <Table.Body>
-            {#each filteredBatches as batch}
+            {#each visibleBatches as batch}
               {@const isDone = (config.doneStatuses ?? []).includes(
                 batch.status,
               )}
@@ -670,6 +694,34 @@
             {/each}
           </Table.Body>
         </Table.Root>
+        <div class="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 px-5 py-3 text-xs text-gray-500">
+          <span>
+            Menampilkan {Math.min((currentPage - 1) * PAGE_SIZE + 1, filteredBatches.length)}-{Math.min(currentPage * PAGE_SIZE, filteredBatches.length)} dari {filteredBatches.length} batch
+          </span>
+          {#if totalPages > 1}
+            <div class="flex items-center gap-2">
+              <button
+                type="button"
+                aria-label="Halaman sebelumnya"
+                disabled={currentPage === 1}
+                onclick={() => setPage(currentPage - 1)}
+                class="inline-flex h-8 w-8 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <ChevronLeftIcon class="h-4 w-4" />
+              </button>
+              <span class="min-w-20 text-center font-medium text-gray-700">Halaman {currentPage} / {totalPages}</span>
+              <button
+                type="button"
+                aria-label="Halaman berikutnya"
+                disabled={currentPage === totalPages}
+                onclick={() => setPage(currentPage + 1)}
+                class="inline-flex h-8 w-8 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <ChevronRightIcon class="h-4 w-4" />
+              </button>
+            </div>
+          {/if}
+        </div>
       {/if}
     </div>
   {/if}

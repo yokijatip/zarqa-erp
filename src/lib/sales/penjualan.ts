@@ -47,6 +47,7 @@ export type BuyerRow = {
 
 export type ProductSalesRow = {
   key: string;
+  model_id: string;
   nama_model: string;
   nama_warna?: string;
   ukuran: string;
@@ -229,6 +230,7 @@ export function productSalesRows(items: SalesItemRow[]): ProductSalesRow[] {
       map.get(key) ??
       ({
         key,
+        model_id: item.model_id,
         nama_model: item.nama_model,
         nama_warna: item.nama_warna,
         ukuran: item.ukuran,

@@ -1,800 +1,202 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { subscribeBatchAktif } from '$lib/firebase/batch-produksi';
-  import type { BatchProduksi, StatusBatch } from '$lib/types';
-  import { STATUS_LABEL } from '$lib/types';
+  import { getBatchList, subscribeBatchAktif } from '$lib/firebase/batch-produksi';
+  import { getPerformaPerDivisi, type PerformaKaryawan, type DivisiKey } from '$lib/firebase/performa';
+  import { STATUS_LABEL, type BatchProduksi, type StatusBatch } from '$lib/types';
   import ActivityIcon from '@lucide/svelte/icons/activity';
   import ScissorsIcon from '@lucide/svelte/icons/scissors';
-  import ZapIcon from '@lucide/svelte/icons/zap';
-  import PackageIcon from '@lucide/svelte/icons/package';
-  import UsersIcon from '@lucide/svelte/icons/users';
   import ShirtIcon from '@lucide/svelte/icons/shirt';
-  import LayoutIcon from '@lucide/svelte/icons/layout-dashboard';
-  import CalendarIcon from '@lucide/svelte/icons/calendar';
-  import XIcon from '@lucide/svelte/icons/x';
-  import AlertTriangleIcon from '@lucide/svelte/icons/triangle-alert';
-  import ClockIcon from '@lucide/svelte/icons/clock';
-  import { goto } from '$app/navigation';
+  import ZapIcon from '@lucide/svelte/icons/zap';
+  import UsersIcon from '@lucide/svelte/icons/users';
+  import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
+  import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
+  import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+  import TrendingUpIcon from '@lucide/svelte/icons/trending-up';
+  import PeriodSelector from '$lib/components/period-selector.svelte';
+  import type { DateRange } from '$lib/period';
 
-  type ViewMode = 'tahap' | 'kepala' | 'model';
-
-  type StageGroup = {
-    label: string;
-    stages: StatusBatch[];
-    dotColor: string;
-    bgColor: string;
-    borderColor: string;
-    textColor: string;
-    barColor: string;
-  };
-
+  type StageGroup = { label: string; statuses: StatusBatch[]; color: string; icon: typeof ActivityIcon; card: string; title: string; value: string; iconColor: string };
   const STAGE_GROUPS: StageGroup[] = [
-    {
-      label: 'Divisi Cutting',
-      stages: ['PENDING_KAIN', 'PENDING_CUTTING', 'CUTTING_IN_PROGRESS', 'CUTTING_DONE'],
-      dotColor: 'bg-gray-400',
-      bgColor: 'bg-gray-50',
-      borderColor: 'border-gray-200',
-      textColor: 'text-gray-700',
-      barColor: 'bg-gray-400',
-    },
-    {
-      label: 'Divisi Jahit',
-      stages: ['JAHIT_IN_PROGRESS', 'JAHIT_DONE'],
-      dotColor: 'bg-gray-400',
-      bgColor: 'bg-gray-50',
-      borderColor: 'border-gray-200',
-      textColor: 'text-gray-700',
-      barColor: 'bg-gray-400',
-    },
-    {
-      label: 'Divisi Steam',
-      stages: ['STEAM_IN_PROGRESS', 'STEAM_DONE'],
-      dotColor: 'bg-gray-400',
-      bgColor: 'bg-gray-50',
-      borderColor: 'border-gray-200',
-      textColor: 'text-gray-700',
-      barColor: 'bg-gray-400',
-    },
+    { label: 'Cutting', statuses: ['PENDING_KAIN', 'PENDING_CUTTING', 'CUTTING_IN_PROGRESS', 'CUTTING_DONE'], color: 'orange', icon: ScissorsIcon, card: 'border-orange-100 bg-orange-50', title: 'text-orange-700', value: 'text-orange-800', iconColor: 'text-orange-500' },
+    { label: 'Jahit', statuses: ['JAHIT_IN_PROGRESS', 'JAHIT_DONE'], color: 'blue', icon: ShirtIcon, card: 'border-blue-100 bg-blue-50', title: 'text-blue-700', value: 'text-blue-800', iconColor: 'text-blue-500' },
+    { label: 'Steam', statuses: ['STEAM_IN_PROGRESS', 'STEAM_DONE'], color: 'violet', icon: ZapIcon, card: 'border-violet-100 bg-violet-50', title: 'text-violet-700', value: 'text-violet-800', iconColor: 'text-violet-500' },
   ];
-
+  const PAGE_SIZE = 12;
+  const DIVISI: DivisiKey[] = ['Cutting', 'Jahit', 'Steam'];
   const STATUS_STYLE: Record<StatusBatch, string> = {
-    PENDING_KAIN:        'bg-cyan-100 text-cyan-700',
-    PENDING_CUTTING:     'bg-slate-100 text-slate-600',
-    CUTTING_IN_PROGRESS: 'bg-orange-100 text-orange-700',
-    CUTTING_DONE:        'bg-yellow-100 text-yellow-700',
-    JAHIT_IN_PROGRESS:   'bg-blue-100 text-blue-700',
-    JAHIT_DONE:          'bg-teal-100 text-teal-700',
-    STEAM_IN_PROGRESS:   'bg-purple-100 text-purple-700',
-    STEAM_DONE:          'bg-emerald-100 text-emerald-700',
-    COMPLETED:           'bg-green-100 text-green-700',
+    PENDING_KAIN: 'bg-cyan-100 text-cyan-700', PENDING_CUTTING: 'bg-slate-100 text-slate-600',
+    CUTTING_IN_PROGRESS: 'bg-orange-100 text-orange-700', CUTTING_DONE: 'bg-yellow-100 text-yellow-700',
+    JAHIT_IN_PROGRESS: 'bg-blue-100 text-blue-700', JAHIT_DONE: 'bg-teal-100 text-teal-700',
+    STEAM_IN_PROGRESS: 'bg-violet-100 text-violet-700', STEAM_DONE: 'bg-emerald-100 text-emerald-700',
+    COMPLETED: 'bg-green-100 text-green-700',
+  };
+  const STATUS_DISPLAY: Record<StatusBatch, string> = {
+    ...STATUS_LABEL, CUTTING_DONE: 'Siap Jahit', JAHIT_DONE: 'Siap Steam', STEAM_DONE: 'Siap Masuk Gudang',
   };
 
-  const DISPLAY_STATUS_LABEL: Record<StatusBatch, string> = {
-    ...STATUS_LABEL,
-    CUTTING_DONE: 'Siap Jahit',
-    JAHIT_DONE: 'Siap Steam',
-    STEAM_DONE: 'Siap Masuk Gudang',
-  };
-
-  // ── State ──────────────────────────────────────────────────────────
-  let batchList = $state<BatchProduksi[]>([]);
+  let batches = $state<BatchProduksi[]>([]);
+  let allBatches = $state<BatchProduksi[]>([]);
   let loading = $state(true);
-  let unsubscribe: (() => void) | null = null;
+  let loadingPerforma = $state(true);
+  let unsubscribe: (() => void) | undefined;
+  let pages = $state<Record<string, number>>({});
+  let activeDivisi = $state<DivisiKey>('Cutting');
+  let performa = $state<Record<DivisiKey, PerformaKaryawan[]>>({ Cutting: [], Jahit: [], Steam: [], Keluar: [] });
 
-  let viewMode = $state<ViewMode>('tahap');
+  let dateRange = $state<DateRange>(null);
+  let dari = $derived(dateRange ? toInputDate(dateRange.start) : '');
+  let sampai = $derived(dateRange ? toInputDate(dateRange.end) : '');
 
-  function defaultDari(): string {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+  function toInputDate(date: Date): string {
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
   }
-  function defaultSampai(): string {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-  }
 
-  let filterTanggalDari = $state(defaultDari());
-  let filterTanggalSampai = $state(defaultSampai());
-
-  // ── Filtered list ──────────────────────────────────────────────────
-  let filteredBatches = $derived.by(() => {
-    let list = batchList;
-    if (filterTanggalDari) {
-      const dari = new Date(filterTanggalDari);
-      dari.setHours(0, 0, 0, 0);
-      list = list.filter((b) => {
-        const d = b.createdAt?.toDate ? b.createdAt.toDate() : b.createdAt ? new Date(b.createdAt as any) : null;
-        return d ? d >= dari : true;
-      });
+  let filtered = $derived.by(() => batches.filter((batch) => {
+    const date = batch.createdAt?.toDate ? batch.createdAt.toDate() : batch.createdAt ? new Date(batch.createdAt as any) : null;
+    if (!date) return true;
+    const start = dari ? new Date(`${dari}T00:00:00`) : null;
+    const end = sampai ? new Date(`${sampai}T23:59:59.999`) : null;
+    return (!start || date >= start) && (!end || date <= end);
+  }));
+  let filteredAll = $derived.by(() => allBatches.filter((batch) => {
+    const date = batch.createdAt?.toDate ? batch.createdAt.toDate() : batch.createdAt ? new Date(batch.createdAt as any) : null;
+    if (!date) return true;
+    const start = dari ? new Date(`${dari}T00:00:00`) : null;
+    const end = sampai ? new Date(`${sampai}T23:59:59.999`) : null;
+    return (!start || date >= start) && (!end || date <= end);
+  }));
+  let totalPcs = $derived(filtered.reduce((sum, batch) => sum + (batch.pcs_saat_ini ?? batch.total_pcs), 0));
+  let terlambat = $derived(filtered.filter((batch) => ageInDays(batch.createdAt) > 5).length);
+  let modelSeringDibuat = $derived.by(() => {
+    const map = new Map<string, { nama: string; batch: number; pcs: number }>();
+    for (const batch of filteredAll) {
+      const current = map.get(batch.model_id) ?? { nama: batch.nama_model, batch: 0, pcs: 0 };
+      current.batch += 1;
+      current.pcs += batch.pcs_saat_ini ?? batch.total_pcs;
+      map.set(batch.model_id, current);
     }
-    if (filterTanggalSampai) {
-      const sampai = new Date(filterTanggalSampai);
-      sampai.setHours(23, 59, 59, 999);
-      list = list.filter((b) => {
-        const d = b.createdAt?.toDate ? b.createdAt.toDate() : b.createdAt ? new Date(b.createdAt as any) : null;
-        return d ? d <= sampai : true;
-      });
+    return [...map.values()].sort((a, b) => b.batch - a.batch || b.pcs - a.pcs).slice(0, 6);
+  });
+  let prosesTerlama = $derived([...filtered]
+    .sort((a, b) => ageInDays(b.createdAt) - ageInDays(a.createdAt))
+    .slice(0, 6));
+  let outputHarian = $derived.by(() => {
+    const map = new Map<string, { label: string; pcs: number }>();
+    for (const batch of filteredAll) {
+      const date = batch.createdAt?.toDate ? batch.createdAt.toDate() : batch.createdAt ? new Date(batch.createdAt as any) : null;
+      if (!date) continue;
+      const key = toInputDate(date);
+      const current = map.get(key) ?? { label: date.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' }), pcs: 0 };
+      current.pcs += batch.total_pcs;
+      map.set(key, current);
     }
-    return list;
+    return [...map.entries()].sort(([a], [b]) => a.localeCompare(b)).slice(-14).map(([, value]) => value);
   });
+  let bottleneck = $derived.by(() => STAGE_GROUPS
+    .map((group) => ({ label: group.label, batch: groupBatches(group).length, pcs: pcs(groupBatches(group)) }))
+    .sort((a, b) => b.batch - a.batch || b.pcs - a.pcs)[0]);
 
-  // ── Stats per stage ────────────────────────────────────────────────
-  const CUTTING_STAGES: StatusBatch[] = ['PENDING_KAIN', 'PENDING_CUTTING', 'CUTTING_IN_PROGRESS', 'CUTTING_DONE'];
-  const JAHIT_STAGES:   StatusBatch[] = ['JAHIT_IN_PROGRESS', 'JAHIT_DONE'];
-  const STEAM_STAGES:   StatusBatch[] = ['STEAM_IN_PROGRESS', 'STEAM_DONE'];
-
-  let cuttingBatches = $derived(filteredBatches.filter(b => CUTTING_STAGES.includes(b.status)));
-  let jahitBatches   = $derived(filteredBatches.filter(b => JAHIT_STAGES.includes(b.status)));
-  let steamBatches   = $derived(filteredBatches.filter(b => STEAM_STAGES.includes(b.status)));
-
-  let cuttingPcs = $derived(cuttingBatches.reduce((s, b) => s + (b.pcs_saat_ini ?? b.total_pcs), 0));
-  let jahitPcs   = $derived(jahitBatches.reduce((s, b) => s + (b.pcs_saat_ini ?? b.total_pcs), 0));
-  let steamPcs   = $derived(steamBatches.reduce((s, b) => s + (b.pcs_saat_ini ?? b.total_pcs), 0));
-  let terlambatBatches = $derived(filteredBatches.filter(b => hitungHari(b.createdAt) > 5));
-  let totalAktifPcs = $derived(cuttingPcs + jahitPcs + steamPcs);
-  let bottleneck = $derived.by(() => {
-    const items = [
-      { label: "Cutting", count: cuttingBatches.length, pcs: cuttingPcs },
-      { label: "Jahit", count: jahitBatches.length, pcs: jahitPcs },
-      { label: "Steam", count: steamBatches.length, pcs: steamPcs },
-    ];
-    return items.sort((a, b) => b.count - a.count || b.pcs - a.pcs)[0];
-  });
-
-  // ── Umur batch ────────────────────────────────────────────────────
-  let batchUmur = $derived({
-    baru:   filteredBatches.filter(b => hitungHari(b.createdAt) <= 2).length,
-    normal: filteredBatches.filter(b => { const h = hitungHari(b.createdAt); return h >= 3 && h <= 5; }).length,
-    lambat: filteredBatches.filter(b => hitungHari(b.createdAt) > 5).length,
-  });
-
-  // ── Grouping helpers ───────────────────────────────────────────────
-  type Group = { key: string; label: string; batches: BatchProduksi[] };
-
-  let groupsByKepala = $derived.by((): Group[] => {
-    const map = new Map<string, BatchProduksi[]>();
-    for (const b of filteredBatches) {
-      const nama =
-        CUTTING_STAGES.includes(b.status)
-          ? (b.penugasan?.cutting?.nama ?? '— Belum ditugaskan')
-          : JAHIT_STAGES.includes(b.status)
-            ? (b.penugasan?.jahit?.nama ?? '— Belum ditugaskan')
-            : (b.penugasan?.steam?.nama ?? '— Belum ditugaskan');
-      if (!map.has(nama)) map.set(nama, []);
-      map.get(nama)!.push(b);
-    }
-    return [...map.entries()]
-      .sort(([a], [b]) => {
-        if (a.startsWith('—')) return 1;
-        if (b.startsWith('—')) return -1;
-        return a.localeCompare(b, 'id');
-      })
-      .map(([nama, batches]) => ({ key: nama, label: nama, batches }));
-  });
-
-  let groupsByModel = $derived.by((): Group[] => {
-    const map = new Map<string, BatchProduksi[]>();
-    for (const b of filteredBatches) {
-      const key = b.model_id;
-      if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(b);
-    }
-    return [...map.entries()]
-      .sort(([, a], [, b]) => a[0].nama_model.localeCompare(b[0].nama_model, 'id'))
-      .map(([, batches]) => ({
-        key: batches[0].model_id,
-        label: batches[0].nama_model,
-        batches,
-      }));
-  });
-
-  // Top 5 model by total pcs in progress
-  let modelRanking = $derived(
-    [...groupsByModel]
-      .map(g => ({
-        ...g,
-        totalPcs: g.batches.reduce((s, b) => s + (b.pcs_saat_ini ?? b.total_pcs), 0),
-      }))
-      .sort((a, b) => b.totalPcs - a.totalPcs)
-      .slice(0, 5)
-  );
-
-  // helper: parse warna hex list from batch (backward compat old combined format)
-  function getWarnaHexes(batch: BatchProduksi): string[] {
-    const list = (batch as any).kode_hex_list as string | undefined;
-    if (list) return list.split(',').map((s: string) => s.trim()).filter(Boolean);
-    if (batch.kode_hex_warna) return [batch.kode_hex_warna];
-    return [];
+  function groupBatches(group: StageGroup): BatchProduksi[] {
+    return filtered.filter((batch) => group.statuses.includes(batch.status));
   }
-
-  // ── Utility ────────────────────────────────────────────────────────
-  function getBatchesForStage(stages: StatusBatch[]): BatchProduksi[] {
-    return filteredBatches.filter((b) => stages.includes(b.status));
+  function pageFor(key: string): number { return pages[key] ?? 1; }
+  function totalPages(list: BatchProduksi[]): number { return Math.max(1, Math.ceil(list.length / PAGE_SIZE)); }
+  function visible(group: StageGroup): BatchProduksi[] {
+    const list = groupBatches(group);
+    const page = Math.min(pageFor(group.label), totalPages(list));
+    return list.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   }
-
-  function currentWorkerName(batch: BatchProduksi): string {
-    if (CUTTING_STAGES.includes(batch.status)) return batch.penugasan?.cutting?.nama ?? '';
-    if (JAHIT_STAGES.includes(batch.status)) return batch.penugasan?.jahit?.nama ?? '';
-    if (STEAM_STAGES.includes(batch.status)) return batch.penugasan?.steam?.nama ?? '';
-    return '';
+  function setPage(group: StageGroup, page: number) {
+    const max = totalPages(groupBatches(group));
+    pages = { ...pages, [group.label]: Math.max(1, Math.min(page, max)) };
   }
-
-  function hitungHari(createdAt: any): number {
-    if (!createdAt) return 0;
-    const d = createdAt.toDate ? createdAt.toDate() : new Date(createdAt);
-    return Math.floor((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24));
+  function pcs(list: BatchProduksi[]): number { return list.reduce((sum, batch) => sum + (batch.pcs_saat_ini ?? batch.total_pcs), 0); }
+  function ageInDays(value: any): number {
+    if (!value) return 0;
+    const date = value.toDate ? value.toDate() : new Date(value);
+    return Math.max(0, Math.floor((Date.now() - date.getTime()) / 86400000));
   }
-
-  function formatDate(ts: any): string {
-    if (!ts) return '—';
-    const d = ts.toDate ? ts.toDate() : new Date(ts);
-    return d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
+  function formatDate(value: any): string {
+    if (!value) return '-';
+    const date = value.toDate ? value.toDate() : new Date(value);
+    return date.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
   }
-
-  function clearFilter() {
-    filterTanggalDari = '';
-    filterTanggalSampai = '';
+  function worker(batch: BatchProduksi, group: StageGroup): string {
+    const key = group.label.toLowerCase() as 'cutting' | 'jahit' | 'steam';
+    return batch.penugasan?.[key]?.nama ?? '';
   }
-
-  let hasFilter = $derived(filterTanggalDari !== '' || filterTanggalSampai !== '');
-
+  function reloadPerforma() {
+    loadingPerforma = true;
+    getPerformaPerDivisi({ dari: dari || undefined, sampai: sampai || undefined })
+      .then((data) => { performa = data; })
+      .finally(() => { loadingPerforma = false; });
+  }
   function refresh() {
     loading = true;
     unsubscribe?.();
-    unsubscribe = subscribeBatchAktif((data) => {
-      batchList = data;
-      loading = false;
-    });
+    unsubscribe = subscribeBatchAktif((data) => { batches = data; loading = false; });
+    getBatchList().then((data) => { allBatches = data; });
+    reloadPerforma();
   }
 
-  onMount(() => {
-    unsubscribe = subscribeBatchAktif((data) => {
-      batchList = data;
-      loading = false;
-    });
+  $effect(() => {
+    dari; sampai;
+    pages = {};
+    reloadPerforma();
   });
-
-  onDestroy(() => {
-    unsubscribe?.();
-  });
+  onMount(() => { refresh(); });
+  onDestroy(() => unsubscribe?.());
 </script>
 
-<!-- ── Header ─────────────────────────────────────────────────────── -->
-<div class="mb-5 flex flex-wrap items-start justify-between gap-4">
-  <div>
-    <h1 class="text-xl font-semibold text-gray-900">Monitor Produksi</h1>
-    <p class="mt-0.5 flex items-center gap-2 text-sm text-gray-500">
-      Pantau status produksi secara real-time
-      <span class="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">
-        <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-green-500"></span>
-        Live
-      </span>
-    </p>
-  </div>
-  <button
-    onclick={refresh}
-    class="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50"
-  >
-    <svg
-      class="h-3.5 w-3.5 {loading ? 'animate-spin' : ''}"
-      xmlns="http://www.w3.org/2000/svg"
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke-width="2"
-      stroke="currentColor"
-    >
-      <path
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"
-      />
-    </svg>
-    Refresh
-  </button>
+<div class="mb-5 flex flex-wrap items-start justify-between gap-3">
+  <div><h1 class="text-xl font-semibold text-gray-900">Dashboard Produksi</h1><p class="mt-1 text-sm text-gray-500">Pantau antrean, hasil tiap tahap, dan performa produksi.</p></div>
+  <button onclick={refresh} class="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50"><RefreshCwIcon class="h-4 w-4 {loading ? 'animate-spin' : ''}" /> Refresh</button>
 </div>
 
-<!-- ── Stats Cards ────────────────────────────────────────────────── -->
-{#if loading}
-  <div class="mb-5 grid grid-cols-2 gap-4 sm:grid-cols-4">
-    {#each Array(4) as _}
-      <div class="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
-        <div class="mb-2 h-3 w-16 animate-pulse rounded bg-gray-100"></div>
-        <div class="h-7 w-10 animate-pulse rounded bg-gray-100"></div>
-        <div class="mt-1 h-3 w-24 animate-pulse rounded bg-gray-100"></div>
-      </div>
-    {/each}
-  </div>
-{:else}
-  <div class="mb-5 grid grid-cols-2 gap-4 sm:grid-cols-4">
-    <!-- Total -->
-    <div class="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
-      <div class="mb-2 flex items-center justify-between">
-        <p class="text-xs font-medium text-gray-500">Total Aktif</p>
-        <ActivityIcon class="h-4 w-4 text-gray-300" />
-      </div>
-      <p class="text-2xl font-bold text-gray-900">{filteredBatches.length}</p>
-      <p class="mt-1 text-xs text-gray-400">{totalAktifPcs.toLocaleString('id-ID')} pcs total</p>
-    </div>
-    <!-- Cutting -->
-    <div class="rounded-xl border border-orange-100 bg-orange-50 p-4 shadow-sm">
-      <div class="mb-2 flex items-center justify-between">
-        <p class="text-xs font-medium text-orange-600">Cutting</p>
-        <ScissorsIcon class="h-4 w-4 text-orange-300" />
-      </div>
-      <p class="text-2xl font-bold text-orange-700">{cuttingBatches.length}</p>
-      <p class="mt-1 text-xs text-orange-500">{cuttingPcs.toLocaleString('id-ID')} pcs</p>
-    </div>
-    <!-- Jahit -->
-    <div class="rounded-xl border border-blue-100 bg-blue-50 p-4 shadow-sm">
-      <div class="mb-2 flex items-center justify-between">
-        <p class="text-xs font-medium text-blue-600">Jahit</p>
-        <PackageIcon class="h-4 w-4 text-blue-300" />
-      </div>
-      <p class="text-2xl font-bold text-blue-700">{jahitBatches.length}</p>
-      <p class="mt-1 text-xs text-blue-500">{jahitPcs.toLocaleString('id-ID')} pcs</p>
-    </div>
-    <!-- Steam -->
-    <div class="rounded-xl border border-purple-100 bg-purple-50 p-4 shadow-sm">
-      <div class="mb-2 flex items-center justify-between">
-        <p class="text-xs font-medium text-purple-600">Steam</p>
-        <ZapIcon class="h-4 w-4 text-purple-300" />
-      </div>
-      <p class="text-2xl font-bold text-purple-700">{steamBatches.length}</p>
-      <p class="mt-1 text-xs text-purple-500">{steamPcs.toLocaleString('id-ID')} pcs</p>
-    </div>
-  </div>
-
-  <!-- ── Terlambat Alert ──────────────────────────────────────────── -->
-  {#if terlambatBatches.length > 0}
-    <div class="mb-5 flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
-      <AlertTriangleIcon class="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
-      <div class="min-w-0 flex-1">
-        <p class="text-sm font-semibold text-red-800">
-          {terlambatBatches.length} Batch Melebihi 5 Hari
-        </p>
-        <div class="mt-1.5 flex flex-wrap gap-1.5">
-          {#each terlambatBatches as b}
-            {@const hari = hitungHari(b.createdAt)}
-            <span class="inline-flex items-center gap-1 rounded-full border border-red-200 bg-white px-2 py-0.5 text-[11px] font-medium text-red-700">
-              {#if b.kode_hex_warna}
-                <span class="h-1.5 w-1.5 rounded-full shrink-0" style="background:{b.kode_hex_warna}"></span>
-              {/if}
-              {b.nama_model}
-              <span class="font-semibold text-red-600">{hari}h</span>
-            </span>
-          {/each}
-        </div>
-      </div>
-    </div>
-  {/if}
-{/if}
-
-<!-- ── Grafik Produksi ─────────────────────────────────────────────── -->
-{#if !loading && filteredBatches.length > 0}
-  <div class="mb-5 grid grid-cols-1 gap-3 lg:grid-cols-3">
-    <div class="rounded-xl border border-gray-100 bg-white px-4 py-3 shadow-sm">
-      <p class="text-xs font-medium text-gray-400">Fokus Hari Ini</p>
-      <p class="mt-1 text-sm font-semibold text-gray-800">
-        {bottleneck.label}
-        <span class="font-normal text-gray-400">· {bottleneck.count} batch</span>
-      </p>
-    </div>
-    <div class="rounded-xl border border-gray-100 bg-white px-4 py-3 shadow-sm">
-      <p class="text-xs font-medium text-gray-400">Risiko Lama</p>
-      <p class="mt-1 text-sm font-semibold {terlambatBatches.length > 0 ? 'text-red-600' : 'text-gray-800'}">
-        {terlambatBatches.length > 0 ? `${terlambatBatches.length} batch perlu dicek` : "Tidak ada"}
-      </p>
-    </div>
-    <div class="rounded-xl border border-gray-100 bg-white px-4 py-3 shadow-sm">
-      <p class="text-xs font-medium text-gray-400">Output Aktif</p>
-      <p class="mt-1 text-sm font-semibold text-gray-800">
-        {totalAktifPcs.toLocaleString("id-ID")} pcs
-      </p>
-    </div>
-  </div>
-
-  {@const totalBatch = filteredBatches.length}
-  {@const maxModelPcs = modelRanking[0]?.totalPcs ?? 1}
-  <div class="mb-5 grid grid-cols-1 gap-4 lg:grid-cols-2">
-
-    <!-- Pipeline alur -->
-    <div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
-      <p class="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-400">Alur Produksi</p>
-      <p class="mb-4 text-[11px] text-gray-400">{totalBatch} batch aktif · {(cuttingPcs + jahitPcs + steamPcs).toLocaleString('id-ID')} pcs total</p>
-      <div class="space-y-4">
-        {#each [
-          { label: 'Cutting', batches: cuttingBatches, pcs: cuttingPcs, bar: 'bg-orange-400', text: 'text-orange-700', bg: 'bg-orange-50' },
-          { label: 'Jahit',   batches: jahitBatches,   pcs: jahitPcs,   bar: 'bg-blue-400',   text: 'text-blue-700',   bg: 'bg-blue-50'   },
-          { label: 'Steam',   batches: steamBatches,   pcs: steamPcs,   bar: 'bg-purple-400', text: 'text-purple-700', bg: 'bg-purple-50' },
-        ] as s}
-          {@const pct = totalBatch > 0 ? (s.batches.length / totalBatch) * 100 : 0}
-          <div>
-            <div class="mb-1.5 flex items-center justify-between text-xs">
-              <span class="font-semibold text-gray-700">{s.label}</span>
-              <span class="font-medium {s.text}">{s.batches.length} batch · {s.pcs.toLocaleString('id-ID')} pcs</span>
-            </div>
-            <div class="relative h-2.5 w-full overflow-hidden rounded-full bg-gray-100">
-              <div class="absolute inset-y-0 left-0 rounded-full {s.bar} transition-all duration-500" style="width:{pct}%"></div>
-            </div>
-            <p class="mt-1 text-[10px] text-gray-400">{pct.toFixed(0)}% dari total batch aktif</p>
-          </div>
-        {/each}
-      </div>
-
-      <!-- Umur batch breakdown -->
-      <div class="mt-5 border-t border-gray-100 pt-4">
-        <p class="mb-3 text-[11px] font-semibold uppercase tracking-wide text-gray-400">Usia Batch</p>
-        <div class="grid grid-cols-3 gap-2 text-center">
-          <div class="rounded-lg bg-green-50 px-2 py-2.5">
-            <p class="text-lg font-bold text-green-700">{batchUmur.baru}</p>
-            <p class="text-[10px] text-green-600">≤ 2 hari</p>
-          </div>
-          <div class="rounded-lg bg-amber-50 px-2 py-2.5">
-            <p class="text-lg font-bold text-amber-700">{batchUmur.normal}</p>
-            <p class="text-[10px] text-amber-600">3–5 hari</p>
-          </div>
-          <div class="rounded-lg {batchUmur.lambat > 0 ? 'bg-red-50' : 'bg-gray-50'} px-2 py-2.5">
-            <p class="text-lg font-bold {batchUmur.lambat > 0 ? 'text-red-700' : 'text-gray-400'}">{batchUmur.lambat}</p>
-            <p class="text-[10px] {batchUmur.lambat > 0 ? 'text-red-500' : 'text-gray-400'}">> 5 hari</p>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Ranking model -->
-    <div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
-      <p class="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-400">Model Terbanyak</p>
-      <p class="mb-4 text-[11px] text-gray-400">Berdasarkan total PCS aktif</p>
-      {#if modelRanking.length === 0}
-        <p class="text-sm text-gray-400">Tidak ada data</p>
-      {:else}
-        <div class="space-y-3">
-          {#each modelRanking as item, i}
-            {@const pct = maxModelPcs > 0 ? (item.totalPcs / maxModelPcs) * 100 : 0}
-            {@const warnaBatch = item.batches.find(b => b.kode_hex_warna)}
-            <div>
-              <div class="mb-1 flex items-center justify-between gap-2 text-xs">
-                <div class="flex min-w-0 items-center gap-1.5">
-                  <span class="shrink-0 flex h-4 w-4 items-center justify-center rounded-full bg-gray-100 text-[9px] font-bold text-gray-500">
-                    {i + 1}
-                  </span>
-                  <span class="truncate font-medium text-gray-700">{item.label}</span>
-                  {#if warnaBatch?.kode_hex_warna}
-                    {#each getWarnaHexes(warnaBatch) as hex}
-                      <span class="h-2 w-2 shrink-0 rounded-full ring-1 ring-black/10" style="background:{hex}"></span>
-                    {/each}
-                  {/if}
-                </div>
-                <span class="shrink-0 font-semibold text-gray-800">{item.totalPcs.toLocaleString('id-ID')} pcs</span>
-              </div>
-              <div class="relative h-2 w-full overflow-hidden rounded-full bg-gray-100">
-                <div class="absolute inset-y-0 left-0 rounded-full bg-gray-400 transition-all duration-500" style="width:{pct}%"></div>
-              </div>
-              <p class="mt-0.5 text-[10px] text-gray-400">{item.batches.length} batch aktif</p>
-            </div>
-          {/each}
-        </div>
-      {/if}
-    </div>
-  </div>
-{/if}
-
-<!-- ── Filter & View Mode Bar ─────────────────────────────────────── -->
-<div class="mb-5 flex flex-wrap items-end gap-3 rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
-  <div class="flex flex-wrap items-end gap-3 flex-1">
-    <div class="flex flex-col gap-1 min-w-[140px]">
-      <label for="dari" class="flex items-center gap-1 text-xs font-medium text-gray-500">
-        <CalendarIcon class="h-3 w-3" /> Dari Tanggal
-      </label>
-      <input
-        id="dari"
-        type="date"
-        bind:value={filterTanggalDari}
-        class="rounded-lg border border-gray-200 px-3 py-1.5 text-sm text-gray-700 focus:border-gray-400 focus:outline-none"
-      />
-    </div>
-    <div class="flex flex-col gap-1 min-w-[140px]">
-      <label for="sampai" class="flex items-center gap-1 text-xs font-medium text-gray-500">
-        <CalendarIcon class="h-3 w-3" /> Sampai Tanggal
-      </label>
-      <input
-        id="sampai"
-        type="date"
-        bind:value={filterTanggalSampai}
-        min={filterTanggalDari || undefined}
-        class="rounded-lg border border-gray-200 px-3 py-1.5 text-sm text-gray-700 focus:border-gray-400 focus:outline-none"
-      />
-    </div>
-    {#if hasFilter}
-      <button
-        onclick={clearFilter}
-        class="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-500 hover:bg-gray-50"
-      >
-        <XIcon class="h-3 w-3" /> Reset filter
-      </button>
-    {/if}
-  </div>
-
-  <div class="flex items-center gap-1 rounded-lg border border-gray-200 p-1">
-    <button
-      onclick={() => viewMode = 'tahap'}
-      class="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition {viewMode === 'tahap' ? 'bg-gray-900 text-white' : 'text-gray-500 hover:bg-gray-50'}"
-    >
-      <LayoutIcon class="h-3 w-3" /> Per Tahap
-    </button>
-    <button
-      onclick={() => viewMode = 'kepala'}
-      class="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition {viewMode === 'kepala' ? 'bg-gray-900 text-white' : 'text-gray-500 hover:bg-gray-50'}"
-    >
-      <UsersIcon class="h-3 w-3" /> Penanggung Jawab
-    </button>
-    <button
-      onclick={() => viewMode = 'model'}
-      class="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition {viewMode === 'model' ? 'bg-gray-900 text-white' : 'text-gray-500 hover:bg-gray-50'}"
-    >
-      <ShirtIcon class="h-3 w-3" /> Per Model
-    </button>
-  </div>
+<div class="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
+  <div><p class="text-sm font-semibold text-gray-800">Periode Produksi</p><p class="text-xs text-gray-400">Berlaku untuk ringkasan, performa, dan pipeline.</p></div>
+  <PeriodSelector bind:dateRange defaultPeriod="bulan_ini" />
 </div>
 
-<!-- ── Content ────────────────────────────────────────────────────── -->
-{#if loading}
-  <div class="space-y-6">
-    {#each Array(2) as _}
-      <div class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
-        <div class="h-11 animate-pulse border-b border-gray-100 bg-gray-50"></div>
-        <div class="grid grid-cols-1 gap-4 p-5 sm:grid-cols-2 lg:grid-cols-3">
-          {#each Array(3) as _}
-            <div class="h-32 animate-pulse rounded-xl bg-gray-50"></div>
-          {/each}
-        </div>
-      </div>
-    {/each}
-  </div>
+<div class="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-4">
+  <div class="rounded-xl border border-gray-100 bg-white p-4 shadow-sm"><div class="flex justify-between"><p class="text-xs font-medium text-gray-500">Batch aktif</p><ActivityIcon class="h-4 w-4 text-gray-400" /></div><p class="mt-2 text-2xl font-bold text-gray-900">{filtered.length}</p><p class="mt-1 text-xs text-gray-400">{totalPcs.toLocaleString('id-ID')} pcs berjalan</p></div>
+  {#each STAGE_GROUPS as group}<div class="rounded-xl border p-4 shadow-sm {group.card}"><div class="flex justify-between"><p class="text-xs font-medium {group.title}">{group.label}</p><svelte:component this={group.icon} class="h-4 w-4 {group.iconColor}" /></div><p class="mt-2 text-2xl font-bold {group.value}">{groupBatches(group).length}</p><p class="mt-1 text-xs {group.title}">{pcs(groupBatches(group)).toLocaleString('id-ID')} pcs</p></div>{/each}
+</div>
 
-{:else if filteredBatches.length === 0}
-  <div class="flex flex-col items-center justify-center gap-3 rounded-xl border border-gray-100 bg-white py-20 shadow-sm">
-    <div class="flex h-14 w-14 items-center justify-center rounded-full bg-gray-100">
-      <ActivityIcon class="h-7 w-7 text-gray-300" />
-    </div>
-    <p class="text-sm font-medium text-gray-500">
-      {hasFilter ? 'Tidak ada batch untuk rentang tanggal ini' : 'Tidak ada batch yang sedang berjalan'}
-    </p>
-    <p class="text-xs text-gray-400">
-      {hasFilter ? 'Coba ubah filter tanggal' : 'Semua produksi telah selesai atau belum ada order yang dibuat'}
-    </p>
-    {#if !hasFilter}
-      <p class="mt-1 text-xs text-gray-400">Buat order baru via halaman Model Baju</p>
-    {:else}
-      <button onclick={clearFilter} class="mt-1 text-xs text-gray-400 underline">Reset filter</button>
-    {/if}
-  </div>
+<section class="mb-5 overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
+  <div class="flex items-center justify-between border-b border-gray-100 px-5 py-4"><div class="flex items-center gap-2"><TrendingUpIcon class="h-4 w-4 text-gray-500" /><div><h2 class="text-sm font-semibold text-gray-900">Performa Produksi</h2><p class="text-xs text-gray-400">Chart dan detail hasil selesai pada periode terpilih.</p></div></div><span class="text-xs text-gray-400">{terlambat} batch lebih dari 5 hari</span></div>
+  <div class="flex overflow-x-auto border-b border-gray-100 px-5">{#each DIVISI as tab}<button onclick={() => activeDivisi = tab} class="border-b-2 px-3 py-2.5 text-xs font-medium {activeDivisi === tab ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-500'}">{tab}<span class="ml-1 text-gray-400">({performa[tab].length})</span></button>{/each}</div>
+  {#if loadingPerforma}<p class="p-6 text-sm text-gray-400">Memuat performa...</p>{:else if performa[activeDivisi].length === 0}<p class="p-6 text-sm text-gray-400">Belum ada hasil selesai pada periode ini.</p>{:else}{@const maxChart = Math.max(...performa[activeDivisi].map((item) => item.total_pcs_berhasil), 1)}<div class="space-y-3 border-b border-gray-100 p-5">{#each performa[activeDivisi] as item}<div><div class="mb-1 flex items-center justify-between gap-3 text-xs"><span class="truncate font-medium text-gray-700">{item.nama}</span><span class="shrink-0 text-gray-500">{item.total_pcs_berhasil.toLocaleString('id-ID')} pcs · reject {item.total_pcs_reject.toLocaleString('id-ID')}</span></div><div class="h-2.5 overflow-hidden rounded-full bg-blue-100"><div class="h-full rounded-full bg-blue-500" style="width:{Math.max(3, item.total_pcs_berhasil / maxChart * 100)}%"></div></div></div>{/each}</div><div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="bg-gray-50 text-xs text-gray-500"><th class="px-5 py-2.5 text-left font-medium">Nama</th><th class="px-4 py-2.5 text-right font-medium">PCS berhasil</th><th class="px-4 py-2.5 text-right font-medium">Reject</th><th class="px-5 py-2.5 text-right font-medium">Batch</th></tr></thead><tbody>{#each performa[activeDivisi] as item}<tr class="border-t border-gray-50"><td class="px-5 py-3 font-medium text-gray-800">{item.nama}</td><td class="px-4 py-3 text-right">{item.total_pcs_berhasil.toLocaleString('id-ID')}</td><td class="px-4 py-3 text-right text-red-600">{item.total_pcs_reject.toLocaleString('id-ID')}</td><td class="px-5 py-3 text-right text-gray-500">{item.jumlah_batch}</td></tr>{/each}</tbody></table></div>{/if}
+</section>
 
-<!-- ═══════════════════════════════════════════════════════════════ -->
-<!-- VIEW: PER TAHAP                                                -->
-<!-- ═══════════════════════════════════════════════════════════════ -->
-{:else if viewMode === 'tahap'}
-  <div class="space-y-6">
-    {#each STAGE_GROUPS as group}
-      {@const groupBatches = getBatchesForStage(group.stages)}
-      {#if groupBatches.length > 0}
-        {@const groupPcs = groupBatches.reduce((s, b) => s + (b.pcs_saat_ini ?? b.total_pcs), 0)}
-        <div class="overflow-hidden rounded-xl border {group.borderColor} bg-white shadow-sm">
-          <div class="flex items-center justify-between border-b {group.borderColor} {group.bgColor} px-5 py-3">
-            <div class="flex items-center gap-2">
-              <p class="text-sm font-semibold {group.textColor}">{group.label}</p>
-            </div>
-            <div class="flex items-center gap-2">
-              <span class="text-xs {group.textColor} opacity-70">{groupPcs.toLocaleString('id-ID')} pcs</span>
-              <span class="inline-flex items-center rounded-full border {group.borderColor} {group.bgColor} px-2.5 py-0.5 text-xs font-semibold {group.textColor}">
-                {groupBatches.length} batch
-              </span>
-            </div>
-          </div>
-          <div class="grid grid-cols-1 gap-4 p-5 sm:grid-cols-2 lg:grid-cols-3">
-            {#each groupBatches as batch}
-              {@const hari = hitungHari(batch.createdAt)}
-              {@const lambat = hari > 5}
-              {@render BatchCard(batch, hari, lambat)}
-            {/each}
-          </div>
-        </div>
-      {/if}
-    {/each}
-  </div>
+<div class="mb-5 grid grid-cols-1 gap-5 xl:grid-cols-2">
+  <section class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
+    <div class="mb-5 flex items-start justify-between"><div><h2 class="text-sm font-semibold text-gray-900">Output Produksi Harian</h2><p class="mt-1 text-xs text-gray-400">Total pcs dari batch yang dibuat pada periode ini.</p></div><ActivityIcon class="h-5 w-5 text-gray-400" /></div>
+    {#if outputHarian.length === 0}<p class="py-10 text-center text-sm text-gray-400">Belum ada data produksi.</p>{:else}{@const maxOutput = Math.max(...outputHarian.map((item) => item.pcs), 1)}<div class="flex h-44 items-end gap-2 border-b border-l border-gray-200 px-3 pb-0 pt-4">{#each outputHarian as item}<div class="group flex min-w-0 flex-1 flex-col items-center justify-end gap-1"><span class="text-[10px] font-semibold text-gray-500 opacity-0 transition group-hover:opacity-100">{item.pcs.toLocaleString('id-ID')}</span><div class="w-full max-w-8 rounded-t bg-blue-500 transition hover:bg-blue-600" style="height:{Math.max(4, item.pcs / maxOutput * 125)}px" title={`${item.label}: ${item.pcs.toLocaleString('id-ID')} pcs`}></div><span class="mt-1 w-full truncate text-center text-[10px] text-gray-400">{item.label}</span></div>{/each}</div>{/if}
+  </section>
+  <section class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
+    <div class="mb-5 flex items-start justify-between"><div><h2 class="text-sm font-semibold text-gray-900">Bottleneck Produksi</h2><p class="mt-1 text-xs text-gray-400">Tahap dengan antrean batch terbesar.</p></div><UsersIcon class="h-5 w-5 text-amber-500" /></div>
+    {#if bottleneck}<div class="mb-4 rounded-lg bg-amber-50 p-4"><p class="text-xs text-amber-700">Prioritas perhatian</p><p class="mt-1 text-lg font-bold text-amber-800">Divisi {bottleneck.label}</p><p class="mt-1 text-xs text-amber-700">{bottleneck.batch} batch · {bottleneck.pcs.toLocaleString('id-ID')} pcs</p></div>{/if}
+    <div class="space-y-4">{#each STAGE_GROUPS as group}{@const count = groupBatches(group).length}{@const max = Math.max(...STAGE_GROUPS.map((item) => groupBatches(item).length), 1)}<div><div class="mb-1 flex justify-between text-xs"><span class="font-medium text-gray-700">{group.label}</span><span class="text-gray-500">{count} batch</span></div><div class="h-2 overflow-hidden rounded-full bg-gray-100"><div class="h-full rounded-full {group.color === 'orange' ? 'bg-orange-500' : group.color === 'blue' ? 'bg-blue-500' : 'bg-violet-500'}" style="width:{Math.max(count ? 4 : 0, count / max * 100)}%"></div></div></div>{/each}</div>
+  </section>
+</div>
 
-<!-- ═══════════════════════════════════════════════════════════════ -->
-<!-- VIEW: PER KEPALA JAHIT                                         -->
-<!-- ═══════════════════════════════════════════════════════════════ -->
-{:else if viewMode === 'kepala'}
-  <div class="space-y-6">
-    {#each groupsByKepala as group}
-      {@const belumDitugaskan = group.label.startsWith('—')}
-      {@const byStatus = group.batches.reduce<Record<string, BatchProduksi[]>>((acc, b) => {
-        const lbl = DISPLAY_STATUS_LABEL[b.status];
-        if (!acc[lbl]) acc[lbl] = [];
-        acc[lbl].push(b);
-        return acc;
-      }, {})}
-      {@const groupPcs = group.batches.reduce((s, b) => s + (b.pcs_saat_ini ?? b.total_pcs), 0)}
-      <div class="overflow-hidden rounded-xl border {belumDitugaskan ? 'border-gray-200' : 'border-blue-200'} bg-white shadow-sm">
-        <div class="flex items-center justify-between border-b {belumDitugaskan ? 'border-gray-200 bg-gray-50' : 'border-blue-200 bg-blue-50'} px-5 py-3">
-          <div class="flex items-center gap-2">
-            <UsersIcon class="h-4 w-4 {belumDitugaskan ? 'text-gray-400' : 'text-blue-600'}" />
-            <p class="text-sm font-semibold {belumDitugaskan ? 'text-gray-500' : 'text-blue-700'}">
-              {belumDitugaskan ? 'Belum Ditugaskan' : group.label}
-            </p>
-          </div>
-          <div class="flex items-center gap-2">
-            <span class="text-xs {belumDitugaskan ? 'text-gray-400' : 'text-blue-500'}">{groupPcs.toLocaleString('id-ID')} pcs</span>
-            <span class="inline-flex items-center rounded-full border {belumDitugaskan ? 'border-gray-200 bg-gray-50 text-gray-600' : 'border-blue-200 bg-blue-50 text-blue-700'} px-2.5 py-0.5 text-xs font-semibold">
-              {group.batches.length} batch
-            </span>
-          </div>
-        </div>
-        <div class="divide-y divide-gray-50">
-          {#each Object.entries(byStatus) as [statusLabel, batches]}
-            <div class="px-5 py-4">
-              <p class="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-400">{statusLabel}</p>
-              <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {#each batches as batch}
-                  {@const hari = hitungHari(batch.createdAt)}
-                  {@const lambat = hari > 5}
-                  {@render BatchCard(batch, hari, lambat)}
-                {/each}
-              </div>
-            </div>
-          {/each}
-        </div>
-      </div>
-    {/each}
-  </div>
+<div class="mb-5 grid grid-cols-1 gap-5 xl:grid-cols-2">
+  <section class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm"><div class="mb-4 flex items-center justify-between"><div><h2 class="text-sm font-semibold text-gray-900">Model Sering Dibuat</h2><p class="text-xs text-gray-400">Berdasarkan jumlah batch pada periode ini.</p></div><ShirtIcon class="h-5 w-5 text-blue-500" /></div>{#if modelSeringDibuat.length === 0}<p class="text-sm text-gray-400">Belum ada data.</p>{:else}{#each modelSeringDibuat as item, i}<div class="flex items-center gap-3 border-b border-gray-50 py-2.5 last:border-0"><span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-gray-100 text-xs font-semibold text-gray-500">{i + 1}</span><span class="min-w-0 flex-1 truncate text-sm font-medium text-gray-700">{item.nama}</span><span class="text-right text-xs text-gray-500"><strong class="text-gray-800">{item.batch} batch</strong><br />{item.pcs.toLocaleString('id-ID')} pcs</span></div>{/each}{/if}</section>
+  <section class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm"><div class="mb-4 flex items-center justify-between"><div><h2 class="text-sm font-semibold text-gray-900">Proses Terlama</h2><p class="text-xs text-gray-400">Batch aktif dengan umur proses tertinggi.</p></div><ActivityIcon class="h-5 w-5 text-red-500" /></div>{#if prosesTerlama.length === 0}<p class="text-sm text-gray-400">Belum ada batch aktif.</p>{:else}<div class="divide-y divide-gray-50">{#each prosesTerlama as batch}<a href="/monitor-produksi/{batch.id}" class="flex items-center gap-3 py-2.5 hover:bg-gray-50"><div class="min-w-0 flex-1"><p class="truncate text-sm font-medium text-gray-700">{batch.nama_model}</p><p class="text-xs text-gray-400">{STATUS_DISPLAY[batch.status]} · {(batch.pcs_saat_ini ?? batch.total_pcs).toLocaleString('id-ID')} pcs</p></div><span class="shrink-0 rounded-full {ageInDays(batch.createdAt) > 5 ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'} px-2 py-0.5 text-xs font-semibold">{ageInDays(batch.createdAt)} hari</span></a>{/each}</div>{/if}</section>
+</div>
 
-<!-- ═══════════════════════════════════════════════════════════════ -->
-<!-- VIEW: PER MODEL                                                -->
-<!-- ═══════════════════════════════════════════════════════════════ -->
-{:else if viewMode === 'model'}
-  <div class="space-y-6">
-    {#each groupsByModel as group}
-      {@const sample = group.batches[0]}
-      <div class="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-        <div class="flex items-center justify-between border-b border-gray-200 bg-gray-50 px-5 py-3">
-          <div class="flex items-center gap-2">
-            <ShirtIcon class="h-4 w-4 text-gray-400" />
-            <p class="text-sm font-semibold text-gray-800">{group.label}</p>
-          </div>
-          <span class="inline-flex items-center rounded-full border border-gray-200 bg-white px-2.5 py-0.5 text-xs font-semibold text-gray-600">
-            {group.batches.length} batch · {group.batches.reduce((s, b) => s + (b.pcs_saat_ini ?? b.total_pcs), 0).toLocaleString('id-ID')} pcs
-          </span>
-        </div>
-        <div class="overflow-x-auto">
-          <table class="w-full text-sm">
-            <thead>
-              <tr class="border-b border-gray-100 bg-gray-50/50">
-                <th class="px-5 py-2.5 text-left text-xs font-semibold text-gray-400">Status</th>
-                <th class="px-5 py-2.5 text-left text-xs font-semibold text-gray-400">Warna</th>
-                <th class="px-5 py-2.5 text-left text-xs font-semibold text-gray-400">Ukuran</th>
-                <th class="px-5 py-2.5 text-right text-xs font-semibold text-gray-400">PCS</th>
-                <th class="px-5 py-2.5 text-left text-xs font-semibold text-gray-400">Petugas</th>
-                <th class="px-5 py-2.5 text-left text-xs font-semibold text-gray-400">Tanggal</th>
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-gray-50">
-              {#each group.batches as batch}
-                {@const hari = hitungHari(batch.createdAt)}
-                {@const lambat = hari > 5}
-                <tr
-                  class="cursor-pointer transition hover:bg-gray-50"
-                  onclick={() => goto(`/monitor-produksi/${batch.id}`)}
-                >
-                  <td class="px-5 py-3">
-                    <span class="inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold {STATUS_STYLE[batch.status]}">
-                      {DISPLAY_STATUS_LABEL[batch.status]}
-                    </span>
-                  </td>
-                  <td class="px-5 py-3">
-                    {#if batch.kode_hex_warna}
-                      <span class="inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-xs font-medium text-gray-700">
-                        <span class="h-3 w-3 rounded-full shrink-0 border border-gray-200" style="background:{batch.kode_hex_warna}"></span>
-                        {batch.nama_warna ?? ''}
-                      </span>
-                    {:else}
-                      <span class="text-gray-300">—</span>
-                    {/if}
-                  </td>
-                  <td class="px-5 py-3">
-                    <div class="flex flex-wrap gap-1">
-                      {#each batch.detail_ukuran as du}
-                        <span class="rounded border border-gray-100 bg-gray-50 px-1.5 py-0.5 text-[10px] font-medium text-gray-500">
-                          {du.ukuran}:{du.jumlah_pcs}
-                        </span>
-                      {/each}
-                    </div>
-                  </td>
-                  <td class="px-5 py-3 text-right">
-                    <span class="font-semibold text-gray-800">{batch.pcs_saat_ini ?? batch.total_pcs}</span>
-                    {#if lambat}
-                      <span class="ml-1 inline-flex items-center gap-0.5 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-600">
-                        <ClockIcon class="h-2.5 w-2.5" />{hari}h
-                      </span>
-                    {/if}
-                  </td>
-                  <td class="px-5 py-3 text-xs text-gray-600">
-                    {#if currentWorkerName(batch)}
-                      {currentWorkerName(batch)}
-                    {:else}
-                      <span class="text-gray-300">—</span>
-                    {/if}
-                  </td>
-                  <td class="px-5 py-3 text-xs text-gray-500">{formatDate(batch.createdAt)}</td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    {/each}
-  </div>
-{/if}
+<section class="hidden mb-5 overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
+  <div class="flex items-center justify-between border-b border-gray-100 px-5 py-4"><div class="flex items-center gap-2"><TrendingUpIcon class="h-4 w-4 text-gray-500" /><div><h2 class="text-sm font-semibold text-gray-900">Performa Produksi</h2><p class="text-xs text-gray-400">Hasil selesai pada rentang tanggal terpilih.</p></div></div><span class="text-xs text-gray-400">{terlambat} batch lebih dari 5 hari</span></div>
+  <div class="flex overflow-x-auto border-b border-gray-100 px-5">{#each DIVISI as tab}<button onclick={() => activeDivisi = tab} class="border-b-2 px-3 py-2.5 text-xs font-medium {activeDivisi === tab ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-500'}">{tab}<span class="ml-1 text-gray-400">({performa[tab].length})</span></button>{/each}</div>
+  {#if loadingPerforma}<p class="p-6 text-sm text-gray-400">Memuat performa...</p>{:else if performa[activeDivisi].length === 0}<p class="p-6 text-sm text-gray-400">Belum ada hasil selesai pada rentang ini.</p>{:else}<div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="bg-gray-50 text-xs text-gray-500"><th class="px-5 py-2.5 text-left font-medium">Nama</th><th class="px-4 py-2.5 text-right font-medium">PCS berhasil</th><th class="px-4 py-2.5 text-right font-medium">Reject</th><th class="px-5 py-2.5 text-right font-medium">Batch</th></tr></thead><tbody>{#each performa[activeDivisi] as item}<tr class="border-t border-gray-50"><td class="px-5 py-3 font-medium text-gray-800">{item.nama}</td><td class="px-4 py-3 text-right">{item.total_pcs_berhasil.toLocaleString('id-ID')}</td><td class="px-4 py-3 text-right text-red-600">{item.total_pcs_reject.toLocaleString('id-ID')}</td><td class="px-5 py-3 text-right text-gray-500">{item.jumlah_batch}</td></tr>{/each}</tbody></table></div>{/if}
+</section>
 
-<!-- ── Shared BatchCard snippet ──────────────────────────────────── -->
-{#snippet BatchCard(batch: BatchProduksi, hari: number, lambat: boolean)}
-  {@const warnaHexes = getWarnaHexes(batch)}
-  <a href="/monitor-produksi/{batch.id}" class="flex flex-col rounded-xl border border-gray-100 bg-gray-50 p-4 transition hover:border-gray-200 hover:bg-white hover:shadow-sm">
-    <!-- Header: nama + hari -->
-    <div class="mb-2 flex items-start justify-between gap-2">
-      <p class="truncate text-sm font-semibold leading-tight text-gray-800">{batch.nama_model}</p>
-      {#if lambat}
-        <span class="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-600">
-          <ClockIcon class="h-2.5 w-2.5" />{hari}h
-        </span>
-      {:else}
-        <span class="shrink-0 text-[10px] text-gray-300">{hari}h</span>
-      {/if}
-    </div>
+<section class="hidden mb-5 rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
+  <div class="mb-4 flex items-center gap-2"><TrendingUpIcon class="h-4 w-4 text-gray-500" /><div><h2 class="text-sm font-semibold text-gray-900">Chart Performa {activeDivisi}</h2><p class="text-xs text-gray-400">Perbandingan pcs berhasil pada periode terpilih.</p></div></div>
+  {#if loadingPerforma}<p class="text-sm text-gray-400">Memuat chart...</p>{:else if performa[activeDivisi].length === 0}<p class="text-sm text-gray-400">Belum ada data performa.</p>{:else}{@const max = Math.max(...performa[activeDivisi].map((item) => item.total_pcs_berhasil), 1)}<div class="space-y-3">{#each performa[activeDivisi] as item}<div><div class="mb-1 flex justify-between gap-3 text-xs"><span class="truncate font-medium text-gray-700">{item.nama}</span><span class="shrink-0 text-gray-500">{item.total_pcs_berhasil.toLocaleString('id-ID')} pcs · reject {item.total_pcs_reject.toLocaleString('id-ID')}</span></div><div class="h-2.5 overflow-hidden rounded-full bg-gray-100"><div class="h-full rounded-full bg-blue-500" style="width:{Math.max(3, item.total_pcs_berhasil / max * 100)}%"></div></div></div>{/each}</div>{/if}
+</section>
 
-    <!-- Warna chip -->
-    {#if warnaHexes.length > 0}
-      <div class="mb-2">
-        <span class="inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-600">
-          {#each warnaHexes as hex}
-            <span class="h-2.5 w-2.5 rounded-full shrink-0 ring-1 ring-black/10" style="background:{hex}"></span>
-          {/each}
-          {batch.nama_warna ?? 'Warna'}
-        </span>
-      </div>
-    {/if}
-
-    <!-- Status badge -->
-    <span class="mb-2 inline-block self-start rounded-full px-2 py-0.5 text-[10px] font-semibold {STATUS_STYLE[batch.status]}">
-      {DISPLAY_STATUS_LABEL[batch.status]}
-    </span>
-
-    <!-- Kepala jahit -->
-    {#if currentWorkerName(batch)}
-      <p class="mb-2 text-[11px] text-gray-400">
-        <UsersIcon class="inline h-2.5 w-2.5" />
-        <span class="ml-0.5 font-medium text-gray-500">{currentWorkerName(batch)}</span>
-      </p>
-    {/if}
-
-    <!-- PCS + ukuran -->
-    <div class="mt-auto flex items-center justify-between gap-2 pt-2">
-      <p class="shrink-0 text-xs font-semibold text-gray-700">
-        {(batch.pcs_saat_ini ?? batch.total_pcs).toLocaleString('id-ID')} pcs
-      </p>
-      <div class="flex flex-wrap justify-end gap-1">
-        {#each batch.detail_ukuran as du}
-          <span class="rounded border border-gray-100 bg-white px-1.5 py-0.5 text-[10px] font-medium text-gray-500">
-            {du.ukuran}:{du.jumlah_pcs}
-          </span>
-        {/each}
-      </div>
-    </div>
-
-    <!-- Tanggal -->
-    <div class="mt-2.5 border-t border-gray-100 pt-2">
-      <p class="text-[10px] text-gray-400">{formatDate(batch.createdAt)}</p>
-    </div>
-  </a>
-{/snippet}
+<div class="space-y-5">
+  {#if loading}<div class="rounded-xl border border-gray-100 bg-white p-10 text-center text-sm text-gray-400">Memuat pipeline produksi...</div>{:else if filtered.length === 0}<div class="rounded-xl border border-gray-100 bg-white p-10 text-center text-sm text-gray-400">Tidak ada batch aktif pada rentang tanggal ini.</div>{:else}{#each STAGE_GROUPS as group}{@const list = groupBatches(group)}{#if list.length > 0}{@const current = pageFor(group.label)}{@const max = totalPages(list)}<section class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm"><div class="flex items-center justify-between border-b border-gray-100 bg-gray-50 px-5 py-3"><div class="flex items-center gap-2"><svelte:component this={group.icon} class="h-4 w-4 text-gray-500" /><h2 class="text-sm font-semibold text-gray-800">Divisi {group.label}</h2></div><div class="flex items-center gap-2 text-xs text-gray-500"><span>{pcs(list).toLocaleString('id-ID')} pcs</span><span class="rounded-full bg-white px-2 py-0.5 font-semibold">{list.length} batch</span></div></div><div class="grid grid-cols-1 gap-3 p-5 sm:grid-cols-2 lg:grid-cols-3">{#each visible(group) as batch}<a href="/monitor-produksi/{batch.id}" class="rounded-xl border border-gray-100 bg-gray-50 p-4 transition hover:border-gray-300 hover:bg-white hover:shadow-sm"><div class="flex items-start justify-between gap-2"><p class="truncate text-sm font-semibold text-gray-800">{batch.nama_model}</p><span class="shrink-0 text-[10px] text-gray-400">{ageInDays(batch.createdAt)} hari</span></div><p class="mt-2 flex items-center gap-1.5 text-xs text-gray-600">{#if batch.kode_hex_warna}<span class="h-2.5 w-2.5 rounded-full ring-1 ring-black/10" style="background:{batch.kode_hex_warna}"></span>{/if}{batch.nama_warna || 'Tanpa warna'}</p><span class="mt-2 inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold {STATUS_STYLE[batch.status]}">{STATUS_DISPLAY[batch.status]}</span>{#if worker(batch, group)}<p class="mt-2 flex items-center gap-1 text-[11px] text-gray-500"><UsersIcon class="h-3 w-3" />{worker(batch, group)}</p>{/if}<div class="mt-3 flex items-end justify-between gap-2 border-t border-gray-100 pt-3"><span class="text-xs font-semibold text-gray-700">{(batch.pcs_saat_ini ?? batch.total_pcs).toLocaleString('id-ID')} pcs</span><span class="text-right text-[10px] text-gray-400">{batch.detail_ukuran.map((item) => `${item.ukuran}:${item.jumlah_pcs}`).join(' · ')}</span></div><p class="mt-2 text-[10px] text-gray-400">{formatDate(batch.createdAt)}</p></a>{/each}</div>{#if max > 1}<div class="flex items-center justify-between border-t border-gray-100 px-5 py-3 text-xs text-gray-500"><span>Halaman {current} dari {max}</span><div class="flex gap-2"><button aria-label="Halaman sebelumnya" disabled={current <= 1} onclick={() => setPage(group, current - 1)} class="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-1 hover:bg-gray-50 disabled:opacity-40"><ChevronLeftIcon class="h-3.5 w-3.5" /> Sebelumnya</button><button aria-label="Halaman berikutnya" disabled={current >= max} onclick={() => setPage(group, current + 1)} class="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-1 hover:bg-gray-50 disabled:opacity-40">Berikutnya <ChevronRightIcon class="h-3.5 w-3.5" /></button></div></div>{/if}</section>{/if}{/each}{/if}
+</div>

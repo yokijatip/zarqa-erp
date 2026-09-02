@@ -81,7 +81,6 @@
       items: [
         { title: "Ringkasan Penjualan", url: "/penjualan" },
         { title: "Order Penjualan", url: "/penjualan/order" },
-        { title: "Data Buyer", url: "/penjualan/buyer" },
       ],
     },
     {

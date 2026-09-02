@@ -32,7 +32,6 @@
     '/laporan/aktivitas': [{ label: 'Laporan', href: '/laporan' }, { label: 'Aktivitas Akun' }],
     '/penjualan':        [{ label: 'Penjualan' }],
     '/penjualan/order':  [{ label: 'Penjualan', href: '/penjualan' }, { label: 'Order Penjualan' }],
-    '/penjualan/buyer':  [{ label: 'Penjualan', href: '/penjualan' }, { label: 'Data Buyer' }],
     '/karyawan':         [{ label: 'Karyawan' }],
     '/karyawan/data':    [{ label: 'Karyawan', href: '/karyawan' }, { label: 'Data Karyawan' }],
     '/karyawan/penggajian': [{ label: 'Karyawan', href: '/karyawan' }, { label: 'Penggajian' }],

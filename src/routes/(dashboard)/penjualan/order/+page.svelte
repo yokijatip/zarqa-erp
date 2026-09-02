@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { page } from "$app/stores";
   import { goto } from "$app/navigation";
   import { getRiwayatBarangKeluarByPeriod, prosesPendingBarangKeluar, batalItemBarangKeluar } from "$lib/firebase/barang-jadi";
   import { barangJadiCache, modelBajuCache } from "$lib/stores/data-cache.svelte";
@@ -13,6 +14,8 @@
   import * as Table from "$lib/components/ui/table";
   import type { BarangKeluar, ModelBaju } from "$lib/types";
   import { filterSalesLists, formatDate, rupiah, salesListRows, type SalesListRow } from "$lib/sales/penjualan";
+  import ChevronLeftIcon from "@lucide/svelte/icons/chevron-left";
+  import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
 
   let loading = $state(true);
   let errorMsg = $state<string | null>(null);
@@ -22,11 +25,21 @@
   let modelList = $state<ModelBaju[]>([]);
   let detailOpen = $state(false);
   let detailTarget = $state<BarangKeluar | null>(null);
+  const pageSize = 50;
+  let currentPage = $state(1);
 
   let filtered = $derived(filterSalesLists(rows, search));
+  let totalPages = $derived(Math.max(1, Math.ceil(filtered.length / pageSize)));
+  let pageRows = $derived(filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize));
   let totalNilai = $derived(filtered.reduce((sum, row) => sum + row.nilaiJual, 0));
   let totalPcs = $derived(filtered.reduce((sum, row) => sum + row.pcsKeluar, 0));
   let totalPending = $derived(filtered.reduce((sum, row) => sum + row.pcsPending, 0));
+
+  $effect(() => {
+    search;
+    dateRange;
+    currentPage = Math.min(currentPage, totalPages);
+  });
 
   function escapeHtml(value: unknown): string {
     return String(value ?? "")
@@ -47,6 +60,9 @@
       ]);
       modelList = models;
       rows = salesListRows(keluar, models);
+      const openId = $page.url.searchParams.get("open");
+      const target = openId ? rows.find((row) => row.id === openId) : undefined;
+      if (target) openDetail(target);
     } catch (e: any) {
       errorMsg = e?.message ?? "Gagal memuat order penjualan.";
     } finally {
@@ -207,7 +223,7 @@
           </Table.Row>
         </Table.Header>
         <Table.Body>
-          {#each filtered as row}
+          {#each pageRows as row}
             <Table.Row>
               <Table.Cell>{formatDate(row.tanggal)}</Table.Cell>
               <Table.Cell><div class="font-medium">{row.label}</div><div class="text-xs text-gray-400">{row.tujuan} - {row.itemCount} item</div></Table.Cell>
@@ -225,6 +241,16 @@
           {/each}
         </Table.Body>
       </Table.Root>
+      {#if filtered.length > 0}
+        <div class="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 text-sm text-gray-500">
+          <span>Menampilkan {Math.min((currentPage - 1) * pageSize + 1, filtered.length)}-{Math.min(currentPage * pageSize, filtered.length)} dari {filtered.length} list</span>
+          <div class="flex items-center gap-2">
+            <button class="inline-flex h-8 items-center gap-1 rounded-md border px-2.5 text-xs font-medium hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40" aria-label="Halaman sebelumnya" onclick={() => (currentPage -= 1)} disabled={currentPage <= 1}><ChevronLeftIcon class="h-4 w-4" /> Sebelumnya</button>
+            <span class="min-w-20 text-center text-xs font-medium text-gray-700">Halaman {currentPage} / {totalPages}</span>
+            <button class="inline-flex h-8 items-center gap-1 rounded-md border px-2.5 text-xs font-medium hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40" aria-label="Halaman berikutnya" onclick={() => (currentPage += 1)} disabled={currentPage >= totalPages}>Berikutnya <ChevronRightIcon class="h-4 w-4" /></button>
+          </div>
+        </div>
+      {/if}
     </div>
   </section>
 </div>

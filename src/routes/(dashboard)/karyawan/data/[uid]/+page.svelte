@@ -1,16 +1,15 @@
 <script lang="ts">
-  import { onMount } from "svelte";
   import { page } from "$app/stores";
   import { isKaryawanManager } from "$lib/stores/auth.store";
   import {
     getKaryawanById,
     ROLE_KARYAWAN,
     ROLE_LABEL,
-    tipeKaryawanLabel,
     updateKaryawan,
   } from "$lib/firebase/karyawan";
-  import { getPenggajianPeriode } from "$lib/firebase/penggajian";
-  import { getPeriodRange } from "$lib/period";
+  import { getPenggajianPeriode, getPembayaranGajiPeriode, type PembayaranGajiRecord } from "$lib/firebase/penggajian";
+  import { getPeriodRange, type DateRange } from "$lib/period";
+  import PeriodSelector from "$lib/components/period-selector.svelte";
   import type { TipePenggajian, UserProfile, UserRole } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
   import * as Select from "$lib/components/ui/select/index.js";
@@ -23,6 +22,15 @@
   let errorMsg = $state<string | null>(null);
   let successMsg = $state<string | null>(null);
   let payroll = $state<Awaited<ReturnType<typeof getPenggajianPeriode>>>([]);
+  let paymentHistory = $state<PembayaranGajiRecord[]>([]);
+  let workDateRange = $state<DateRange>(getPeriodRange("bulan_ini"));
+  let paymentDateRange = $state<DateRange>(getPeriodRange("semua"));
+  let workPage = $state(1);
+  const WORK_PAGE_SIZE = 10;
+  let exportingPayroll = $state(false);
+  let loadedRangeKey = $state("");
+  let paymentPage = $state(1);
+  const PAYMENT_PAGE_SIZE = 10;
   let openEdit = $state(false);
   let eNama = $state("");
   let eRole = $state<UserRole>("kepala_jahit");
@@ -42,6 +50,12 @@
 
   const uid = $derived($page.params.uid ?? "");
   const payrollKaryawan = $derived(payroll.find((item) => item.uid === uid));
+  const workItems = $derived(payrollKaryawan?.breakdown ?? []);
+  const workTotalPages = $derived(Math.max(1, Math.ceil(workItems.length / WORK_PAGE_SIZE)));
+  const visibleWorkItems = $derived(workItems.slice((workPage - 1) * WORK_PAGE_SIZE, workPage * WORK_PAGE_SIZE));
+  const paymentsKaryawan = $derived(paymentHistory.filter((payment) => payment.karyawan_uid === uid));
+  const paymentTotalPages = $derived(Math.max(1, Math.ceil(paymentsKaryawan.length / PAYMENT_PAGE_SIZE)));
+  const visiblePayments = $derived(paymentsKaryawan.slice((paymentPage - 1) * PAYMENT_PAGE_SIZE, paymentPage * PAYMENT_PAGE_SIZE));
   const isProductionEmployee = $derived(
     !!karyawan &&
       ["kepala_cutting", "kepala_jahit", "kepala_steam"].includes(karyawan.role),
@@ -96,6 +110,41 @@
 
   function rupiah(value: number | undefined): string {
     return `Rp ${Math.round(value ?? 0).toLocaleString("id-ID")}`;
+  }
+
+  function paymentPeriod(payment: PembayaranGajiRecord): string {
+    return `${formatDate(payment.periode_start)} - ${formatDate(payment.periode_end)}`;
+  }
+
+  async function exportPaymentHistory() {
+    if (!karyawan || paymentsKaryawan.length === 0) return;
+    exportingPayroll = true;
+    try {
+      const { jsPDF } = await import("jspdf");
+      const autoTable = (await import("jspdf-autotable")).default;
+      const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+      doc.setFontSize(16);
+      doc.text("Zarqa - Riwayat Penggajian", 14, 16);
+      doc.setFontSize(10);
+      doc.text(`Karyawan: ${karyawan.name}`, 14, 23);
+      doc.text(`Email: ${karyawan.email}`, 14, 29);
+      doc.text(`Tipe: ${isProductionEmployee ? "Karyawan Produksi" : "Karyawan Reguler"}`, 14, 35);
+      autoTable(doc, {
+        startY: 42,
+        head: [["Periode", "Total PCS", "Total Gaji", "Diproses"]],
+        body: paymentsKaryawan.map((payment) => [
+          paymentPeriod(payment),
+          `${payment.total_pcs.toLocaleString("id-ID")} pcs`,
+          rupiah(payment.total_gaji),
+          formatDate(payment.created_at),
+        ]),
+        styles: { fontSize: 9 },
+        headStyles: { fillColor: [15, 23, 42] },
+      });
+      doc.save(`riwayat-penggajian-${karyawan.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.pdf`);
+    } finally {
+      exportingPayroll = false;
+    }
   }
 
   function isExpired(value: any): boolean {
@@ -191,12 +240,15 @@
     loading = true;
     errorMsg = null;
     try {
-      const [profile, payrollData] = await Promise.all([
+      const [profile, payrollData, paymentData] = await Promise.all([
         getKaryawanById(uid),
-        getPenggajianPeriode(getPeriodRange("bulan_ini")),
+        getPenggajianPeriode(workDateRange),
+        getPembayaranGajiPeriode(paymentDateRange),
       ]);
       karyawan = profile;
       payroll = payrollData;
+      paymentHistory = paymentData;
+      paymentPage = 1;
       if (!profile) errorMsg = "Data karyawan tidak ditemukan.";
     } catch {
       errorMsg = "Gagal memuat detail karyawan.";
@@ -205,7 +257,15 @@
     }
   }
 
-  onMount(load);
+  $effect(() => {
+    const rangeKey = [workDateRange, paymentDateRange]
+      .map((range) => range ? `${range.start.getTime()}-${range.end.getTime()}` : "all")
+      .join("|");
+    if (rangeKey !== loadedRangeKey) {
+      loadedRangeKey = rangeKey;
+      load();
+    }
+  });
 </script>
 
 {#if successMsg}
@@ -280,6 +340,9 @@
           <span class="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
             {ROLE_LABEL[karyawan.role] ?? karyawan.role}
           </span>
+          <span class="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
+            {isProductionEmployee ? "Karyawan Produksi" : "Karyawan Reguler"}
+          </span>
           <span class="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-semibold text-gray-600">
             {karyawan.divisi || roleDivisi(karyawan.role)}
           </span>
@@ -303,7 +366,7 @@
       <dl class="mt-4 space-y-3">
         <div>
           <dt class="text-xs text-gray-400">Jabatan</dt>
-          <dd class="text-sm font-medium text-gray-800">{karyawan.jabatan || "-"}</dd>
+          <dd class="text-sm font-medium text-gray-800">{karyawan.jabatan || ROLE_LABEL[karyawan.role] || "-"}</dd>
         </div>
         <div>
           <dt class="text-xs text-gray-400">Divisi</dt>
@@ -412,15 +475,22 @@
       <div class="rounded-lg bg-gray-50 p-3">
         <p class="text-xs text-gray-400">Role Sistem</p>
         <p class="mt-1 truncate text-sm font-semibold text-gray-800">{ROLE_LABEL[karyawan.role] ?? karyawan.role}</p>
-        <p class="mt-0.5 text-xs text-gray-500">{tipeKaryawanLabel(karyawan.role)}</p>
-      </div>
-      <div class="rounded-lg bg-gray-50 p-3">
-        <p class="text-xs text-gray-400">Akses Login</p>
-        <p class="mt-1 text-sm font-semibold {karyawan.status_kerja === 'nonaktif' ? 'text-red-600' : 'text-gray-800'}">
-          {karyawan.status_kerja === "nonaktif" ? "Nonaktif" : "Aktif"}
-        </p>
+        <p class="mt-0.5 text-xs text-gray-500">{isProductionEmployee ? "Karyawan Produksi" : "Karyawan Reguler"}</p>
       </div>
     </div>
+  </section>
+
+  <section class="mt-4 rounded-xl border border-gray-100 bg-white p-5 shadow-sm print:shadow-none">
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <div><h2 class="text-sm font-semibold uppercase tracking-wide text-gray-400">Riwayat Penggajian</h2><p class="mt-1 text-xs text-gray-400">Riwayat pembayaran {isProductionEmployee ? "hasil produksi" : "gaji reguler"} pada periode terpilih.</p></div>
+      <div class="flex items-center gap-2 print:hidden"><PeriodSelector bind:dateRange={paymentDateRange} defaultPeriod="semua" /><Button variant="outline" size="sm" disabled={exportingPayroll || paymentsKaryawan.length === 0} onclick={exportPaymentHistory}>{exportingPayroll ? "Membuat PDF..." : "Cetak PDF"}</Button></div>
+    </div>
+    {#if paymentsKaryawan.length === 0}
+      <div class="py-8 text-center text-sm text-gray-400">Belum ada riwayat pembayaran pada periode ini.</div>
+    {:else}
+      <div class="mt-4 overflow-x-auto rounded-lg border border-gray-100"><table class="w-full text-sm"><thead class="bg-gray-50 text-xs uppercase tracking-wide text-gray-400"><tr><th class="px-4 py-3 text-left">Periode</th><th class="px-4 py-3 text-right">Total PCS</th><th class="px-4 py-3 text-right">Total Gaji</th><th class="px-4 py-3 text-left">Diproses</th></tr></thead><tbody class="divide-y divide-gray-100">{#each visiblePayments as payment}<tr><td class="px-4 py-3 text-gray-700">{paymentPeriod(payment)}</td><td class="px-4 py-3 text-right">{payment.total_pcs.toLocaleString("id-ID")} pcs</td><td class="px-4 py-3 text-right font-semibold text-green-700">{rupiah(payment.total_gaji)}</td><td class="px-4 py-3 text-gray-500">{formatDate(payment.created_at)}</td></tr>{/each}</tbody></table></div>
+      <div class="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-gray-500"><span>Menampilkan {(paymentPage - 1) * PAYMENT_PAGE_SIZE + 1}-{Math.min(paymentPage * PAYMENT_PAGE_SIZE, paymentsKaryawan.length)} dari {paymentsKaryawan.length} pembayaran</span>{#if paymentTotalPages > 1}<div class="flex items-center gap-2"><Button variant="outline" size="sm" disabled={paymentPage === 1} onclick={() => (paymentPage = Math.max(1, paymentPage - 1))}>Sebelumnya</Button><span>Halaman {paymentPage} / {paymentTotalPages}</span><Button variant="outline" size="sm" disabled={paymentPage === paymentTotalPages} onclick={() => (paymentPage = Math.min(paymentTotalPages, paymentPage + 1))}>Berikutnya</Button></div>{/if}</div>
+    {/if}
   </section>
 
   {#if isProductionEmployee}
@@ -429,7 +499,7 @@
         <h2 class="text-sm font-semibold uppercase tracking-wide text-gray-400">
           Hasil Kerja Bulan Ini
         </h2>
-        <span class="text-xs text-gray-400">{payrollKaryawan?.jumlah_batch ?? 0} batch</span>
+        <div class="flex items-center gap-2"><PeriodSelector bind:dateRange={workDateRange} defaultPeriod="bulan_ini" /><span class="text-xs text-gray-400">{payrollKaryawan?.jumlah_batch ?? 0} batch</span></div>
       </div>
       {#if !payrollKaryawan || payrollKaryawan.breakdown.length === 0}
         <div class="py-8 text-center text-sm text-gray-400">
@@ -448,7 +518,7 @@
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-100">
-              {#each payrollKaryawan.breakdown.slice(0, 12) as item}
+              {#each visibleWorkItems as item}
                 <tr>
                   <td class="truncate px-4 py-3 font-medium text-gray-800">{item.nama_model}</td>
                   <td class="truncate px-4 py-3 text-gray-600">{item.nama_warna || "-"}</td>
@@ -460,6 +530,7 @@
             </tbody>
           </table>
         </div>
+        <div class="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-gray-500"><span>Menampilkan {(workPage - 1) * WORK_PAGE_SIZE + 1}-{Math.min(workPage * WORK_PAGE_SIZE, workItems.length)} dari {workItems.length} catatan</span>{#if workTotalPages > 1}<div class="flex items-center gap-2"><Button variant="outline" size="sm" disabled={workPage === 1} onclick={() => (workPage = Math.max(1, workPage - 1))}>Sebelumnya</Button><span>Halaman {workPage} / {workTotalPages}</span><Button variant="outline" size="sm" disabled={workPage === workTotalPages} onclick={() => (workPage = Math.min(workTotalPages, workPage + 1))}>Berikutnya</Button></div>{/if}</div>
       {/if}
     </section>
   {/if}

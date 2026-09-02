@@ -24,8 +24,11 @@ const STATUS_DIVISI: Partial<Record<StatusBatch, DivisiKey>> = {
 };
 
 /** Performa dikelompokkan per divisi — satu karyawan bisa muncul di beberapa divisi */
-export async function getPerformaPerDivisi(): Promise<Record<DivisiKey, PerformaKaryawan[]>> {
+export async function getPerformaPerDivisi(options?: { dari?: string; sampai?: string }): Promise<Record<DivisiKey, PerformaKaryawan[]>> {
   const snap = await getDocs(collectionGroup(db, 'riwayat_proses'));
+
+  const dari = options?.dari ? new Date(`${options.dari}T00:00:00`) : null;
+  const sampai = options?.sampai ? new Date(`${options.sampai}T23:59:59.999`) : null;
 
   // Map per (uid + divisi)
   const map = new Map<string, PerformaKaryawan>();
@@ -47,6 +50,10 @@ export async function getPerformaPerDivisi(): Promise<Record<DivisiKey, Performa
 
   snap.docs.forEach((doc) => {
     const d = doc.data() as RiwayatProses;
+    if (dari || sampai) {
+      const timestamp = d.timestamp?.toDate ? d.timestamp.toDate() : d.timestamp ? new Date(d.timestamp as any) : null;
+      if (!timestamp || (dari && timestamp < dari) || (sampai && timestamp > sampai)) return;
+    }
 
     const divisi = STATUS_DIVISI[d.status_ke as StatusBatch];
     if (!divisi) return;

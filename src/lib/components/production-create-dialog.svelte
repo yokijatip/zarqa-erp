@@ -214,6 +214,15 @@
     );
   }
 
+  function updateKainSelection(
+    index: number,
+    values: Partial<(typeof fKain)[number]>,
+  ) {
+    fKain = fKain.map((kain, currentIndex) =>
+      currentIndex === index ? { ...kain, ...values } : kain,
+    );
+  }
+
   // Total yard kain yang dipakai (sum dari semua kain entry) — hanya info,
   // tidak dipakai lagi untuk kalkulasi pcs jadi (lihat perKainEstimasi).
   let totalYardDipakai = $derived(
@@ -246,8 +255,8 @@
     }, []),
   );
 
-  // Pcs jadi ditentukan oleh kain yang paling cepat habis (bottleneck),
-  // bukan seluruh kain harus lengkap diisi untuk mulai menghitung.
+  // Setiap pcs membutuhkan semua kain yang dimasukkan. Karena itu output
+  // ditentukan oleh kapasitas terkecil, yaitu kain yang paling cepat habis.
   let jumlahJadi = $derived(() =>
     perKainEstimasi.length > 0
       ? Math.min(...perKainEstimasi.map((e) => e.pcs))
@@ -798,10 +807,12 @@
                           type="single"
                           value={kainEntry.jenis_kain || undefined}
                           onValueChange={(val: string | undefined) => {
-                            kainEntry.jenis_kain = val ?? "";
-                            kainEntry.kain_id = "";
-                            kainEntry.nama_kain = "";
-                            kainEntry.satuan = "yard";
+                            updateKainSelection(i, {
+                              jenis_kain: val ?? "",
+                              kain_id: "",
+                              nama_kain: "",
+                              satuan: "yard",
+                            });
                           }}
                         >
                           <Select.Trigger class="h-8 border-gray-200 bg-white px-3 text-xs">
@@ -835,14 +846,16 @@
                           value={kainEntry.kain_id || undefined}
                           onValueChange={(val: string | undefined) => {
                             if (val) {
-                              kainEntry.kain_id = val;
                               const found = stokKainList.find((k) => k.id === val);
                               if (found) {
-                                kainEntry.jenis_kain = found.nama_kain;
-                                kainEntry.satuan = found.satuan;
-                                kainEntry.nama_kain = found.nama_warna
-                                  ? `${found.nama_kain} (${found.nama_warna})`
-                                  : found.nama_kain;
+                                updateKainSelection(i, {
+                                  kain_id: val,
+                                  jenis_kain: found.nama_kain,
+                                  satuan: found.satuan,
+                                  nama_kain: found.nama_warna
+                                    ? `${found.nama_kain} (${found.nama_warna})`
+                                    : found.nama_kain,
+                                });
                               }
                             }
                           }}
@@ -898,11 +911,13 @@
                       value={kainEntry.kain_id || undefined}
                       onValueChange={(val: string | undefined) => {
                         if (val) {
-                          kainEntry.kain_id = val;
                           const found = stokKainList.find((k) => k.id === val);
                           if (found) {
-                            kainEntry.satuan = found.satuan;
-                            kainEntry.nama_kain = found.nama_kain;
+                            updateKainSelection(i, {
+                              kain_id: val,
+                              satuan: found.satuan,
+                              nama_kain: found.nama_kain,
+                            });
                           }
                         }
                       }}
@@ -1016,6 +1031,12 @@
                         Rasio master model: {defaultYardPerPcs()} yard/pcs.
                       </p>
                     {/if}
+                    {#if fKain.length > 1}
+                      <p class="text-[10px] text-gray-500">
+                        Setiap kain dihitung sendiri. Contoh perbandingan 2:1:
+                        isi Yard/pcs kain pertama 2 dan kain kedua 1.
+                      </p>
+                    {/if}
                     {#if est}
                       <p class="text-[10px] text-gray-500">
                         ≈ <span class="font-semibold text-gray-700"
@@ -1076,6 +1097,19 @@
                       >
                     </p>
                   {/if}
+                </div>
+                <div class="grid gap-1.5 sm:grid-cols-2">
+                  {#each perKainEstimasi as est}
+                    <div class="rounded-md border border-blue-100 bg-white px-3 py-2 text-xs">
+                      <div class="flex items-center justify-between gap-2">
+                        <span class="truncate text-gray-600">{est.nama}</span>
+                        <span class="shrink-0 font-semibold text-gray-800">{est.pcs} pcs</span>
+                      </div>
+                      <p class="mt-0.5 text-gray-400">
+                        {est.pcs} pcs dari {parseFloat(fKain[est.index].jumlah_dipakai).toFixed(2)} yard
+                      </p>
+                    </div>
+                  {/each}
                 </div>
                 {#if perKainEstimasi.length < fKain.length}
                   <p class="text-xs text-amber-600">

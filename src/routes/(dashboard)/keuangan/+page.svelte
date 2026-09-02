@@ -56,6 +56,10 @@
   import PencilIcon from "@lucide/svelte/icons/pencil";
   import Trash2Icon from "@lucide/svelte/icons/trash-2";
   import ChevronDownIcon from "@lucide/svelte/icons/chevron-down";
+  import ChevronLeftIcon from "@lucide/svelte/icons/chevron-left";
+  import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
+  import { Chart, registerables } from "chart.js";
+  Chart.register(...registerables);
 
   type FinanceLine = {
     source: "penjualan" | "manual" | "gaji";
@@ -96,6 +100,12 @@
   let activePanel = $state<"transaksi" | "aset" | "gudang">("transaksi");
   let searchQuery = $state("");
   let expandedGudangModels = $state<Set<string>>(new Set());
+  const transactionPageSize = 50;
+  let transactionPage = $state(1);
+  let cashflowCanvas = $state<HTMLCanvasElement | null>(null);
+  let profitLossCanvas = $state<HTMLCanvasElement | null>(null);
+  let cashflowChart: Chart | null = null;
+  let profitLossChart: Chart | null = null;
 
   function inDateRange(value: Date | null, range: DateRange): boolean {
     if (!range || !value) return !range;
@@ -244,7 +254,14 @@
     const pembelianPersediaan = overviewLines
       .filter((line) => line.isInventoryPurchase)
       .reduce((sum, line) => sum + line.nominal, 0);
-    return { penjualan, pemasukanManual, pemasukan, hpp, pengeluaran, pembelianPersediaan, labaBersih: pemasukan - hpp - pengeluaran };
+    const pembelianAset = overviewLines
+      .filter((line) => line.tipe === "pengeluaran" && line.kategori === "Aset")
+      .reduce((sum, line) => sum + line.nominal, 0);
+    const gajiTerbayar = overviewLines
+      .filter((line) => line.source === "gaji")
+      .reduce((sum, line) => sum + line.nominal, 0);
+    const kasTercatat = pemasukan - pengeluaran - pembelianPersediaan - pembelianAset - gajiTerbayar;
+    return { penjualan, pemasukanManual, pemasukan, hpp, pengeluaran, pembelianPersediaan, kasTercatat, labaBersih: pemasukan - hpp - pengeluaran };
   });
 
   let filteredLines = $derived.by(() => {
@@ -260,6 +277,18 @@
       );
     }
     return list;
+  });
+
+  const transactionTotalPages = $derived(Math.max(1, Math.ceil(filteredLines.length / transactionPageSize)));
+  const paginatedLines = $derived(
+    filteredLines.slice((transactionPage - 1) * transactionPageSize, transactionPage * transactionPageSize),
+  );
+
+  $effect(() => {
+    searchQuery;
+    activeTab;
+    transactionDateRange;
+    transactionPage = Math.min(transactionPage, transactionTotalPages);
   });
 
   let incomeLines = $derived(
@@ -420,6 +449,61 @@
       map.set("Gaji Karyawan Reguler", (map.get("Gaji Karyawan Reguler") ?? 0) + summary.totalBebanGaji);
     }
     return [...map.entries()].sort((a, b) => b[1] - a[1]);
+  });
+
+  $effect(() => {
+    cashflowChartRows;
+    cashflowCanvas;
+    if (!cashflowCanvas) return;
+    cashflowChart?.destroy();
+    cashflowChart = new Chart(cashflowCanvas, {
+      type: "bar",
+      data: {
+        labels: cashflowChartRows.map((row) => row.label),
+        datasets: [
+          { label: "Masuk", data: cashflowChartRows.map((row) => row.pemasukan), backgroundColor: "#22c55e", borderRadius: 4 },
+          { label: "Keluar", data: cashflowChartRows.map((row) => row.pengeluaran), backgroundColor: "#ef4444", borderRadius: 4 },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { position: "bottom" },
+          tooltip: { callbacks: { label: (context) => `${context.dataset.label}: ${rupiah(Number(context.raw))}` } },
+        },
+        scales: { y: { beginAtZero: true, ticks: { callback: (value) => rupiah(Number(value)) } } },
+      },
+    });
+  });
+
+  $effect(() => {
+    summary;
+    profitLossCanvas;
+    if (!profitLossCanvas) return;
+    profitLossChart?.destroy();
+    profitLossChart = new Chart(profitLossCanvas, {
+      type: "bar",
+      data: {
+        labels: ["Pendapatan", "HPP", "Operasional", "Gaji Reguler", "Laba Bersih"],
+        datasets: [{
+          label: "Nilai",
+          data: [summary.penjualan, summary.hpp, summary.pengeluaranOperasional, summary.totalBebanGaji, summary.labaBersih],
+          backgroundColor: ["#22c55e", "#f97316", "#ef4444", "#3b82f6", summary.labaBersih >= 0 ? "#111827" : "#b91c1c"],
+          borderRadius: 4,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: (context) => rupiah(Number(context.raw)) } },
+        },
+        scales: { y: { ticks: { callback: (value) => rupiah(Number(value)) } } },
+      },
+    });
   });
 
   function estimateSalaryForRange(nominal: number, tipe: string, range: DateRange | null): number {
@@ -841,16 +925,16 @@
         valueClass="text-green-700"
       />
       <StatCard
-        title="Kas"
-        value={rupiah(overviewSummary.pemasukan - overviewSummary.pengeluaran)}
+        title="Kas Bersih"
+        value={rupiah(overviewSummary.kasTercatat)}
         icon={BanknoteIcon}
         {loading}
-        footerSubtext="masuk - kas keluar"
-        class={overviewSummary.pemasukan - overviewSummary.pengeluaran < 0 ? "border-red-100 bg-red-50" : "border-blue-100 bg-blue-50"}
-        valueClass={overviewSummary.pemasukan - overviewSummary.pengeluaran < 0 ? "text-red-600" : "text-blue-700"}
+        footerSubtext="arus kas aktual pada periode"
+        class={overviewSummary.kasTercatat < 0 ? "border-red-100 bg-red-50" : "border-blue-100 bg-blue-50"}
+        valueClass={overviewSummary.kasTercatat < 0 ? "text-red-600" : "text-blue-700"}
       />
       <StatCard
-        title="Margin"
+        title="Margin Kotor"
         value={`${overviewSummary.pemasukan > 0 ? Math.round(((overviewSummary.pemasukan - overviewSummary.hpp) / overviewSummary.pemasukan) * 100) : 0}%`}
         icon={ReceiptIcon}
         {loading}
@@ -906,24 +990,8 @@
         {#if cashflowChartRows.length === 0}
           <div class="py-16 text-center text-sm text-gray-400">Belum ada arus kas pada periode ini.</div>
         {:else}
-          <div class="mt-5 flex h-56 items-end gap-3 overflow-x-auto rounded-lg border border-gray-100 bg-gray-50 px-4 py-3">
-            {#each cashflowChartRows as row}
-              <div class="flex min-w-16 flex-1 flex-col items-center gap-2">
-                <div class="flex h-40 w-full items-end justify-center gap-1.5">
-                  <div
-                    class="w-4 rounded-t bg-green-500"
-                    title={`Pemasukan ${rupiah(row.pemasukan)}`}
-                    style={`height: ${Math.max(4, (row.pemasukan / maxChartValue) * 100)}%`}
-                  ></div>
-                  <div
-                    class="w-4 rounded-t bg-red-500"
-                    title={`Pengeluaran ${rupiah(row.pengeluaran)}`}
-                    style={`height: ${Math.max(4, (row.pengeluaran / maxChartValue) * 100)}%`}
-                  ></div>
-                </div>
-                <span class="text-[11px] text-gray-500">{row.label}</span>
-              </div>
-            {/each}
+          <div class="mt-5 h-72 rounded-lg border border-gray-100 bg-gray-50 p-4">
+            <canvas bind:this={cashflowCanvas} aria-label="Chart arus kas"></canvas>
           </div>
         {/if}
       </section>
@@ -980,7 +1048,7 @@
           <span class="font-semibold text-red-700">({rupiah(summary.pengeluaranOperasional)})</span>
         </div>
         <div class="flex items-center justify-between px-4 py-3">
-          <span class="text-sm text-gray-500">Gaji terbayar otomatis</span>
+          <span class="text-sm text-gray-500">Gaji produksi terbayar</span>
           <span class="font-semibold text-blue-700">{rupiah(summary.gajiProduksiTerbayar)} <span class="text-xs font-normal text-gray-400">(termasuk HPP)</span></span>
         </div>
         <div class="flex items-center justify-between px-4 py-3">
@@ -992,12 +1060,19 @@
           <span class="font-semibold text-violet-700">({rupiah(summary.pembelianAset)})</span>
         </div>
         <div class="flex items-center justify-between px-4 py-3">
-          <span class="text-sm text-gray-500">Kas tercatat</span>
+          <span class="text-sm text-gray-500">Kas bersih tercatat <span class="text-xs text-gray-400">(arus kas, bukan laba rugi)</span></span>
           <span class="font-semibold text-blue-700">{rupiah(summary.kasTercatat)}</span>
         </div>
         <div class="flex items-center justify-between bg-gray-900 px-4 py-3 text-white">
           <span class="text-sm font-semibold">Laba bersih estimasi</span>
           <span class="font-bold">{rupiah(summary.labaBersih)}</span>
+        </div>
+      </div>
+      <div class="mt-5 border-t border-gray-100 pt-4">
+        <h3 class="text-sm font-semibold text-gray-800">Grafik Laba Rugi</h3>
+        <p class="mt-0.5 text-xs text-gray-400">Perbandingan pendapatan, HPP, beban, dan laba bersih pada periode terpilih.</p>
+        <div class="mt-3 h-72 rounded-lg bg-gray-50 p-3">
+          <canvas bind:this={profitLossCanvas} aria-label="Chart laporan laba rugi"></canvas>
         </div>
       </div>
     </section>
@@ -1254,7 +1329,7 @@
           </Table.Row>
         </Table.Header>
         <Table.Body>
-          {#each filteredLines as line}
+          {#each paginatedLines as line}
             <Table.Row>
               <Table.Cell class="align-top text-sm text-gray-500">{formatDate(line.tanggal)}</Table.Cell>
               <Table.Cell>
@@ -1309,6 +1384,14 @@
           {/each}
         </Table.Body>
       </Table.Root>
+      <div class="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 px-4 py-3 text-sm text-gray-500">
+        <span>Menampilkan {Math.min((transactionPage - 1) * transactionPageSize + 1, filteredLines.length)}-{Math.min(transactionPage * transactionPageSize, filteredLines.length)} dari {filteredLines.length} transaksi</span>
+        <div class="flex items-center gap-2">
+          <button class="inline-flex h-8 items-center gap-1 rounded-md border border-gray-200 px-2.5 text-xs font-medium hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40" aria-label="Halaman sebelumnya" onclick={() => (transactionPage -= 1)} disabled={transactionPage <= 1}><ChevronLeftIcon class="h-4 w-4" /> Sebelumnya</button>
+          <span class="min-w-20 text-center text-xs font-medium text-gray-700">Halaman {transactionPage} / {transactionTotalPages}</span>
+          <button class="inline-flex h-8 items-center gap-1 rounded-md border border-gray-200 px-2.5 text-xs font-medium hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40" aria-label="Halaman berikutnya" onclick={() => (transactionPage += 1)} disabled={transactionPage >= transactionTotalPages}>Berikutnya <ChevronRightIcon class="h-4 w-4" /></button>
+        </div>
+      </div>
     {/if}
   </section>
   {:else if activePanel === "aset"}
