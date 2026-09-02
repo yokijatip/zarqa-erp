@@ -30,15 +30,22 @@
   import WalletIcon from "@lucide/svelte/icons/wallet";
   import FactoryIcon from "@lucide/svelte/icons/factory";
   import BoxesIcon from "@lucide/svelte/icons/boxes";
+  import TruckIcon from "@lucide/svelte/icons/truck";
+  import UsersIcon from "@lucide/svelte/icons/users";
+  import ChevronLeftIcon from "@lucide/svelte/icons/chevron-left";
+  import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
   import { hargaJualUntukUkuran, hargaProduksiUntukUkuran } from "$lib/sales/penjualan";
 
   type ReportTab = "ringkasan" | "keuangan" | "produksi" | "barang_keluar" | "stok" | "karyawan";
+  type ExportSection = "semua" | "keuangan" | "produksi" | "barang_keluar" | "stok" | "karyawan";
   type MoneyRow = { label: string; value: number; color: string };
 
   let dateRange = $state<DateRange>(getPeriodRange("bulan_ini"));
   let activeTab = $state<ReportTab>("keuangan");
   let loading = $state(true);
   let exporting = $state(false);
+  let exportSection = $state<ExportSection>("semua");
+  let barangKeluarPage = $state(1);
   let errorMsg = $state<string | null>(null);
 
   let batches = $state<BatchProduksi[]>([]);
@@ -52,13 +59,24 @@
   let karyawan = $state<UserProfile[]>([]);
   let aset = $state<AsetPerusahaan[]>([]);
 
-  const tabs: Array<{ id: ReportTab; label: string }> = [
-    { id: "keuangan", label: "Laporan Keuangan" },
-    { id: "produksi", label: "Produksi" },
-    { id: "barang_keluar", label: "Barang Keluar" },
-    { id: "stok", label: "Stok" },
-    { id: "karyawan", label: "Karyawan" },
+  const tabs = [
+    { id: "keuangan", label: "Laporan Keuangan", icon: WalletIcon },
+    { id: "produksi", label: "Produksi", icon: FactoryIcon },
+    { id: "barang_keluar", label: "Barang Keluar", icon: TruckIcon },
+    { id: "stok", label: "Stok", icon: BoxesIcon },
+    { id: "karyawan", label: "Karyawan", icon: UsersIcon },
   ];
+
+  const exportSections: Array<{ value: ExportSection; label: string }> = [
+    { value: "semua", label: "Semua laporan" },
+    { value: "keuangan", label: "Laporan keuangan" },
+    { value: "produksi", label: "Produksi" },
+    { value: "barang_keluar", label: "Barang keluar" },
+    { value: "stok", label: "Stok" },
+    { value: "karyawan", label: "Karyawan & gaji" },
+  ];
+
+  const exportSectionLabel = $derived(exportSections.find((section) => section.value === exportSection)?.label ?? "Laporan");
 
   function toDate(value: any): Date | null {
     if (!value) return null;
@@ -178,6 +196,9 @@
       };
     }),
   );
+
+  const barangKeluarTotalPages = $derived(Math.max(1, Math.ceil(listBarangKeluarRows.length / 50)));
+  const barangKeluarRowsPage = $derived(listBarangKeluarRows.slice((barangKeluarPage - 1) * 50, barangKeluarPage * 50));
 
   const penjualan = $derived(listBarangKeluarRows.reduce((sum, row) => sum + row.nilaiJual, 0));
   const hpp = $derived(listBarangKeluarRows.reduce((sum, row) => sum + row.hpp, 0));
@@ -334,10 +355,11 @@
   async function load() {
     loading = true;
     errorMsg = null;
+    barangKeluarPage = 1;
     try {
       const from = dateRange?.start ?? new Date(0);
       const to = dateRange?.end ?? new Date();
-      [batches, barangKeluar, stokJadi, stokKain, stokPotongan, models, transaksi, gaji, karyawan] = await Promise.all([
+      [batches, barangKeluar, stokJadi, stokKain, stokPotongan, models, transaksi, gaji, karyawan, aset] = await Promise.all([
         getBatchListByDateRange(from, to),
         getRiwayatBarangKeluarByPeriod(dateRange),
         getStokBarangJadi(),
@@ -385,101 +407,82 @@
       }
 
       doc.setFontSize(16);
-      doc.text("Zarqa - Laporan Operasional", 14, 16);
+      doc.text(`Zarqa - ${exportSectionLabel}`, 14, 16);
       doc.setFontSize(10);
       doc.text(`Periode: ${formatDate(dateRange?.start ?? null)} - ${formatDate(dateRange?.end ?? null)}`, 14, 23);
 
-      appendTable(
-        "Ringkasan Tutup Buku",
-        ["Komponen", "Nilai"],
-        [
-          ["Penjualan", rupiah(penjualan)],
-          ["HPP produksi", rupiah(hpp)],
-          ["Laba kotor", rupiah(labaKotor)],
-          ["Pemasukan manual", rupiah(pemasukanManual)],
-          ["Pengeluaran manual", rupiah(pengeluaranManual)],
-          ["Gaji produksi (sudah termasuk HPP)", rupiah(gajiProduksiTerbayar)],
-          ["Gaji karyawan reguler", rupiah(gajiRegulerTerbayar)],
-          ["Laba bersih estimasi", rupiah(labaBersih)],
-          ["Kas masuk", rupiah(kasMasuk)],
-          ["Kas keluar", rupiah(kasKeluar)],
-          ["Kas bersih", rupiah(kasBersih)],
-          ["Nilai gudang barang jadi", rupiah(nilaiGudang)],
-        ],
-      );
+      if (exportSection === "semua" || exportSection === "keuangan") {
+        appendTable(
+          "Ringkasan Tutup Buku",
+          ["Komponen", "Nilai"],
+          [
+            ["Penjualan", rupiah(penjualan)],
+            ["HPP produksi", rupiah(hpp)],
+            ["Laba kotor", rupiah(labaKotor)],
+            ["Pemasukan manual", rupiah(pemasukanManual)],
+            ["Pengeluaran manual", rupiah(pengeluaranManual)],
+            ["Gaji produksi (sudah termasuk HPP)", rupiah(gajiProduksiTerbayar)],
+            ["Gaji karyawan reguler", rupiah(gajiRegulerTerbayar)],
+            ["Laba bersih estimasi", rupiah(labaBersih)],
+            ["Kas masuk", rupiah(kasMasuk)],
+            ["Kas keluar", rupiah(kasKeluar)],
+            ["Kas bersih", rupiah(kasBersih)],
+            ["Nilai gudang barang jadi", rupiah(nilaiGudang)],
+          ],
+        );
+        appendTable(
+          "Kategori Keuangan",
+          ["Kategori", "Masuk", "Keluar"],
+          transaksiByKategori.map((row) => [row.kategori, rupiah(row.masuk), rupiah(row.keluar)]),
+        );
+      }
 
-      appendTable(
-        "Barang Keluar per List",
-        ["Tanggal", "Tujuan", "Reseller", "Item", "Model", "Keluar", "Pending", "Penjualan", "HPP", "Laba"],
-        listBarangKeluarRows.map((row) => [
-          formatDate(row.tanggal),
-          row.tujuan,
-          row.reseller,
-          row.itemCount,
-          row.modelCount,
-          row.pcsKeluar,
-          row.pcsPending,
-          rupiah(row.nilaiJual),
-          rupiah(row.hpp),
-          rupiah(row.labaKotor),
-        ]),
-      );
+      if (exportSection === "semua" || exportSection === "barang_keluar") {
+        appendTable(
+          "Barang Keluar per List",
+          ["Tanggal", "Tujuan", "Reseller", "Item", "Model", "Keluar", "Pending", "Penjualan", "HPP", "Laba"],
+          listBarangKeluarRows.map((row) => [
+            formatDate(row.tanggal), row.tujuan, row.reseller, row.itemCount, row.modelCount,
+            row.pcsKeluar, row.pcsPending, rupiah(row.nilaiJual), rupiah(row.hpp), rupiah(row.labaKotor),
+          ]),
+        );
+      }
 
-      appendTable(
-        "Kategori Keuangan",
-        ["Kategori", "Masuk", "Keluar"],
-        transaksiByKategori.map((row) => [row.kategori, rupiah(row.masuk), rupiah(row.keluar)]),
-      );
+      if (exportSection === "semua" || exportSection === "produksi") {
+        appendTable(
+          "Produksi",
+          ["Tanggal", "Model", "Ukuran", "PCS", "Status", "Cutting", "Jahit", "Steam", "Kain"],
+          produksiRows.map((row) => [formatDate(row.tanggal), `${row.model} - ${row.warna}`, row.ukuran, row.pcs, row.status, row.cutting, row.jahit, row.steam, row.kain]),
+        );
+      }
 
-      appendTable(
-        "Produksi",
-        ["Tanggal", "Model", "Ukuran", "PCS", "Status", "Cutting", "Jahit", "Steam", "Kain"],
-        produksiRows.map((row) => [
-          formatDate(row.tanggal),
-          `${row.model} - ${row.warna}`,
-          row.ukuran,
-          row.pcs,
-          row.status,
-          row.cutting,
-          row.jahit,
-          row.steam,
-          row.kain,
-        ]),
-      );
+      if (exportSection === "semua" || exportSection === "stok") {
+        appendTable(
+          "Stok Barang Jadi",
+          ["Model", "PCS", "Nilai Produksi", "Estimasi Jual"],
+          stokJadiByModel.map((row) => [row.model, `${row.pcs} pcs`, rupiah(row.nilaiProduksi), rupiah(row.nilaiJual)]),
+        );
+        appendTable(
+          "Stok Kain",
+          ["Jenis Kain", "Warna", "Total Stok", "Nilai Beli"],
+          stokKainByJenis.map((row) => [row.nama, row.warna, row.total.toLocaleString("id-ID"), rupiah(row.nilai)]),
+        );
+      }
 
-      appendTable(
-        "Stok Barang Jadi",
-        ["Model", "PCS", "Nilai Produksi", "Estimasi Jual"],
-        stokJadiByModel.map((row) => [row.model, `${row.pcs} pcs`, rupiah(row.nilaiProduksi), rupiah(row.nilaiJual)]),
-      );
+      if (exportSection === "semua" || exportSection === "karyawan") {
+        appendTable(
+          "Karyawan",
+          ["Nama", "Email", "Role", "Divisi", "Status", "Penggajian", "Nominal"],
+          karyawanRows.map((row) => [row.nama, row.email, row.role, row.divisi, row.status, row.tipeGaji, row.tarif > 0 ? `${rupiah(row.tarif)} / pcs` : rupiah(row.gajiPokok)]),
+        );
+        appendTable(
+          "Gaji Terbayar",
+          ["Nama", "Divisi", "Periode", "PCS", "Total", "Detail"],
+          gajiRows.map((row) => [row.nama, row.divisi, row.periode, row.pcs, rupiah(row.nominal), row.detail]),
+        );
+      }
 
-      appendTable(
-        "Stok Kain",
-        ["Jenis Kain", "Warna", "Total Stok", "Nilai Beli"],
-        stokKainByJenis.map((row) => [row.nama, row.warna, row.total.toLocaleString("id-ID"), rupiah(row.nilai)]),
-      );
-
-      appendTable(
-        "Karyawan",
-        ["Nama", "Email", "Role", "Divisi", "Status", "Penggajian", "Nominal"],
-        karyawanRows.map((row) => [
-          row.nama,
-          row.email,
-          row.role,
-          row.divisi,
-          row.status,
-          row.tipeGaji,
-          row.tarif > 0 ? `${rupiah(row.tarif)} / pcs` : rupiah(row.gajiPokok),
-        ]),
-      );
-
-      appendTable(
-        "Gaji Terbayar",
-        ["Nama", "Divisi", "Periode", "PCS", "Total", "Detail"],
-        gajiRows.map((row) => [row.nama, row.divisi, row.periode, row.pcs, rupiah(row.nominal), row.detail]),
-      );
-
-      doc.save(`laporan-operasional-${new Date().toISOString().slice(0, 10)}.pdf`);
+      doc.save(`laporan-${exportSection}-${new Date().toISOString().slice(0, 10)}.pdf`);
     } finally {
       exporting = false;
     }
@@ -502,9 +505,14 @@
         <RefreshCwIcon class="h-4 w-4 {loading ? 'animate-spin' : ''}" />
         Refresh
       </Button>
+      <select bind:value={exportSection} aria-label="Bagian laporan yang dicetak" class="h-10 rounded-md border border-gray-200 bg-white px-3 text-sm text-gray-700 outline-none focus:border-gray-400">
+        {#each exportSections as section}
+          <option value={section.value}>{section.label}</option>
+        {/each}
+      </select>
       <Button onclick={exportPdf} disabled={exporting}>
         <DownloadIcon class="h-4 w-4" />
-        {exporting ? "Mencetak..." : "Export PDF"}
+        {exporting ? "Mencetak..." : "Cetak PDF"}
       </Button>
     </div>
   </div>
@@ -522,7 +530,8 @@
 
   <div class="flex flex-wrap gap-2 rounded-xl border border-gray-100 bg-white p-2 shadow-sm">
     {#each tabs as tab}
-      <Button variant={activeTab === tab.id ? "default" : "ghost"} size="sm" onclick={() => (activeTab = tab.id)}>
+      <Button variant={activeTab === tab.id ? "default" : "ghost"} size="sm" onclick={() => (activeTab = tab.id as ReportTab)}>
+        <tab.icon class="h-4 w-4" />
         {tab.label}
       </Button>
     {/each}
@@ -682,6 +691,20 @@
           {/each}
         </Table.Body>
       </Table.Root>
+      <div class="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 pt-3">
+        <p class="text-xs text-gray-500">
+          Menampilkan {listBarangKeluarRows.length === 0 ? 0 : (barangKeluarPage - 1) * 50 + 1}-{Math.min(barangKeluarPage * 50, listBarangKeluarRows.length)} dari {listBarangKeluarRows.length} list
+        </p>
+        <div class="flex items-center gap-2">
+          <Button variant="outline" size="icon" title="Halaman sebelumnya" aria-label="Halaman sebelumnya" disabled={barangKeluarPage <= 1} onclick={() => (barangKeluarPage = Math.max(1, barangKeluarPage - 1))}>
+            <ChevronLeftIcon class="h-4 w-4" />
+          </Button>
+          <span class="min-w-24 text-center text-xs text-gray-600">Halaman {barangKeluarPage} / {barangKeluarTotalPages}</span>
+          <Button variant="outline" size="icon" title="Halaman berikutnya" aria-label="Halaman berikutnya" disabled={barangKeluarPage >= barangKeluarTotalPages} onclick={() => (barangKeluarPage = Math.min(barangKeluarTotalPages, barangKeluarPage + 1))}>
+            <ChevronRightIcon class="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
     </section>
   {:else if activeTab === "stok"}
     <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">

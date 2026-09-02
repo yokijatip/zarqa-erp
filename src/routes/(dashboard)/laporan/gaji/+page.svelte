@@ -48,7 +48,7 @@
     const regular = employees
       .filter((employee) => employee.status_kerja !== "nonaktif" && !productionRoles.has(employee.role) && employee.role !== "owner" && employee.role !== "developer")
       .filter((employee) => !productionUids.has(employee.uid))
-      .map((employee) => ({ uid: employee.uid, nama: employee.name, jabatan: employee.jabatan ?? ROLE_LABEL[employee.role] ?? employee.role, tipe: tipeKaryawanLabel(employee.role), divisi: employee.divisi ?? "-", total_pcs: 0, gaji_pokok: employee.gaji_pokok ?? 0 }));
+      .map((employee) => ({ uid: employee.uid, nama: employee.name, jabatan: employee.jabatan ?? ROLE_LABEL[employee.role] ?? employee.role, tipe: tipeKaryawanLabel(employee.role), divisi: employee.divisi ?? "Karyawan Reguler", total_pcs: 0, gaji_pokok: employee.gaji_pokok ?? 0 }));
     return [...production, ...regular].sort((a, b) => a.nama.localeCompare(b.nama));
   });
   let totalPcs = $derived(reportRows.reduce((sum, row) => sum + row.total_pcs, 0));
@@ -142,7 +142,7 @@
 
     <section class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
       <h2 class="text-sm font-semibold text-gray-800">Rekap per Divisi</h2>
-      <Table.Root class="mt-4"><Table.Header><Table.Row><Table.Head>Divisi</Table.Head><Table.Head>Karyawan</Table.Head><Table.Head>Total PCS</Table.Head><Table.Head>Total Dibayar</Table.Head></Table.Row></Table.Header><Table.Body>{#each byDivision as row}<Table.Row><Table.Cell class="font-medium">{row.divisi}</Table.Cell><Table.Cell>{row.pekerja}</Table.Cell><Table.Cell>{row.pcs.toLocaleString("id-ID")} pcs</Table.Cell><Table.Cell class="text-green-700">{rupiah(row.dibayar)}</Table.Cell></Table.Row>{:else}<Table.Row><Table.Cell colspan={4} class="text-center text-gray-400">Belum ada data gaji.</Table.Cell></Table.Row>{/each}</Table.Body></Table.Root>
+      <Table.Root class="mt-4"><Table.Header><Table.Row><Table.Head>Divisi / Kelompok</Table.Head><Table.Head>Karyawan</Table.Head><Table.Head>Total PCS</Table.Head><Table.Head>Total Dibayar</Table.Head></Table.Row></Table.Header><Table.Body>{#each byDivision as row}<Table.Row><Table.Cell class="font-medium">{row.divisi}</Table.Cell><Table.Cell>{row.pekerja}</Table.Cell><Table.Cell>{row.pcs.toLocaleString("id-ID")} pcs</Table.Cell><Table.Cell class="text-green-700">{rupiah(row.dibayar)}</Table.Cell></Table.Row>{:else}<Table.Row><Table.Cell colspan={4} class="text-center text-gray-400">Belum ada data gaji.</Table.Cell></Table.Row>{/each}</Table.Body></Table.Root>
     </section>
 
     <section class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
