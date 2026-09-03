@@ -17,6 +17,9 @@
   import PieChartIcon from "@lucide/svelte/icons/pie-chart";
   import TrophyIcon from "@lucide/svelte/icons/trophy";
   import UsersRoundIcon from "@lucide/svelte/icons/users-round";
+  import { Chart, registerables } from "chart.js";
+
+  Chart.register(...registerables);
 
   // ── State ──────────────────────────────────────────────────────────
   let karyawanList = $state<UserProfile[]>([]);
@@ -25,6 +28,10 @@
   let pembayaranMingguIni = $state<PembayaranGajiRecord[]>([]);
   let loadingGaji = $state(true);
   let dateRange = $state<DateRange>(getPeriodRange("minggu_ini"));
+  let payrollTypeCanvas = $state<HTMLCanvasElement | null>(null);
+  let divisionCanvas = $state<HTMLCanvasElement | null>(null);
+  let payrollTypeChart: Chart | null = null;
+  let divisionChart: Chart | null = null;
 
   const bulanIni = new Date().toLocaleDateString("id-ID", {
     month: "long",
@@ -85,7 +92,6 @@
     }
     return [...map.values()].sort((a, b) => b.pcs - a.pcs);
   });
-  let maxDivisiPcs = $derived(Math.max(...produktivitasPerDivisi.map((item) => item.pcs), 1));
   let kontrakAkanBerakhir = $derived(
     karyawanList.filter((k) =>
       k.tipe_akun === "temporary" &&
@@ -104,6 +110,98 @@
   let maxPcsMingguIni = $derived(
     topKaryawanTerproduktif.length > 0 ? topKaryawanTerproduktif[0].total_pcs : 1
   );
+
+  $effect(() => {
+    tipePenggajianCount;
+    payrollTypeCanvas;
+    if (!payrollTypeCanvas) return;
+
+    payrollTypeChart?.destroy();
+    const labels = ["Harian", "Mingguan", "Bulanan", "Tahunan"];
+    const values = [
+      tipePenggajianCount.harian,
+      tipePenggajianCount.mingguan,
+      tipePenggajianCount.bulanan,
+      tipePenggajianCount.tahunan,
+    ];
+    payrollTypeChart = new Chart(payrollTypeCanvas, {
+      type: "doughnut",
+      data: {
+        labels,
+        datasets: [{
+          data: values,
+          backgroundColor: ["#2563eb", "#16a34a", "#f59e0b", "#7c3aed"],
+          borderColor: "#ffffff",
+          borderWidth: 3,
+          hoverOffset: 6,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: "62%",
+        plugins: {
+          legend: {
+            position: "bottom",
+            labels: { usePointStyle: true, pointStyle: "circle", boxWidth: 8, padding: 14 },
+          },
+          tooltip: {
+            callbacks: {
+              label: (context) => `${context.label}: ${Number(context.raw).toLocaleString("id-ID")} karyawan`,
+            },
+          },
+        },
+      },
+    });
+  });
+
+  $effect(() => {
+    produktivitasPerDivisi;
+    divisionCanvas;
+    if (!divisionCanvas) return;
+
+    divisionChart?.destroy();
+    divisionChart = new Chart(divisionCanvas, {
+      type: "bar",
+      data: {
+        labels: produktivitasPerDivisi.map((item) => item.divisi),
+        datasets: [{
+          label: "PCS selesai",
+          data: produktivitasPerDivisi.map((item) => item.pcs),
+          backgroundColor: produktivitasPerDivisi.map((item) =>
+            item.divisi === "Cutting" ? "#f97316" : item.divisi === "Jahit" ? "#3b82f6" : "#8b5cf6",
+          ),
+          borderRadius: 5,
+          borderSkipped: false,
+          barThickness: 28,
+        }],
+      },
+      options: {
+        indexAxis: "y",
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: (context) => {
+                const item = produktivitasPerDivisi[context.dataIndex];
+                return `${Number(context.raw).toLocaleString("id-ID")} pcs · ${item?.karyawan ?? 0} karyawan`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            beginAtZero: true,
+            grid: { color: "#f1f5f9" },
+            ticks: { precision: 0, callback: (value) => Number(value).toLocaleString("id-ID") },
+          },
+          y: { grid: { display: false } },
+        },
+      },
+    });
+  });
 
   // ── Helpers ────────────────────────────────────────────────────────
   function isExpired(ts: any): boolean {
@@ -298,18 +396,23 @@
         <div><p class="text-sm font-semibold text-gray-800">Tipe Penggajian</p><p class="mt-0.5 text-xs text-gray-400">Distribusi metode pembayaran karyawan aktif.</p></div>
         <PieChartIcon class="h-5 w-5 text-gray-400" />
       </div>
-      <div class="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
-        {#each [
-          ["Harian", tipePenggajianCount.harian],
-          ["Mingguan", tipePenggajianCount.mingguan],
-          ["Bulanan", tipePenggajianCount.bulanan],
-          ["Tahunan", tipePenggajianCount.tahunan],
-        ] as item}
-          <div class="rounded-lg border border-gray-100 bg-gray-50 px-3 py-3">
-            <p class="text-2xl font-bold text-gray-800">{item[1]}</p>
-            <p class="mt-0.5 text-xs text-gray-500">{item[0]}</p>
-          </div>
-        {/each}
+      <div class="mt-4 grid gap-4 md:grid-cols-[minmax(0,1.15fr)_minmax(240px,0.85fr)] md:items-center">
+        <div class="h-64 min-w-0 rounded-lg bg-gray-50 p-3">
+          <canvas bind:this={payrollTypeCanvas} aria-label="Chart tipe penggajian"></canvas>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          {#each [
+            ["Harian", tipePenggajianCount.harian, "text-blue-700", "bg-blue-50"],
+            ["Mingguan", tipePenggajianCount.mingguan, "text-green-700", "bg-green-50"],
+            ["Bulanan", tipePenggajianCount.bulanan, "text-orange-700", "bg-orange-50"],
+            ["Tahunan", tipePenggajianCount.tahunan, "text-violet-700", "bg-violet-50"],
+          ] as item}
+            <div class="rounded-lg {item[3]} px-3 py-3">
+              <p class="text-2xl font-bold {item[2]}">{item[1]}</p>
+              <p class="mt-0.5 text-xs text-gray-600">{item[0]}</p>
+            </div>
+          {/each}
+        </div>
       </div>
     </div>
   </div>
@@ -490,7 +593,13 @@
   <div class="mb-5 grid grid-cols-1 gap-4 lg:grid-cols-2">
     <section class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
       <div class="mb-4 flex items-center justify-between"><div><h2 class="text-sm font-semibold text-gray-800">Produktivitas Per Divisi</h2><p class="mt-0.5 text-xs text-gray-400">Total pcs selesai pada periode terpilih.</p></div><PieChartIcon class="h-5 w-5 text-blue-500" /></div>
-      {#if produktivitasPerDivisi.length === 0}<p class="py-8 text-center text-sm text-gray-400">Belum ada data produktivitas.</p>{:else}<div class="space-y-4">{#each produktivitasPerDivisi as item}<div><div class="mb-1 flex items-center justify-between text-xs"><span class="font-medium text-gray-700">{item.divisi}</span><span class="text-gray-500">{item.pcs.toLocaleString("id-ID")} pcs · {item.karyawan} karyawan</span></div><div class="h-2.5 overflow-hidden rounded-full bg-gray-100"><div class="h-full rounded-full {item.divisi === 'Cutting' ? 'bg-orange-500' : item.divisi === 'Jahit' ? 'bg-blue-500' : 'bg-violet-500'}" style="width: {Math.max(4, item.pcs / maxDivisiPcs * 100)}%"></div></div></div>{/each}</div>{/if}
+      {#if produktivitasPerDivisi.length === 0}
+        <p class="py-8 text-center text-sm text-gray-400">Belum ada data produktivitas.</p>
+      {:else}
+        <div class="h-64 min-w-0 rounded-lg bg-gray-50 p-3">
+          <canvas bind:this={divisionCanvas} aria-label="Chart produktivitas per divisi"></canvas>
+        </div>
+      {/if}
     </section>
     <section class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm"><div class="mb-4 flex items-center justify-between"><div><h2 class="text-sm font-semibold text-gray-800">Absensi</h2><p class="mt-0.5 text-xs text-gray-400">Kehadiran karyawan berdasarkan periode.</p></div><span class="rounded-full bg-gray-100 px-2 py-1 text-[10px] font-semibold text-gray-500">Soon</span></div><div class="flex h-36 flex-col items-center justify-center rounded-lg border border-dashed border-gray-200 bg-gray-50 text-center"><ClockIcon class="h-7 w-7 text-gray-300" /><p class="mt-2 text-sm font-medium text-gray-500">Chart absensi belum tersedia</p><p class="mt-1 text-xs text-gray-400">Fitur absensi akan ditampilkan setelah diimplementasikan.</p></div></section>
   </div>

@@ -18,6 +18,13 @@
     KATEGORI_PENGELUARAN,
     KONDISI_ASET,
     METODE_PEMBAYARAN,
+    DEFAULT_MASA_MANFAAT_BULAN,
+    deleteSaldoAwalKeuangan,
+    getSaldoAwalKeuangan,
+    hitungNilaiBukuAset,
+    hitungPenyusutanPeriode,
+    saveSaldoAwalKeuangan,
+    transaksiBerdampakLabaRugi,
     updateAsetPerusahaan,
     updateTransaksiKeuangan,
   } from "$lib/firebase/keuangan";
@@ -33,6 +40,7 @@
     ModelBaju,
     StokBarangJadi,
     StokKain,
+    SaldoAwalKeuangan,
     TransaksiKeuangan,
     TipeTransaksiKeuangan,
     UserProfile,
@@ -77,6 +85,8 @@
     labaKotor?: number;
     referensi?: string;
     isInventoryPurchase?: boolean;
+    isAssetPurchase?: boolean;
+    isNonProfitIncome?: boolean;
   };
 
   let reportDateRange = $state<DateRange>(getPeriodRange("semua"));
@@ -87,6 +97,7 @@
   let transaksiManual = $state<TransaksiKeuangan[]>([]);
   let pembayaranGaji = $state<PembayaranGajiRecord[]>([]);
   let asetList = $state<AsetPerusahaan[]>([]);
+  let saldoAwal = $state<SaldoAwalKeuangan | null>(null);
   let stokBarangJadi = $state<StokBarangJadi[]>([]);
   let stokKainList = $state<StokKain[]>([]);
   let karyawanList = $state<UserProfile[]>([]);
@@ -100,7 +111,7 @@
   let editing = $state<TransaksiKeuangan | null>(null);
   let editingAset = $state<AsetPerusahaan | null>(null);
   let activeTab = $state<"semua" | TipeTransaksiKeuangan>("semua");
-  let activePanel = $state<"transaksi" | "aset" | "gudang">("transaksi");
+  let activePanel = $state<"transaksi" | "saldo_awal" | "aset" | "gudang">("transaksi");
   let searchQuery = $state("");
   let expandedGudangModels = $state<Set<string>>(new Set());
   const transactionPageSize = 50;
@@ -129,7 +140,9 @@
   let aTanggal = $state(new Date().toISOString().slice(0, 10));
   let aJumlah = $state("1");
   let aHargaSatuan = $state("");
-  let aNilaiSaatIni = $state("");
+  let aMasaManfaat = $state(String(DEFAULT_MASA_MANFAAT_BULAN.komputer));
+  let aNilaiResidu = $state("0");
+  let aTanggalMulaiPenyusutan = $state(new Date().toISOString().slice(0, 10));
   let aLokasi = $state("");
   let aSupplier = $state("");
   let aMetode = $state<(typeof METODE_PEMBAYARAN)[number]>("transfer");
@@ -138,6 +151,11 @@
   let aCatatan = $state("");
   let aCatatPengeluaran = $state(true);
 
+  let sTanggal = $state(new Date().toISOString().slice(0, 10));
+  let sSaldoKas = $state("");
+  let sModalAwal = $state("");
+  let sCatatan = $state("");
+
   const canAccess = $derived(
     ["admin_keuangan", "owner", "developer"].includes($userRole ?? ""),
   );
@@ -145,14 +163,25 @@
   const modelNameMap = $derived(
     new Map(modelList.map((m) => [m.nama_model.toLowerCase(), m])),
   );
-  const kategoriOptions = $derived(
-    fTipe === "pemasukan" ? KATEGORI_PEMASUKAN : KATEGORI_PENGELUARAN,
-  );
+  const kategoriOptions = $derived.by<Record<string, string>>(() => {
+    const options = fTipe === "pemasukan" ? KATEGORI_PEMASUKAN : KATEGORI_PENGELUARAN;
+    const kategoriKhusus = fTipe === "pemasukan"
+      ? ["penjualan_manual"]
+      : ["aset", "bahan_baku", "gaji"];
+    return Object.fromEntries(
+      Object.entries(options).filter(([value]) => !kategoriKhusus.includes(value) || (editing && value === fKategori)),
+    );
+  });
   const canSubmit = $derived(
     fDeskripsi.trim() !== "" && Number(fNominal) > 0 && fTanggal !== "",
   );
   const canSubmitAset = $derived(
-    aNama.trim() !== "" && Number(aJumlah) > 0 && Number(aHargaSatuan) >= 0 && aTanggal !== "",
+    aNama.trim() !== "" && Number(aJumlah) > 0 && Number(aHargaSatuan) >= 0 && Number(aMasaManfaat) > 0 && Number(aNilaiResidu) >= 0 && Number(aNilaiResidu) <= Number(aJumlah) * Number(aHargaSatuan) && aTanggal !== "" && aTanggalMulaiPenyusutan !== "",
+  );
+  const aTotalHarga = $derived(Math.max(0, Number(aJumlah) || 0) * Math.max(0, Number(aHargaSatuan) || 0));
+  const aPenyusutanBulanan = $derived(aMasaManfaat && Number(aMasaManfaat) > 0 ? Math.max(0, (aTotalHarga - Math.min(aTotalHarga, Math.max(0, Number(aNilaiResidu) || 0))) / Number(aMasaManfaat)) : 0);
+  const canSubmitSaldoAwal = $derived(
+    sTanggal !== "" && sSaldoKas.trim() !== "" && sModalAwal.trim() !== "" && Number(sSaldoKas) >= 0 && Number(sModalAwal) >= 0,
   );
   const pageMode = $derived.by<"ringkasan" | "pemasukan" | "pengeluaran">(() => {
     const tipe = $page.url.searchParams.get("tipe");
@@ -217,7 +246,9 @@
       deskripsi: trx.deskripsi,
       nominal: trx.nominal,
       referensi: trx.referensi,
-      isInventoryPurchase: trx.tipe === "pengeluaran" && (trx.kategori === "bahan_baku" || trx.dampak_laba_rugi === false),
+      isInventoryPurchase: trx.tipe === "pengeluaran" && trx.kategori !== "aset" && (trx.kategori === "bahan_baku" || trx.jenis_transaksi === "pembelian_persediaan" || trx.dampak_laba_rugi === false),
+      isAssetPurchase: trx.tipe === "pengeluaran" && (trx.kategori === "aset" || trx.jenis_transaksi === "pembelian_aset"),
+      isNonProfitIncome: trx.tipe === "pemasukan" && (trx.dampak_laba_rugi === false || !transaksiBerdampakLabaRugi(trx.tipe, trx.kategori)),
     })),
   );
 
@@ -245,20 +276,25 @@
   let reportLines = $derived(allLines.filter((line) => inDateRange(line.tanggal, reportDateRange)));
   let overviewLines = $derived(allLines.filter((line) => inDateRange(line.tanggal, overviewDateRange)));
   let overviewSummary = $derived.by(() => {
+    const tanggalSaldoAwal = saldoAwal?.tanggal ? toDate(saldoAwal.tanggal) : null;
+    const saldoAwalKas = tanggalSaldoAwal && tanggalSaldoAwal <= (overviewDateRange?.end ?? new Date()) ? saldoAwal?.saldo_kas ?? 0 : 0;
     const penjualan = overviewLines.filter((line) => line.source === "penjualan").reduce((sum, line) => sum + line.nominal, 0);
     const pemasukanManual = overviewLines
+      .filter((line) => line.source === "manual" && line.tipe === "pemasukan" && !line.isNonProfitIncome)
+      .reduce((sum, line) => sum + line.nominal, 0);
+    const pemasukanKasManual = overviewLines
       .filter((line) => line.source === "manual" && line.tipe === "pemasukan")
       .reduce((sum, line) => sum + line.nominal, 0);
-    const pemasukan = penjualan + pemasukanManual;
+    const pemasukan = penjualan + pemasukanKasManual;
     const hpp = overviewLines.filter((line) => line.source === "penjualan").reduce((sum, line) => sum + (line.hpp ?? 0), 0);
-    const pengeluaran = overviewLines
-      .filter((line) => line.tipe === "pengeluaran" && !line.isInventoryPurchase && !(line.source === "gaji" && line.jenisGaji === "produksi"))
+    const pengeluaranOperasional = overviewLines
+      .filter((line) => line.source === "manual" && line.tipe === "pengeluaran" && !line.isInventoryPurchase && !line.isAssetPurchase)
       .reduce((sum, line) => sum + line.nominal, 0);
     const pembelianPersediaan = overviewLines
       .filter((line) => line.isInventoryPurchase)
       .reduce((sum, line) => sum + line.nominal, 0);
     const pembelianAset = overviewLines
-      .filter((line) => line.tipe === "pengeluaran" && line.kategori === "Aset")
+      .filter((line) => line.isAssetPurchase)
       .reduce((sum, line) => sum + line.nominal, 0);
     const gajiTerbayar = overviewLines
       .filter((line) => line.source === "gaji")
@@ -266,21 +302,27 @@
     const gajiReguler = overviewLines
       .filter((line) => line.source === "gaji" && line.jenisGaji === "reguler")
       .reduce((sum, line) => sum + line.nominal, 0);
+    const pengeluaran = pengeluaranOperasional + gajiReguler;
+    const penyusutanAset = asetList.reduce((sum, aset) => sum + hitungPenyusutanPeriode(aset, overviewDateRange), 0);
     const labaKotor = penjualan - hpp;
-    const kasTercatat = pemasukan - pengeluaran - pembelianPersediaan - pembelianAset - gajiTerbayar;
+    const kasTercatat = saldoAwalKas + pemasukan - pengeluaranOperasional - pembelianPersediaan - pembelianAset - gajiTerbayar;
     return {
       penjualan,
       pemasukanManual,
+      pemasukanKasNonPendapatan: pemasukanKasManual - pemasukanManual,
       pemasukan,
       hpp,
       pengeluaran,
       pembelianPersediaan,
       pembelianAset,
       gajiReguler,
+      saldoAwalKas,
       kasTercatat,
+      kasMasuk: pemasukan,
+      penyusutanAset,
       labaKotor,
       marginKotor: penjualan > 0 ? Math.round((labaKotor / penjualan) * 100) : 0,
-      labaBersih: pemasukan - hpp - pengeluaran,
+      labaBersih: penjualan + pemasukanManual - hpp - pengeluaran - penyusutanAset,
     };
   });
 
@@ -312,7 +354,7 @@
   });
 
   let incomeLines = $derived(
-    reportLines.filter((line) => line.tipe === "pemasukan"),
+    reportLines.filter((line) => line.tipe === "pemasukan" && !line.isNonProfitIncome),
   );
 
   let expenseLines = $derived(
@@ -320,15 +362,18 @@
   );
 
   let summary = $derived.by(() => {
+    const tanggalSaldoAwal = saldoAwal?.tanggal ? toDate(saldoAwal.tanggal) : null;
+    const saldoAwalKas = tanggalSaldoAwal && tanggalSaldoAwal <= (reportDateRange?.end ?? new Date()) ? saldoAwal?.saldo_kas ?? 0 : 0;
     const reportSalesLines = reportLines.filter((line) => line.source === "penjualan");
     const reportManualLines = reportLines.filter((line) => line.source === "manual");
     const reportPayrollLines = reportLines.filter((line) => line.source === "gaji");
     const penjualan = reportSalesLines.reduce((sum, line) => sum + line.nominal, 0);
     const hpp = reportSalesLines.reduce((sum, line) => sum + (line.hpp ?? 0), 0);
-    const pemasukanManual = reportManualLines.filter((line) => line.tipe === "pemasukan").reduce((sum, line) => sum + line.nominal, 0);
-    const pembelianAset = reportManualLines.filter((line) => line.tipe === "pengeluaran" && line.kategori === "Aset").reduce((sum, line) => sum + line.nominal, 0);
+    const pemasukanManual = reportManualLines.filter((line) => line.tipe === "pemasukan" && !line.isNonProfitIncome).reduce((sum, line) => sum + line.nominal, 0);
+    const pemasukanKasNonPendapatan = reportManualLines.filter((line) => line.tipe === "pemasukan" && line.isNonProfitIncome).reduce((sum, line) => sum + line.nominal, 0);
+    const pembelianAset = reportManualLines.filter((line) => line.isAssetPurchase).reduce((sum, line) => sum + line.nominal, 0);
     const pengeluaranOperasional = reportManualLines
-      .filter((line) => line.tipe === "pengeluaran" && !line.isInventoryPurchase && line.kategori !== "Aset")
+      .filter((line) => line.tipe === "pengeluaran" && !line.isInventoryPurchase && !line.isAssetPurchase)
       .reduce((sum, line) => sum + line.nominal, 0);
     const pembelianPersediaan = reportManualLines.filter((line) => line.isInventoryPurchase).reduce((sum, line) => sum + line.nominal, 0);
     const gajiTerbayar = reportPayrollLines.reduce((sum, line) => sum + line.nominal, 0);
@@ -338,10 +383,12 @@
     const gajiRegulerEstimasi = regularSalaryRows.filter((line) => !paidRegularUids.has(line.uid)).reduce((sum, line) => sum + line.nominal, 0);
     const totalBebanGaji = gajiRegulerTerbayar + gajiRegulerEstimasi;
     const totalPengeluaranKas = pengeluaranOperasional + pembelianPersediaan + pembelianAset + gajiTerbayar;
+    const kasMasuk = penjualan + pemasukanManual + pemasukanKasNonPendapatan;
+    const penyusutanAset = asetList.reduce((sum, aset) => sum + hitungPenyusutanPeriode(aset, reportDateRange), 0);
     const labaKotor = penjualan - hpp;
-    const labaBersih = labaKotor + pemasukanManual - pengeluaranOperasional - totalBebanGaji;
-    const kasTercatat = penjualan + pemasukanManual - totalPengeluaranKas;
-    const totalAset = asetList.reduce((sum, aset) => sum + (aset.nilai_saat_ini ?? aset.total_harga ?? 0), 0);
+    const labaBersih = labaKotor + pemasukanManual - pengeluaranOperasional - totalBebanGaji - penyusutanAset;
+    const kasTercatat = saldoAwalKas + penjualan + pemasukanManual + pemasukanKasNonPendapatan - totalPengeluaranKas;
+    const totalAset = asetList.reduce((sum, aset) => sum + hitungNilaiBukuAset(aset), 0);
     const gudangProduksi = stokBarangJadi.reduce((sum, stok) => {
       const model = modelMap.get(stok.model_id) ?? modelNameMap.get(stok.nama_model.toLowerCase());
       return sum + stok.stok_tersedia * hargaProduksiUntukUkuran(model, stok.ukuran);
@@ -356,6 +403,7 @@
       penjualan,
       hpp,
       pemasukanManual,
+      pemasukanKasNonPendapatan,
       pengeluaranOperasional,
       pembelianAset,
       pembelianPersediaan,
@@ -365,9 +413,12 @@
       gajiRegulerEstimasi,
       totalBebanGaji,
       totalPengeluaranKas,
+      kasMasuk,
+      saldoAwalKas,
       labaKotor,
       labaBersih,
       kasTercatat,
+      penyusutanAset,
       totalAset,
       gudangProduksi,
       gudangJual,
@@ -463,11 +514,14 @@
 
   let expenseBreakdown = $derived.by(() => {
     const map = new Map<string, number>();
-    for (const line of reportLines.filter((item) => item.source === "manual" && item.tipe === "pengeluaran" && !item.isInventoryPurchase && item.kategori !== "Aset")) {
+    for (const line of reportLines.filter((item) => item.source === "manual" && item.tipe === "pengeluaran" && !item.isInventoryPurchase && !item.isAssetPurchase)) {
       map.set(line.kategori, (map.get(line.kategori) ?? 0) + line.nominal);
     }
     if (summary.totalBebanGaji > 0) {
       map.set("Gaji Karyawan Reguler", (map.get("Gaji Karyawan Reguler") ?? 0) + summary.totalBebanGaji);
+    }
+    if (summary.penyusutanAset > 0) {
+      map.set("Penyusutan Aset", (map.get("Penyusutan Aset") ?? 0) + summary.penyusutanAset);
     }
     return [...map.entries()].sort((a, b) => b[1] - a[1]);
   });
@@ -507,11 +561,11 @@
     profitLossChart = new Chart(profitLossCanvas, {
       type: "bar",
       data: {
-        labels: ["Pendapatan", "HPP", "Operasional", "Gaji Reguler", "Laba Bersih"],
+        labels: ["Pendapatan", "HPP", "Operasional", "Gaji Reguler", "Penyusutan", "Laba Bersih"],
         datasets: [{
           label: "Nilai",
-          data: [summary.penjualan, summary.hpp, summary.pengeluaranOperasional, summary.totalBebanGaji, summary.labaBersih],
-          backgroundColor: ["#22c55e", "#f97316", "#ef4444", "#3b82f6", summary.labaBersih >= 0 ? "#111827" : "#b91c1c"],
+          data: [summary.penjualan, summary.hpp, summary.pengeluaranOperasional, summary.totalBebanGaji, summary.penyusutanAset, summary.labaBersih],
+          backgroundColor: ["#22c55e", "#f97316", "#ef4444", "#3b82f6", "#a855f7", summary.labaBersih >= 0 ? "#111827" : "#b91c1c"],
           borderRadius: 4,
         }],
       },
@@ -581,7 +635,7 @@
   function resetForm(tipe: TipeTransaksiKeuangan = "pengeluaran") {
     editing = null;
     fTipe = tipe;
-    fKategori = tipe === "pemasukan" ? "penjualan_manual" : "operasional";
+    fKategori = tipe === "pemasukan" ? "lainnya" : "operasional";
     fTanggal = new Date().toISOString().slice(0, 10);
     fNominal = "";
     fDeskripsi = "";
@@ -615,7 +669,9 @@
     aTanggal = new Date().toISOString().slice(0, 10);
     aJumlah = "1";
     aHargaSatuan = "";
-    aNilaiSaatIni = "";
+    aMasaManfaat = String(DEFAULT_MASA_MANFAAT_BULAN.komputer);
+    aNilaiResidu = "0";
+    aTanggalMulaiPenyusutan = new Date().toISOString().slice(0, 10);
     aLokasi = "";
     aSupplier = "";
     aMetode = "transfer";
@@ -637,7 +693,9 @@
     aTanggal = toDate(aset.tanggal_beli)?.toISOString().slice(0, 10) ?? new Date().toISOString().slice(0, 10);
     aJumlah = String(aset.jumlah ?? 1);
     aHargaSatuan = String(aset.harga_satuan ?? 0);
-    aNilaiSaatIni = String(aset.nilai_saat_ini ?? aset.total_harga ?? 0);
+    aMasaManfaat = String(aset.masa_manfaat_bulan ?? DEFAULT_MASA_MANFAAT_BULAN[aset.kategori] ?? DEFAULT_MASA_MANFAAT_BULAN.lainnya);
+    aNilaiResidu = String(aset.nilai_residu ?? 0);
+    aTanggalMulaiPenyusutan = toDate(aset.tanggal_mulai_penyusutan)?.toISOString().slice(0, 10) ?? aTanggal;
     aLokasi = aset.lokasi ?? "";
     aSupplier = aset.supplier ?? "";
     aMetode = aset.metode_pembayaran ?? "transfer";
@@ -646,6 +704,15 @@
     aCatatan = aset.catatan ?? "";
     aCatatPengeluaran = false;
     openAsetForm = true;
+  }
+
+  function resetSaldoAwalForm() {
+    sTanggal = saldoAwal?.tanggal
+      ? toDate(saldoAwal.tanggal)?.toISOString().slice(0, 10) ?? new Date().toISOString().slice(0, 10)
+      : new Date().toISOString().slice(0, 10);
+    sSaldoKas = saldoAwal ? String(saldoAwal.saldo_kas) : "";
+    sModalAwal = saldoAwal ? String(saldoAwal.modal_awal) : "";
+    sCatatan = saldoAwal?.catatan ?? "";
   }
 
   function rangeKey(range: DateRange): string {
@@ -659,7 +726,7 @@
     loading = true;
     errorMsg = null;
     try {
-      const [keluar, models, transaksi, gaji, aset, stokJadi, stokKain, karyawan] = await Promise.all([
+      const [keluar, models, transaksi, gaji, aset, stokJadi, stokKain, karyawan, saldo] = await Promise.all([
         getRiwayatBarangKeluarByPeriod(null),
         getModelBajuList(false),
         getTransaksiKeuangan(null),
@@ -668,6 +735,7 @@
         getStokBarangJadi(),
         stokKainCache.get(),
         getKaryawanList(),
+        getSaldoAwalKeuangan(),
       ]);
       barangKeluar = keluar;
       modelList = models;
@@ -677,6 +745,8 @@
       stokBarangJadi = stokJadi;
       stokKainList = stokKain;
       karyawanList = karyawan;
+      saldoAwal = saldo;
+      if (sSaldoKas === "" && sModalAwal === "") resetSaldoAwalForm();
     } catch (error) {
       errorMsg = error instanceof Error ? error.message : "Gagal memuat data keuangan.";
     } finally {
@@ -742,7 +812,10 @@
         tanggal_beli: new Date(`${aTanggal}T00:00:00`),
         jumlah: Number(aJumlah),
         harga_satuan: Number(aHargaSatuan),
-        nilai_saat_ini: aNilaiSaatIni === "" ? Number(aJumlah) * Number(aHargaSatuan) : Number(aNilaiSaatIni),
+        metode_penyusutan: "garis_lurus" as const,
+        masa_manfaat_bulan: Number(aMasaManfaat),
+        nilai_residu: Number(aNilaiResidu),
+        tanggal_mulai_penyusutan: new Date(`${aTanggalMulaiPenyusutan}T00:00:00`),
         lokasi: aLokasi,
         supplier: aSupplier,
         metode_pembayaran: aMetode,
@@ -782,6 +855,47 @@
     }
   }
 
+  async function submitSaldoAwal() {
+    if (!canSubmitSaldoAwal || !$currentUser) return;
+    saving = true;
+    errorMsg = null;
+    try {
+      await saveSaldoAwalKeuangan(
+        {
+          tanggal: new Date(`${sTanggal}T00:00:00`),
+          saldo_kas: Number(sSaldoKas),
+          modal_awal: Number(sModalAwal),
+          catatan: sCatatan,
+          dibuat_oleh_uid: $currentUser.uid,
+          dibuat_oleh_nama: $currentUser.name || $currentUser.email,
+        },
+        saldoAwal?.id,
+      );
+      showSuccess("Saldo awal migrasi disimpan.");
+      await load();
+    } catch (error) {
+      errorMsg = error instanceof Error ? error.message : "Gagal menyimpan saldo awal.";
+    } finally {
+      saving = false;
+    }
+  }
+
+  async function hapusSaldoAwal() {
+    if (!saldoAwal || !confirm("Hapus saldo awal migrasi? Ringkasan kas akan kembali menghitung dari transaksi yang tercatat.")) return;
+    saving = true;
+    errorMsg = null;
+    try {
+      await deleteSaldoAwalKeuangan(saldoAwal.id);
+      saldoAwal = null;
+      resetSaldoAwalForm();
+      showSuccess("Saldo awal dihapus.");
+    } catch (error) {
+      errorMsg = error instanceof Error ? error.message : "Gagal menghapus saldo awal.";
+    } finally {
+      saving = false;
+    }
+  }
+
   async function exportPdf() {
     exporting = true;
     try {
@@ -800,10 +914,14 @@
           ["HPP / biaya produksi barang", rupiah(summary.hpp)],
           ["Laba kotor", rupiah(summary.labaKotor)],
           ["Pemasukan lain", rupiah(summary.pemasukanManual)],
+          ["Pemasukan kas non-pendapatan", rupiah(summary.pemasukanKasNonPendapatan)],
           ["Pengeluaran operasional", rupiah(summary.pengeluaranOperasional)],
+          ["Pembelian bahan baku (persediaan)", rupiah(summary.pembelianPersediaan)],
           ["Gaji produksi (sudah termasuk HPP)", rupiah(summary.gajiProduksiTerbayar)],
           ["Gaji karyawan reguler", rupiah(summary.totalBebanGaji)],
+          ["Penyusutan aset (non-kas)", rupiah(summary.penyusutanAset)],
           ["Pembelian aset (arus kas, bukan beban laba rugi)", rupiah(summary.pembelianAset)],
+          ["Saldo awal kas (migrasi, bukan pendapatan)", rupiah(summary.saldoAwalKas)],
           ["Kas tercatat", rupiah(summary.kasTercatat)],
           ["Laba bersih", rupiah(summary.labaBersih)],
           ["Total aset perusahaan", rupiah(summary.totalAset)],
@@ -983,11 +1101,11 @@
         valueClass="text-blue-700"
       />
       <StatCard
-        title="Kas Bersih"
+        title="Saldo Kas Akhir"
         value={rupiah(overviewSummary.kasTercatat)}
         icon={BanknoteIcon}
         {loading}
-        footerSubtext="arus kas aktual pada periode"
+        footerSubtext="saldo awal + arus kas periode"
         class={overviewSummary.kasTercatat < 0 ? "border-red-100 bg-red-50" : "border-blue-100 bg-blue-50"}
         valueClass={overviewSummary.kasTercatat < 0 ? "text-red-600" : "text-blue-700"}
       />
@@ -1106,20 +1224,12 @@
           <span class="font-semibold text-red-700">({rupiah(summary.pengeluaranOperasional)})</span>
         </div>
         <div class="flex items-center justify-between px-4 py-3">
-          <span class="text-sm text-gray-500">Gaji produksi terbayar</span>
-          <span class="font-semibold text-blue-700">{rupiah(summary.gajiProduksiTerbayar)} <span class="text-xs font-normal text-gray-400">(termasuk HPP)</span></span>
-        </div>
-        <div class="flex items-center justify-between px-4 py-3">
           <span class="text-sm text-gray-500">Estimasi gaji reguler</span>
           <span class="font-semibold text-red-700">({rupiah(summary.gajiRegulerEstimasi)})</span>
         </div>
         <div class="flex items-center justify-between px-4 py-3">
-          <span class="text-sm text-gray-500">Pembelian aset (kas, bukan beban laba rugi)</span>
-          <span class="font-semibold text-violet-700">({rupiah(summary.pembelianAset)})</span>
-        </div>
-        <div class="flex items-center justify-between px-4 py-3">
-          <span class="text-sm text-gray-500">Kas bersih tercatat <span class="text-xs text-gray-400">(arus kas, bukan laba rugi)</span></span>
-          <span class="font-semibold text-blue-700">{rupiah(summary.kasTercatat)}</span>
+          <span class="text-sm text-gray-500">Penyusutan aset</span>
+          <span class="font-semibold text-violet-700">({rupiah(summary.penyusutanAset)})</span>
         </div>
         <div class="flex items-center justify-between bg-gray-900 px-4 py-3 text-white">
           <span class="text-sm font-semibold">Laba bersih estimasi</span>
@@ -1133,6 +1243,7 @@
           <canvas bind:this={profitLossCanvas} aria-label="Chart laporan laba rugi"></canvas>
         </div>
       </div>
+      <p class="mt-3 text-xs text-gray-500">Pembelian bahan baku, pembayaran gaji produksi, dan pembelian aset hanya memengaruhi kas. Bahan baku serta gaji produksi masuk HPP saat produk terjual; aset masuk beban melalui penyusutan.</p>
     </section>
 
     <section class="h-fit rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
@@ -1196,9 +1307,9 @@
             <p class="mt-2 text-xl font-bold text-blue-800">{rupiah(summary.pemasukanManual)}</p>
           </div>
           <div class="rounded-xl bg-gray-50 p-4">
-            <p class="text-xs text-gray-500">Total Masuk</p>
-            <p class="mt-2 text-xl font-bold text-gray-900">{rupiah(summary.penjualan + summary.pemasukanManual)}</p>
-            <p class="mt-1 text-[11px] text-gray-400">{incomeLines.length} transaksi</p>
+            <p class="text-xs text-gray-500">Total Kas Masuk</p>
+            <p class="mt-2 text-xl font-bold text-gray-900">{rupiah(summary.kasMasuk)}</p>
+            <p class="mt-1 text-[11px] text-gray-400">termasuk modal, piutang, dan refund</p>
           </div>
         </div>
         <div class="mt-5 space-y-3">
@@ -1304,7 +1415,7 @@
     <section class="mb-4 rounded-xl border border-gray-100 bg-white p-3 shadow-sm">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div class="flex flex-wrap items-center gap-2">
-          {#each [["transaksi", "Transaksi"], ["aset", "Aset"], ["gudang", "Tabungan Gudang"]] as panel}
+          {#each [["transaksi", "Transaksi"], ["saldo_awal", "Saldo Awal"], ["aset", "Aset"], ["gudang", "Tabungan Gudang"]] as panel}
             <Button
               size="sm"
               variant={activePanel === panel[0] ? "default" : "outline"}
@@ -1313,6 +1424,8 @@
             >
               {#if panel[0] === "transaksi"}
                 <ReceiptIcon class="h-4 w-4" />
+              {:else if panel[0] === "saldo_awal"}
+                <BanknoteIcon class="h-4 w-4" />
               {:else if panel[0] === "aset"}
                 <LandmarkIcon class="h-4 w-4" />
               {:else}
@@ -1458,6 +1571,48 @@
       </div>
     {/if}
   </section>
+  {:else if activePanel === "saldo_awal"}
+    <section class="rounded-xl border border-gray-100 bg-white shadow-sm">
+      <div class="border-b border-gray-100 p-4">
+        <h2 class="text-sm font-semibold text-gray-800">Saldo Awal Migrasi</h2>
+        <p class="mt-0.5 text-xs text-gray-400">Masukkan posisi kas saat mulai memakai sistem. Data ini bukan transaksi baru.</p>
+      </div>
+      <div class="p-5">
+        <div class="grid gap-4 md:grid-cols-3">
+          <div>
+            <label for="saldo-awal-tanggal" class="mb-1.5 block text-xs font-medium text-gray-600">Tanggal cut-over</label>
+            <Input id="saldo-awal-tanggal" type="date" bind:value={sTanggal} />
+          </div>
+          <div>
+            <label for="saldo-awal-kas" class="mb-1.5 block text-xs font-medium text-gray-600">Saldo kas dan bank</label>
+            <Input id="saldo-awal-kas" type="number" min="0" bind:value={sSaldoKas} placeholder="0" />
+          </div>
+          <div>
+            <label for="saldo-awal-modal" class="mb-1.5 block text-xs font-medium text-gray-600">Modal awal / penyeimbang</label>
+            <Input id="saldo-awal-modal" type="number" min="0" bind:value={sModalAwal} placeholder="0" />
+          </div>
+        </div>
+        <div class="mt-4 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-xs leading-relaxed text-blue-800">
+          Saldo awal tidak masuk pendapatan, laba rugi, atau chart arus kas. Saldo ini hanya menjadi titik awal kas ketika data bisnis lama dipindahkan ke sistem.
+        </div>
+        <div class="mt-4">
+          <label for="saldo-awal-catatan" class="mb-1.5 block text-xs font-medium text-gray-600">Catatan migrasi</label>
+          <textarea id="saldo-awal-catatan" bind:value={sCatatan} rows="3" class="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none transition focus:border-gray-400" placeholder="Contoh: saldo kas hasil opname per 31 Desember 2025"></textarea>
+        </div>
+        <div class="mt-5 flex flex-wrap justify-end gap-2">
+          {#if saldoAwal}
+            <Button variant="outline" onclick={hapusSaldoAwal} disabled={saving}>
+              <Trash2Icon class="h-4 w-4" />
+              Hapus saldo awal
+            </Button>
+          {/if}
+          <Button onclick={submitSaldoAwal} disabled={saving || !canSubmitSaldoAwal}>
+            <BanknoteIcon class="h-4 w-4" />
+            {saving ? "Menyimpan..." : saldoAwal ? "Perbarui Saldo Awal" : "Simpan Saldo Awal"}
+          </Button>
+        </div>
+      </div>
+    </section>
   {:else if activePanel === "aset"}
     <section class="rounded-xl border border-gray-100 bg-white shadow-sm">
       <div class="flex items-center justify-between border-b border-gray-100 p-4">
@@ -1480,7 +1635,7 @@
               <Table.Head class="w-[14%]">Kategori</Table.Head>
               <Table.Head class="w-[12%]">Kondisi</Table.Head>
               <Table.Head class="w-[12%]">Tanggal</Table.Head>
-              <Table.Head class="w-[14%] text-right">Nilai Saat Ini</Table.Head>
+              <Table.Head class="w-[14%] text-right">Nilai Buku Saat Ini</Table.Head>
               <Table.Head class="w-[12%] text-right">Aksi</Table.Head>
             </Table.Row>
           </Table.Header>
@@ -1502,7 +1657,7 @@
                 </Table.Cell>
                 <Table.Cell class="text-sm text-gray-500">{formatDate(toDate(aset.tanggal_beli))}</Table.Cell>
                 <Table.Cell class="text-right font-semibold text-gray-900">
-                  {rupiah(aset.nilai_saat_ini ?? aset.total_harga)}
+                  {rupiah(hitungNilaiBukuAset(aset))}
                 </Table.Cell>
                 <Table.Cell class="text-right">
                   <div class="flex justify-end gap-1">
@@ -1631,7 +1786,7 @@
             onValueChange={(value) => {
               if (!value) return;
               fTipe = value as TipeTransaksiKeuangan;
-              fKategori = fTipe === "pemasukan" ? "penjualan_manual" : "operasional";
+              fKategori = fTipe === "pemasukan" ? "lainnya" : "operasional";
             }}
           >
             <Select.Trigger class="w-full">
@@ -1744,7 +1899,7 @@
         </div>
         <div class="space-y-1.5">
           <label class="block text-sm font-medium text-gray-700">Kategori <span class="text-red-500">*</span></label>
-          <Select.Root type="single" value={aKategori} onValueChange={(value) => value && (aKategori = value as KategoriAset)}>
+          <Select.Root type="single" value={aKategori} onValueChange={(value) => { if (!value) return; aKategori = value as KategoriAset; if (!editingAset) aMasaManfaat = String(DEFAULT_MASA_MANFAAT_BULAN[aKategori] ?? DEFAULT_MASA_MANFAAT_BULAN.lainnya); }}>
             <Select.Trigger class="w-full">
               <span>{KATEGORI_ASET[aKategori]}</span>
             </Select.Trigger>
@@ -1779,8 +1934,25 @@
 
       <div class="grid gap-3 sm:grid-cols-3">
         <div class="space-y-1.5">
-          <label for="nilai-aset" class="block text-sm font-medium text-gray-700">Nilai saat ini</label>
-          <Input id="nilai-aset" type="number" min="0" bind:value={aNilaiSaatIni} placeholder={rupiah(Number(aJumlah || 0) * Number(aHargaSatuan || 0))} />
+          <label for="nilai-aset" class="block text-sm font-medium text-gray-700">Nilai buku bulan pertama</label>
+          <div id="nilai-aset" class="flex h-9 items-center rounded-lg border border-gray-100 bg-gray-50 px-3 text-sm font-semibold text-gray-700">{rupiah(Math.max(0, aTotalHarga - aPenyusutanBulanan))}</div>
+          <p class="mt-1 text-[11px] text-gray-400">Estimasi setelah 1 bulan.</p>
+        </div>
+        <div class="space-y-1.5">
+          <label for="masa-manfaat-aset" class="block text-sm font-medium text-gray-700">Masa manfaat (bulan) <span class="text-red-500">*</span></label>
+          <Input id="masa-manfaat-aset" type="number" min="1" bind:value={aMasaManfaat} placeholder="48" />
+        </div>
+        <div class="space-y-1.5">
+          <label for="residu-aset" class="block text-sm font-medium text-gray-700">Nilai residu</label>
+          <Input id="residu-aset" type="number" min="0" bind:value={aNilaiResidu} placeholder="0" />
+        </div>
+      </div>
+
+      <div class="grid gap-3 sm:grid-cols-3">
+        <div class="space-y-1.5">
+          <label for="mulai-penyusutan-aset" class="block text-sm font-medium text-gray-700">Mulai penyusutan <span class="text-red-500">*</span></label>
+          <input id="mulai-penyusutan-aset" type="date" bind:value={aTanggalMulaiPenyusutan} class="h-9 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-700 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100" />
+          <p class="mt-1 text-[11px] text-gray-400">Biasanya saat aset siap dipakai.</p>
         </div>
         <div class="space-y-1.5">
           <label class="block text-sm font-medium text-gray-700">Kondisi</label>
@@ -1808,6 +1980,10 @@
             </Select.Content>
           </Select.Root>
         </div>
+      </div>
+
+      <div class="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-900">
+        Penyusutan garis lurus: {rupiah(aPenyusutanBulanan)} per bulan. Tidak mengurangi kas lagi; hanya dicatat sebagai beban sesuai masa manfaat aset.
       </div>
 
       <div class="grid gap-3 sm:grid-cols-3">

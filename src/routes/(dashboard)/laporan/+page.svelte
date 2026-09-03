@@ -6,7 +6,7 @@
   import { getModelBajuList } from "$lib/firebase/model-baju";
   import { getKaryawanList } from "$lib/firebase/karyawan";
   import { getPembayaranGajiPeriode, type PembayaranGajiRecord } from "$lib/firebase/penggajian";
-  import { getAsetPerusahaan, getTransaksiKeuangan, kategoriLabel } from "$lib/firebase/keuangan";
+  import { getAsetPerusahaan, getSaldoAwalKeuangan, getTransaksiKeuangan, hitungNilaiBukuAset, hitungPenyusutanPeriode, kategoriLabel, transaksiBerdampakLabaRugi } from "$lib/firebase/keuangan";
   import { type DateRange, getPeriodRange } from "$lib/period";
   import type {
     BarangKeluar,
@@ -17,6 +17,7 @@
     StokBarangJadi,
     StokKain,
     StokPotongan,
+    SaldoAwalKeuangan,
     TransaksiKeuangan,
     UserProfile,
   } from "$lib/types";
@@ -35,10 +36,14 @@
   import ChevronLeftIcon from "@lucide/svelte/icons/chevron-left";
   import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
   import { hargaJualUntukUkuran, hargaProduksiUntukUkuran } from "$lib/sales/penjualan";
+  import { Chart, registerables } from "chart.js";
+
+  Chart.register(...registerables);
 
   type ReportTab = "ringkasan" | "keuangan" | "produksi" | "barang_keluar" | "stok" | "karyawan";
   type ExportSection = "semua" | "keuangan" | "produksi" | "barang_keluar" | "stok" | "karyawan";
   type MoneyRow = { label: string; value: number; color: string };
+  type CashflowRow = { key: string; date: Date; masuk: number; keluar: number };
 
   let dateRange = $state<DateRange>(getPeriodRange("bulan_ini"));
   let activeTab = $state<ReportTab>("keuangan");
@@ -47,6 +52,20 @@
   let exportSection = $state<ExportSection>("semua");
   let barangKeluarPage = $state(1);
   let errorMsg = $state<string | null>(null);
+  let profitLossCanvas = $state<HTMLCanvasElement | null>(null);
+  let expenseCanvas = $state<HTMLCanvasElement | null>(null);
+  let incomeCanvas = $state<HTMLCanvasElement | null>(null);
+  let cashflowCanvas = $state<HTMLCanvasElement | null>(null);
+  let productionCanvas = $state<HTMLCanvasElement | null>(null);
+  let outgoingCanvas = $state<HTMLCanvasElement | null>(null);
+  let stockCanvas = $state<HTMLCanvasElement | null>(null);
+  let profitLossChart: Chart | null = null;
+  let expenseChart: Chart | null = null;
+  let incomeChart: Chart | null = null;
+  let cashflowChart: Chart | null = null;
+  let productionChart: Chart | null = null;
+  let outgoingChart: Chart | null = null;
+  let stockChart: Chart | null = null;
 
   let batches = $state<BatchProduksi[]>([]);
   let barangKeluar = $state<BarangKeluar[]>([]);
@@ -58,6 +77,7 @@
   let gaji = $state<PembayaranGajiRecord[]>([]);
   let karyawan = $state<UserProfile[]>([]);
   let aset = $state<AsetPerusahaan[]>([]);
+  let saldoAwal = $state<SaldoAwalKeuangan | null>(null);
 
   const tabs = [
     { id: "keuangan", label: "Laporan Keuangan", icon: WalletIcon },
@@ -99,6 +119,21 @@
     return value.toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" });
   }
 
+  function dateKey(value: Date): string {
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, "0");
+    const day = String(value.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  function compactRupiah(value: number): string {
+    const amount = Number(value) || 0;
+    if (Math.abs(amount) >= 1_000_000_000) return `Rp${(amount / 1_000_000_000).toFixed(1)} M`;
+    if (Math.abs(amount) >= 1_000_000) return `Rp${(amount / 1_000_000).toFixed(1)} jt`;
+    if (Math.abs(amount) >= 1_000) return `Rp${(amount / 1_000).toFixed(0)} rb`;
+    return `Rp${amount.toLocaleString("id-ID")}`;
+  }
+
   function roleLabel(role?: string): string {
     if (!role) return "-";
     return role.replaceAll("_", " ").replace(/\b\w/g, (char) => char.toUpperCase());
@@ -137,18 +172,6 @@
 
   function maxValue(rows: MoneyRow[]): number {
     return Math.max(1, ...rows.map((row) => row.value));
-  }
-
-  function pieStyle(rows: MoneyRow[]): string {
-    const total = rows.reduce((sum, row) => sum + row.value, 0);
-    if (total <= 0) return "background: #eef2f7";
-    let current = 0;
-    const parts = rows.map((row) => {
-      const start = current;
-      current += (row.value / total) * 100;
-      return `${row.color} ${start}% ${current}%`;
-    });
-    return `background: conic-gradient(${parts.join(", ")})`;
   }
 
   const modelMap = $derived(new Map(models.map((m) => [m.id, m])));
@@ -204,10 +227,13 @@
   const hpp = $derived(listBarangKeluarRows.reduce((sum, row) => sum + row.hpp, 0));
   const totalKeluarPcs = $derived(listBarangKeluarRows.reduce((sum, row) => sum + row.pcsKeluar, 0));
   const totalPendingPcs = $derived(listBarangKeluarRows.reduce((sum, row) => sum + row.pcsPending, 0));
-  const pemasukanManual = $derived(transaksi.filter((t) => t.tipe === "pemasukan").reduce((s, t) => s + t.nominal, 0));
-  const isPembelianPersediaan = (t: TransaksiKeuangan) => t.tipe === "pengeluaran" && (t.kategori === "bahan_baku" || t.dampak_laba_rugi === false);
-  const pengeluaranManual = $derived(transaksi.filter((t) => t.tipe === "pengeluaran" && !isPembelianPersediaan(t)).reduce((s, t) => s + t.nominal, 0));
+  const pemasukanManual = $derived(transaksi.filter((t) => t.tipe === "pemasukan" && (t.dampak_laba_rugi ?? transaksiBerdampakLabaRugi(t.tipe, t.kategori))).reduce((s, t) => s + t.nominal, 0));
+  const pemasukanKasNonPendapatan = $derived(transaksi.filter((t) => t.tipe === "pemasukan" && !(t.dampak_laba_rugi ?? transaksiBerdampakLabaRugi(t.tipe, t.kategori))).reduce((s, t) => s + t.nominal, 0));
+  const isPembelianPersediaan = (t: TransaksiKeuangan) => t.tipe === "pengeluaran" && t.kategori !== "aset" && (t.kategori === "bahan_baku" || t.jenis_transaksi === "pembelian_persediaan" || t.dampak_laba_rugi === false);
+  const isPembelianAset = (t: TransaksiKeuangan) => t.tipe === "pengeluaran" && (t.kategori === "aset" || t.jenis_transaksi === "pembelian_aset");
+  const pengeluaranManual = $derived(transaksi.filter((t) => t.tipe === "pengeluaran" && !isPembelianPersediaan(t) && !isPembelianAset(t)).reduce((s, t) => s + t.nominal, 0));
   const pembelianPersediaan = $derived(transaksi.filter(isPembelianPersediaan).reduce((s, t) => s + t.nominal, 0));
+  const pembelianAset = $derived(transaksi.filter(isPembelianAset).reduce((s, t) => s + t.nominal, 0));
   const totalPengeluaranKas = $derived(transaksi.filter((t) => t.tipe === "pengeluaran").reduce((s, t) => s + t.nominal, 0));
   const gajiTerbayar = $derived(gaji.reduce((s, item) => s + item.total_gaji, 0));
   const isGajiProduksi = (item: PembayaranGajiRecord) => {
@@ -218,12 +244,22 @@
   };
   const gajiProduksiTerbayar = $derived(gaji.filter(isGajiProduksi).reduce((s, item) => s + item.total_gaji, 0));
   const gajiRegulerTerbayar = $derived(gaji.filter((item) => !isGajiProduksi(item)).reduce((s, item) => s + item.total_gaji, 0));
+  const penyusutanAset = $derived(aset.reduce((sum, item) => sum + hitungPenyusutanPeriode(item, dateRange), 0));
   const labaKotor = $derived(penjualan - hpp);
-  const labaBersih = $derived(labaKotor + pemasukanManual - pengeluaranManual - gajiRegulerTerbayar);
-  const kasMasuk = $derived(penjualan + pemasukanManual);
+  const labaBersih = $derived(labaKotor + pemasukanManual - pengeluaranManual - gajiRegulerTerbayar - penyusutanAset);
+  const kasMasuk = $derived(penjualan + pemasukanManual + pemasukanKasNonPendapatan);
   const kasKeluar = $derived(totalPengeluaranKas + gajiTerbayar);
-  const kasBersih = $derived(kasMasuk - kasKeluar);
-  const nilaiAset = $derived(aset.reduce((sum, item) => sum + (item.nilai_saat_ini ?? item.total_harga ?? 0), 0));
+  const saldoAwalKas = $derived.by(() => {
+    const tanggal = saldoAwal?.tanggal ? toDate(saldoAwal.tanggal) : null;
+    return tanggal && tanggal <= (dateRange?.end ?? new Date()) ? saldoAwal?.saldo_kas ?? 0 : 0;
+  });
+  const modalAwal = $derived.by(() => {
+    const tanggal = saldoAwal?.tanggal ? toDate(saldoAwal.tanggal) : null;
+    return tanggal && tanggal <= (dateRange?.end ?? new Date()) ? saldoAwal?.modal_awal ?? 0 : 0;
+  });
+  const kasBersihPeriode = $derived(kasMasuk - kasKeluar);
+  const kasBersih = $derived(saldoAwalKas + kasBersihPeriode);
+  const nilaiAset = $derived(aset.reduce((sum, item) => sum + hitungNilaiBukuAset(item), 0));
   const nilaiPersediaanKain = $derived(stokKain.reduce((sum, item) => sum + item.stok_tersedia * (item.harga_per_unit ?? 0), 0));
   const stokJadiPcs = $derived(stokJadi.reduce((s, item) => s + item.stok_tersedia, 0));
   const stokPotonganPcs = $derived(stokPotongan.reduce((s, item) => s + item.stok_tersedia, 0));
@@ -234,7 +270,7 @@
   const incomeRows = $derived.by<MoneyRow[]>(() => {
     const map = new Map<string, number>();
     map.set("Penjualan barang keluar", penjualan);
-    for (const item of transaksi.filter((t) => t.tipe === "pemasukan")) {
+    for (const item of transaksi.filter((t) => t.tipe === "pemasukan" && (t.dampak_laba_rugi ?? transaksiBerdampakLabaRugi(t.tipe, t.kategori)))) {
       const label = kategoriLabel(item.tipe, item.kategori);
       map.set(label, (map.get(label) ?? 0) + item.nominal);
     }
@@ -249,10 +285,11 @@
     const map = new Map<string, number>();
     map.set("HPP produksi barang keluar", hpp);
     map.set("Gaji karyawan reguler", gajiRegulerTerbayar);
-    for (const item of transaksi.filter((t) => t.tipe === "pengeluaran" && !isPembelianPersediaan(t))) {
+    for (const item of transaksi.filter((t) => t.tipe === "pengeluaran" && !isPembelianPersediaan(t) && !isPembelianAset(t))) {
       const label = kategoriLabel(item.tipe, item.kategori);
       map.set(label, (map.get(label) ?? 0) + item.nominal);
     }
+    map.set("Penyusutan aset", penyusutanAset);
     return [...map.entries()].map(([label, value], index) => ({
       label,
       value,
@@ -271,6 +308,42 @@
     }
     return [...map.values()].sort((a, b) => b.masuk + b.keluar - (a.masuk + a.keluar));
   });
+
+  const cashflowByDate = $derived.by<CashflowRow[]>(() => {
+    const map = new Map<string, CashflowRow>();
+
+    function rowFor(date: Date): CashflowRow {
+      const key = dateKey(date);
+      const existing = map.get(key);
+      if (existing) return existing;
+      const row = { key, date, masuk: 0, keluar: 0 };
+      map.set(key, row);
+      return row;
+    }
+
+    for (const row of listBarangKeluarRows) {
+      if (row.tanggal && row.nilaiJual > 0) rowFor(row.tanggal).masuk += row.nilaiJual;
+    }
+    for (const item of transaksi) {
+      const date = toDate(item.tanggal);
+      if (!date) continue;
+      const row = rowFor(date);
+      if (item.tipe === "pemasukan") row.masuk += item.nominal;
+      else row.keluar += item.nominal;
+    }
+    for (const item of gaji) {
+      const date = new Date(`${item.periode_end}T00:00:00`);
+      if (!Number.isNaN(date.getTime())) rowFor(date).keluar += item.total_gaji;
+    }
+
+    return [...map.values()].sort((a, b) => a.date.getTime() - b.date.getTime());
+  });
+
+  const stockValueRows = $derived([
+    { label: "Barang jadi", value: nilaiGudang },
+    { label: "Kain", value: nilaiPersediaanKain },
+    { label: "Aset tetap", value: nilaiAset },
+  ]);
 
   const produksiByStatus = $derived.by(() => {
     const map = new Map<string, { status: string; batch: number; pcs: number }>();
@@ -362,7 +435,7 @@
     try {
       const from = dateRange?.start ?? new Date(0);
       const to = dateRange?.end ?? new Date();
-      [batches, barangKeluar, stokJadi, stokKain, stokPotongan, models, transaksi, gaji, karyawan, aset] = await Promise.all([
+      [batches, barangKeluar, stokJadi, stokKain, stokPotongan, models, transaksi, gaji, karyawan, aset, saldoAwal] = await Promise.all([
         getBatchListByDateRange(from, to),
         getRiwayatBarangKeluarByPeriod(dateRange),
         getStokBarangJadi(),
@@ -373,6 +446,7 @@
         getPembayaranGajiPeriode(dateRange),
         getKaryawanList(),
         getAsetPerusahaan(),
+        getSaldoAwalKeuangan(),
       ]);
     } catch (error) {
       errorMsg = error instanceof Error ? error.message : "Gagal memuat laporan.";
@@ -380,6 +454,185 @@
       loading = false;
     }
   }
+
+  $effect(() => {
+    const canvas = profitLossCanvas;
+    const values = [penjualan, hpp, pengeluaranManual, gajiRegulerTerbayar, penyusutanAset, labaBersih];
+    profitLossChart?.destroy();
+    profitLossChart = null;
+    if (!canvas) return;
+    profitLossChart = new Chart(canvas, {
+      type: "bar",
+      data: {
+        labels: ["Penjualan", "HPP", "Operasional", "Gaji reguler", "Penyusutan", "Laba bersih"],
+        datasets: [{
+          label: "Nilai",
+          data: values,
+          backgroundColor: ["#16a34a", "#f97316", "#dc2626", "#2563eb", "#a855f7", labaBersih >= 0 ? "#111827" : "#b91c1c"],
+          borderRadius: 5,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: (context) => rupiah(Number(context.raw)) } },
+        },
+        scales: { y: { beginAtZero: true, ticks: { callback: (value) => compactRupiah(Number(value)) } } },
+      },
+    });
+  });
+
+  $effect(() => {
+    const canvas = expenseCanvas;
+    const rows = expenseRows;
+    expenseChart?.destroy();
+    expenseChart = null;
+    if (!canvas || rows.length === 0) return;
+    expenseChart = new Chart(canvas, {
+      type: "doughnut",
+      data: {
+        labels: rows.map((row) => row.label),
+        datasets: [{ data: rows.map((row) => row.value), backgroundColor: rows.map((row) => row.color), borderWidth: 2, borderColor: "#ffffff" }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: "62%",
+        plugins: {
+          legend: { position: "bottom" },
+          tooltip: { callbacks: { label: (context) => `${context.label}: ${rupiah(Number(context.raw))}` } },
+        },
+      },
+    });
+  });
+
+  $effect(() => {
+    const canvas = incomeCanvas;
+    const rows = incomeRows;
+    incomeChart?.destroy();
+    incomeChart = null;
+    if (!canvas || rows.length === 0) return;
+    incomeChart = new Chart(canvas, {
+      type: "doughnut",
+      data: {
+        labels: rows.map((row) => row.label),
+        datasets: [{ data: rows.map((row) => row.value), backgroundColor: rows.map((row) => row.color), borderWidth: 2, borderColor: "#ffffff" }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: "62%",
+        plugins: {
+          legend: { position: "bottom" },
+          tooltip: { callbacks: { label: (context) => `${context.label}: ${rupiah(Number(context.raw))}` } },
+        },
+      },
+    });
+  });
+
+  $effect(() => {
+    const canvas = cashflowCanvas;
+    const rows = cashflowByDate;
+    cashflowChart?.destroy();
+    cashflowChart = null;
+    if (!canvas || rows.length === 0) return;
+    cashflowChart = new Chart(canvas, {
+      type: "line",
+      data: {
+        labels: rows.map((row) => row.date.toLocaleDateString("id-ID", { day: "2-digit", month: "short" })),
+        datasets: [
+          { label: "Kas masuk", data: rows.map((row) => row.masuk), borderColor: "#16a34a", backgroundColor: "rgba(22, 163, 74, 0.12)", fill: true, tension: 0.3, pointRadius: 3 },
+          { label: "Kas keluar", data: rows.map((row) => row.keluar), borderColor: "#dc2626", backgroundColor: "rgba(220, 38, 38, 0.08)", fill: true, tension: 0.3, pointRadius: 3 },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { position: "bottom" },
+          tooltip: { callbacks: { label: (context) => `${context.dataset.label}: ${rupiah(Number(context.raw))}` } },
+        },
+        scales: { y: { beginAtZero: true, ticks: { callback: (value) => compactRupiah(Number(value)) } } },
+      },
+    });
+  });
+
+  $effect(() => {
+    const canvas = productionCanvas;
+    const rows = produksiByStatus;
+    productionChart?.destroy();
+    productionChart = null;
+    if (!canvas || rows.length === 0) return;
+    productionChart = new Chart(canvas, {
+      type: "bar",
+      data: {
+        labels: rows.map((row) => row.status),
+        datasets: [{ label: "Batch", data: rows.map((row) => row.batch), backgroundColor: "#f97316", borderRadius: 5, barThickness: 24 }],
+      },
+      options: {
+        indexAxis: "y",
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: (context) => { const row = rows[context.dataIndex]; return `${row.batch} batch - ${row.pcs.toLocaleString("id-ID")} pcs`; } } },
+        },
+        scales: { x: { beginAtZero: true, ticks: { precision: 0 } } },
+      },
+    });
+  });
+
+  $effect(() => {
+    const canvas = outgoingCanvas;
+    const rows = keluarByTujuan;
+    outgoingChart?.destroy();
+    outgoingChart = null;
+    if (!canvas || rows.length === 0) return;
+    outgoingChart = new Chart(canvas, {
+      type: "bar",
+      data: {
+        labels: rows.map((row) => row.tujuan),
+        datasets: [{ label: "PCS keluar", data: rows.map((row) => row.pcs), backgroundColor: "#2563eb", borderRadius: 5, barThickness: 24 }],
+      },
+      options: {
+        indexAxis: "y",
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: (context) => { const row = rows[context.dataIndex]; return `${row.pcs.toLocaleString("id-ID")} pcs - ${rupiah(row.nilai)}`; } } },
+        },
+        scales: { x: { beginAtZero: true, ticks: { precision: 0 } } },
+      },
+    });
+  });
+
+  $effect(() => {
+    const canvas = stockCanvas;
+    const rows = stockValueRows;
+    stockChart?.destroy();
+    stockChart = null;
+    if (!canvas || rows.length === 0) return;
+    stockChart = new Chart(canvas, {
+      type: "bar",
+      data: {
+        labels: rows.map((row) => row.label),
+        datasets: [{ label: "Nilai", data: rows.map((row) => row.value), backgroundColor: ["#0d9488", "#06b6d4", "#7c3aed"], borderRadius: 5, barThickness: 32 }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: (context) => rupiah(Number(context.raw)) } },
+        },
+        scales: { y: { beginAtZero: true, ticks: { callback: (value) => compactRupiah(Number(value)) } } },
+      },
+    });
+  });
 
   async function exportPdf() {
     exporting = true;
@@ -423,14 +676,19 @@
             ["HPP produksi", rupiah(hpp)],
             ["Laba kotor", rupiah(labaKotor)],
             ["Pemasukan manual", rupiah(pemasukanManual)],
+            ["Pemasukan kas non-pendapatan", rupiah(pemasukanKasNonPendapatan)],
             ["Pengeluaran operasional", rupiah(pengeluaranManual)],
             ["Pembelian bahan baku (persediaan)", rupiah(pembelianPersediaan)],
             ["Gaji produksi (sudah termasuk HPP)", rupiah(gajiProduksiTerbayar)],
             ["Gaji karyawan reguler", rupiah(gajiRegulerTerbayar)],
+            ["Penyusutan aset (non-kas)", rupiah(penyusutanAset)],
             ["Laba bersih estimasi", rupiah(labaBersih)],
             ["Kas masuk", rupiah(kasMasuk)],
             ["Kas keluar", rupiah(kasKeluar)],
-            ["Kas bersih", rupiah(kasBersih)],
+            ["Saldo awal kas", rupiah(saldoAwalKas)],
+            ["Modal awal migrasi (referensi)", rupiah(modalAwal)],
+            ["Perubahan kas periode", rupiah(kasBersihPeriode)],
+            ["Saldo kas akhir", rupiah(kasBersih)],
             ["Nilai gudang barang jadi", rupiah(nilaiGudang)],
           ],
         );
@@ -525,11 +783,13 @@
     <div class="rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">{errorMsg}</div>
   {/if}
 
-  <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+  <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-6">
     <StatCard title="Penjualan" value={rupiah(penjualan)} icon={TrendingUpIcon} {loading} footerSubtext={`${listBarangKeluarRows.length} list / ${totalKeluarPcs} pcs`} class="border-green-100 bg-green-50" valueClass="text-green-700" />
+    <StatCard title="HPP" value={rupiah(hpp)} icon={FactoryIcon} {loading} footerSubtext="barang yang sudah keluar" class="border-orange-100 bg-orange-50" valueClass="text-orange-700" />
+    <StatCard title="Laba Kotor" value={rupiah(labaKotor)} icon={TrendingUpIcon} {loading} footerSubtext="penjualan dikurangi HPP" class="border-sky-100 bg-sky-50" valueClass="text-sky-700" />
     <StatCard title="Laba Bersih" value={rupiah(labaBersih)} icon={WalletIcon} {loading} footerSubtext="estimasi tutup buku" class={labaBersih < 0 ? "border-red-100 bg-red-50" : "border-blue-100 bg-blue-50"} valueClass={labaBersih < 0 ? "text-red-600" : "text-blue-700"} />
-    <StatCard title="Produksi" value={batches.length} icon={FactoryIcon} {loading} footerSubtext={`${batches.reduce((s, b) => s + (b.total_pcs ?? 0), 0)} pcs batch`} />
-    <StatCard title="Gudang Jadi" value={`${stokJadiPcs} pcs`} icon={BoxesIcon} {loading} footerSubtext={rupiah(nilaiGudang)} class="border-teal-100 bg-teal-50" valueClass="text-teal-700" />
+    <StatCard title="Saldo Kas Akhir" value={rupiah(kasBersih)} icon={WalletIcon} {loading} footerSubtext="saldo awal + perubahan kas periode" class={kasBersih < 0 ? "border-red-100 bg-red-50" : "border-emerald-100 bg-emerald-50"} valueClass={kasBersih < 0 ? "text-red-600" : "text-emerald-700"} />
+    <StatCard title="Nilai Persediaan" value={rupiah(nilaiGudang + nilaiPersediaanKain)} icon={BoxesIcon} {loading} footerSubtext={`${stokJadiPcs} pcs jadi / ${stokKainTotal.toLocaleString("id-ID")} kain`} class="border-teal-100 bg-teal-50" valueClass="text-teal-700" />
   </div>
 
   <div class="flex flex-wrap gap-2 rounded-xl border border-gray-100 bg-white p-2 shadow-sm">
@@ -548,7 +808,7 @@
         <div class="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           <div class="rounded-lg bg-green-50 p-4"><p class="text-xs text-green-700">Kas Masuk</p><p class="mt-1 text-xl font-bold text-green-800">{rupiah(kasMasuk)}</p></div>
           <div class="rounded-lg bg-red-50 p-4"><p class="text-xs text-red-700">Kas Keluar</p><p class="mt-1 text-xl font-bold text-red-800">{rupiah(kasKeluar)}</p></div>
-          <div class="rounded-lg bg-blue-50 p-4"><p class="text-xs text-blue-700">Kas Bersih</p><p class="mt-1 text-xl font-bold text-blue-800">{rupiah(kasBersih)}</p></div>
+          <div class="rounded-lg bg-blue-50 p-4"><p class="text-xs text-blue-700">Saldo Kas Akhir</p><p class="mt-1 text-xl font-bold text-blue-800">{rupiah(kasBersih)}</p></div>
           <div class="rounded-lg bg-gray-50 p-4"><p class="text-xs text-gray-500">Laba Kotor</p><p class="mt-1 text-xl font-bold text-gray-900">{rupiah(labaKotor)}</p></div>
           <div class="rounded-lg bg-gray-50 p-4"><p class="text-xs text-gray-500">Pending Keluar</p><p class="mt-1 text-xl font-bold text-gray-900">{totalPendingPcs} pcs</p></div>
           <div class="rounded-lg bg-gray-50 p-4"><p class="text-xs text-gray-500">Stok Kain</p><p class="mt-1 text-xl font-bold text-gray-900">{stokKainTotal.toLocaleString("id-ID")}</p></div>
@@ -577,17 +837,22 @@
           <div class="flex justify-between px-4 py-3 text-sm"><span>HPP produksi barang keluar</span><strong class="text-red-700">({rupiah(hpp)})</strong></div>
           <div class="flex justify-between bg-gray-50 px-4 py-3 text-sm"><span class="font-semibold">Laba kotor</span><strong>{rupiah(labaKotor)}</strong></div>
           <div class="flex justify-between px-4 py-3 text-sm"><span>Pemasukan manual/lainnya</span><strong class="text-green-700">{rupiah(pemasukanManual)}</strong></div>
-          <div class="flex justify-between px-4 py-3 text-sm"><span>Pengeluaran perusahaan</span><strong class="text-red-700">({rupiah(pengeluaranManual)})</strong></div>
-          <div class="flex justify-between px-4 py-3 text-sm"><span>Pembelian bahan baku (masuk persediaan)</span><strong class="text-blue-700">{rupiah(pembelianPersediaan)}</strong></div>
-          <div class="flex justify-between px-4 py-3 text-sm"><span>Gaji produksi (sudah termasuk HPP)</span><strong class="text-blue-700">{rupiah(gajiProduksiTerbayar)}</strong></div>
+          <div class="flex justify-between px-4 py-3 text-sm"><span>Pengeluaran operasional</span><strong class="text-red-700">({rupiah(pengeluaranManual)})</strong></div>
           <div class="flex justify-between px-4 py-3 text-sm"><span>Gaji karyawan reguler</span><strong class="text-red-700">({rupiah(gajiRegulerTerbayar)})</strong></div>
+          <div class="flex justify-between px-4 py-3 text-sm"><span>Penyusutan aset (non-kas)</span><strong class="text-purple-700">({rupiah(penyusutanAset)})</strong></div>
           <div class="flex justify-between bg-gray-900 px-4 py-3 text-sm text-white"><span class="font-semibold">Laba bersih estimasi</span><strong>{rupiah(labaBersih)}</strong></div>
         </div>
+        <div class="mt-5 h-64"><canvas bind:this={profitLossCanvas} aria-label="Chart laporan laba rugi"></canvas></div>
+        <p class="mt-3 text-xs text-gray-500">Bahan baku dan gaji produksi tidak dibebankan ulang di sini. Keduanya sudah menjadi bagian HPP dan diakui saat barang terjual.</p>
       </section>
 
       <section class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
         <h2 class="text-sm font-semibold text-gray-800">Komposisi Pengeluaran</h2>
-        <div class="mx-auto mt-5 h-44 w-44 rounded-full" style={pieStyle(expenseRows)}></div>
+        {#if expenseRows.length > 0}
+          <div class="mt-4 h-64"><canvas bind:this={expenseCanvas} aria-label="Chart komposisi pengeluaran"></canvas></div>
+        {:else}
+          <p class="py-12 text-center text-sm text-gray-400">Belum ada pengeluaran operasional.</p>
+        {/if}
         <div class="mt-5 space-y-3">
           {#each expenseRows.slice(0, 6) as row}
             <div>
@@ -603,8 +868,12 @@
       <section class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm xl:col-span-3">
         <div class="grid gap-5 lg:grid-cols-2">
           <div>
-            <h2 class="text-sm font-semibold text-gray-800">Sumber Pemasukan</h2>
-            <div class="mx-auto mt-5 h-36 w-36 rounded-full" style={pieStyle(incomeRows)}></div>
+            <h2 class="text-sm font-semibold text-gray-800">Sumber Pendapatan</h2>
+            {#if incomeRows.length > 0}
+              <div class="mt-4 h-64"><canvas bind:this={incomeCanvas} aria-label="Chart sumber pemasukan"></canvas></div>
+            {:else}
+              <p class="py-12 text-center text-sm text-gray-400">Belum ada pemasukan.</p>
+            {/if}
             <div class="mt-4 space-y-3">
               {#each incomeRows as row}
                 <div class="flex items-center justify-between rounded-lg bg-green-50 px-4 py-3 text-sm"><span>{row.label}</span><strong class="text-green-700">{rupiah(row.value)}</strong></div>
@@ -630,6 +899,23 @@
       </section>
 
       <section class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm xl:col-span-2">
+        <h2 class="text-sm font-semibold text-gray-800">Rekonsiliasi Kas</h2>
+        <p class="mt-1 text-xs text-gray-500">Arus kas tetap mencatat pembayaran persediaan, produksi, operasional, dan aset. Bagian ini bukan laba rugi.</p>
+        <div class="mt-4 divide-y divide-gray-100 rounded-lg border border-gray-100">
+          <div class="flex justify-between px-4 py-3 text-sm"><span>Pengeluaran operasional</span><strong class="text-red-700">({rupiah(pengeluaranManual)})</strong></div>
+          <div class="flex justify-between px-4 py-3 text-sm"><span>Modal / piutang / refund (kas, bukan pendapatan)</span><strong class="text-green-700">{rupiah(pemasukanKasNonPendapatan)}</strong></div>
+          <div class="flex justify-between px-4 py-3 text-sm"><span>Pembelian bahan baku (masuk persediaan)</span><strong class="text-blue-700">({rupiah(pembelianPersediaan)})</strong></div>
+          <div class="flex justify-between px-4 py-3 text-sm"><span>Gaji produksi (sudah termasuk HPP)</span><strong class="text-blue-700">({rupiah(gajiProduksiTerbayar)})</strong></div>
+          <div class="flex justify-between px-4 py-3 text-sm"><span>Gaji karyawan reguler</span><strong class="text-red-700">({rupiah(gajiRegulerTerbayar)})</strong></div>
+          <div class="flex justify-between px-4 py-3 text-sm"><span>Pembelian aset (bukan beban laba rugi)</span><strong class="text-purple-700">({rupiah(pembelianAset)})</strong></div>
+          <div class="flex justify-between bg-gray-50 px-4 py-3 text-sm"><span class="font-semibold">Total kas keluar</span><strong>{rupiah(kasKeluar)}</strong></div>
+          <div class="flex justify-between px-4 py-3 text-sm"><span>Saldo awal kas</span><strong>{rupiah(saldoAwalKas)}</strong></div>
+          <div class="flex justify-between px-4 py-3 text-sm"><span>Perubahan kas periode</span><strong class={kasBersihPeriode < 0 ? "text-red-700" : "text-blue-700"}>{rupiah(kasBersihPeriode)}</strong></div>
+          <div class="flex justify-between bg-blue-50 px-4 py-3 text-sm"><span class="font-semibold">Saldo kas akhir</span><strong class={kasBersih < 0 ? "text-red-700" : "text-blue-700"}>{rupiah(kasBersih)}</strong></div>
+        </div>
+      </section>
+
+      <section class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
         <div class="flex items-start justify-between gap-4">
           <div>
             <h2 class="text-sm font-semibold text-gray-800">Neraca Sederhana</h2>
@@ -638,13 +924,14 @@
           <span class="text-right text-xs text-gray-400">Total aset<strong class="mt-1 block text-base text-gray-900">{rupiah(totalAset)}</strong></span>
         </div>
         <div class="mt-4 divide-y divide-gray-100 rounded-lg border border-gray-100">
-          <div class="flex justify-between px-4 py-3 text-sm"><span>Kas tercatat</span><strong>{rupiah(kasBersih)}</strong></div>
+          <div class="flex justify-between px-4 py-3 text-sm"><span>Saldo kas akhir</span><strong>{rupiah(kasBersih)}</strong></div>
           <div class="flex justify-between px-4 py-3 text-sm"><span>Persediaan barang jadi</span><strong>{rupiah(nilaiGudang)}</strong></div>
           <div class="flex justify-between px-4 py-3 text-sm"><span>Persediaan kain</span><strong>{rupiah(nilaiPersediaanKain)}</strong></div>
           <div class="flex justify-between px-4 py-3 text-sm"><span>Aset tetap</span><strong>{rupiah(nilaiAset)}</strong></div>
           <div class="flex justify-between bg-gray-50 px-4 py-3 text-sm"><span class="font-semibold">Total aset</span><strong>{rupiah(totalAset)}</strong></div>
         </div>
-        <p class="mt-3 text-xs text-amber-700">Kewajiban dan modal belum dihitung karena modul utang/modal belum tersedia.</p>
+        <div class="mt-3 flex justify-between rounded-lg bg-violet-50 px-4 py-3 text-sm"><span class="text-violet-800">Modal awal migrasi (referensi)</span><strong class="text-violet-800">{rupiah(modalAwal)}</strong></div>
+        <p class="mt-3 text-xs text-amber-700">Modal awal migrasi hanya ditampilkan sebagai referensi penyeimbang. Kewajiban dan modal berjalan belum dihitung.</p>
       </section>
 
       <section class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
@@ -653,21 +940,26 @@
         <div class="mt-4 space-y-3">
           <div class="flex justify-between text-sm"><span>Kas masuk</span><strong class="text-green-700">{rupiah(kasMasuk)}</strong></div>
           <div class="flex justify-between text-sm"><span>Kas keluar</span><strong class="text-red-700">({rupiah(kasKeluar)})</strong></div>
-          <div class="flex justify-between border-t border-gray-100 pt-3 text-sm"><span class="font-semibold">Kas bersih</span><strong class={kasBersih < 0 ? "text-red-700" : "text-blue-700"}>{rupiah(kasBersih)}</strong></div>
+          <div class="flex justify-between text-sm"><span>Saldo awal kas</span><strong>{rupiah(saldoAwalKas)}</strong></div>
+          <div class="flex justify-between border-t border-gray-100 pt-3 text-sm"><span class="font-semibold">Saldo kas akhir</span><strong class={kasBersih < 0 ? "text-red-700" : "text-blue-700"}>{rupiah(kasBersih)}</strong></div>
         </div>
+        {#if cashflowByDate.length > 0}
+          <div class="mt-5 h-56"><canvas bind:this={cashflowCanvas} aria-label="Chart arus kas"></canvas></div>
+        {:else}
+          <p class="py-10 text-center text-sm text-gray-400">Belum ada pergerakan kas pada periode ini.</p>
+        {/if}
       </section>
     </div>
   {:else if activeTab === "produksi"}
     <div class="space-y-4">
       <section class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
         <h2 class="text-sm font-semibold text-gray-800">Produksi per Status</h2>
-        <div class="mt-4 grid gap-3 md:grid-cols-3 xl:grid-cols-4">
-          {#each produksiByStatus as row}
-            <div class="rounded-lg bg-gray-50 p-4"><p class="text-sm font-semibold text-gray-800">{row.status}</p><p class="mt-2 text-2xl font-bold">{row.batch}</p><p class="text-xs text-gray-400">{row.pcs} pcs</p></div>
-          {:else}
-            <p class="text-sm text-gray-400">Belum ada produksi pada periode ini.</p>
-          {/each}
-        </div>
+        <p class="mt-1 text-xs text-gray-500">Jumlah batch pada setiap status, dengan PCS tersedia saat chart diarahkan.</p>
+        {#if produksiByStatus.length > 0}
+          <div class="mt-4 h-72"><canvas bind:this={productionCanvas} aria-label="Chart produksi per status"></canvas></div>
+        {:else}
+          <p class="py-12 text-center text-sm text-gray-400">Belum ada produksi pada periode ini.</p>
+        {/if}
       </section>
       <section class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
         <h2 class="text-sm font-semibold text-gray-800">Detail Batch Produksi</h2>
@@ -685,11 +977,18 @@
     </div>
   {:else if activeTab === "barang_keluar"}
     <section class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
-      <h2 class="text-sm font-semibold text-gray-800">Laporan List Barang Keluar</h2>
+      <h2 class="text-sm font-semibold text-gray-800">Barang Keluar per Tujuan</h2>
+      <p class="mt-1 text-xs text-gray-500">Perbandingan PCS yang keluar dan nilai penjualannya pada periode laporan.</p>
+      {#if keluarByTujuan.length > 0}
+        <div class="mt-4 h-72"><canvas bind:this={outgoingCanvas} aria-label="Chart barang keluar per tujuan"></canvas></div>
+      {:else}
+        <p class="py-12 text-center text-sm text-gray-400">Belum ada barang keluar.</p>
+      {/if}
+      <h2 class="mt-6 text-sm font-semibold text-gray-800">Laporan List Barang Keluar</h2>
       <Table.Root class="mt-4">
         <Table.Header><Table.Row><Table.Head>Tanggal</Table.Head><Table.Head>Tujuan</Table.Head><Table.Head>Reseller</Table.Head><Table.Head>Isi List</Table.Head><Table.Head>Keluar</Table.Head><Table.Head>Pending</Table.Head><Table.Head>Penjualan</Table.Head><Table.Head>HPP</Table.Head><Table.Head>Laba</Table.Head></Table.Row></Table.Header>
         <Table.Body>
-          {#each listBarangKeluarRows as row}
+          {#each barangKeluarRowsPage as row}
             <Table.Row><Table.Cell>{formatDate(row.tanggal)}</Table.Cell><Table.Cell>{row.tujuan}</Table.Cell><Table.Cell>{row.reseller}</Table.Cell><Table.Cell>{row.itemCount} item / {row.modelCount} model / {row.warnaCount} warna</Table.Cell><Table.Cell>{row.pcsKeluar} pcs</Table.Cell><Table.Cell>{row.pcsPending} pcs</Table.Cell><Table.Cell>{rupiah(row.nilaiJual)}</Table.Cell><Table.Cell>{rupiah(row.hpp)}</Table.Cell><Table.Cell>{rupiah(row.labaKotor)}</Table.Cell></Table.Row>
           {:else}
             <Table.Row><Table.Cell colspan={9} class="text-center text-gray-400">Belum ada barang keluar.</Table.Cell></Table.Row>
@@ -713,6 +1012,15 @@
     </section>
   {:else if activeTab === "stok"}
     <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
+      <section class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm xl:col-span-2">
+        <h2 class="text-sm font-semibold text-gray-800">Nilai Aset dan Persediaan</h2>
+        <p class="mt-1 text-xs text-gray-500">Nilai tercatat barang jadi, kain, dan aset tetap saat laporan dibuka.</p>
+        {#if stockValueRows.some((row) => row.value > 0)}
+          <div class="mt-4 h-64"><canvas bind:this={stockCanvas} aria-label="Chart nilai aset dan persediaan"></canvas></div>
+        {:else}
+          <p class="py-12 text-center text-sm text-gray-400">Belum ada nilai aset atau persediaan.</p>
+        {/if}
+      </section>
       <section class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
         <h2 class="text-sm font-semibold text-gray-800">Stok Barang Jadi</h2>
         <Table.Root class="mt-4">

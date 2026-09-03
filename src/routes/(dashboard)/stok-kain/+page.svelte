@@ -100,6 +100,7 @@
   let fSatuan = $state<"yard" | "kg">("yard");
   let fStok = $state<number | "">("");
   let fHargaPerUnit = $state<number | "">("");
+  let fCatatPembelian = $state(false);
   let fCatatan = $state("");
   let mNamaKain = $state("");
 
@@ -453,7 +454,7 @@
         harga_per_unit: hargaPerUnit,
         stok_tersedia: stokAwal,
         ...(fCatatan.trim() ? { catatan: fCatatan.trim() } : {}),
-      }, {
+      }, fCatatPembelian ? {
         pembelianKeuangan: {
           tanggal: new Date(),
           nominal: stokAwal * hargaPerUnit,
@@ -462,7 +463,7 @@
           dibuat_oleh_uid: $currentUser?.uid,
           dibuat_oleh_nama: $currentUser?.name || $currentUser?.email,
         },
-      });
+      } : undefined);
       const namaKain = selectedMasterKain.nama_kain;
       await load(true);
       openTambah = false;
@@ -471,6 +472,7 @@
       fSatuan = "yard";
       fStok = "";
       fHargaPerUnit = "";
+      fCatatPembelian = false;
       fCatatan = "";
       showSuccess(`Kain "${namaKain}" berhasil ditambahkan.`);
     } catch {
@@ -1270,6 +1272,16 @@
             Belum ada master kain. Tambahkan jenis kain dulu agar nama tidak dobel.
           </p>
         {/if}
+      </div>
+
+      <div>
+        <label class="flex cursor-pointer items-start gap-3 rounded-lg border border-blue-100 bg-blue-50 px-3 py-3">
+          <input type="checkbox" bind:checked={fCatatPembelian} class="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
+          <span>
+            <span class="block text-sm font-medium text-blue-900">Catat sebagai pembelian baru</span>
+            <span class="mt-0.5 block text-xs leading-relaxed text-blue-700">Aktifkan hanya jika stok ini benar-benar dibeli sekarang. Matikan untuk stok lama hasil migrasi agar kas tidak berkurang lagi.</span>
+          </span>
+        </label>
       </div>
 
       <div>

@@ -34,7 +34,7 @@
   const bulanLabel = $derived(new Intl.DateTimeFormat("id-ID", { month: "long", year: "numeric" }).format(new Date(`${bulan}-01T00:00:00`)));
 
   function isInventoryPurchase(item: TransaksiKeuangan) {
-    return item.kategori === "bahan_baku" || item.dampak_laba_rugi === false;
+    return item.kategori !== "aset" && (item.kategori === "bahan_baku" || item.jenis_transaksi === "pembelian_persediaan" || item.dampak_laba_rugi === false);
   }
 
   function formatRupiah(value: number) {

@@ -496,7 +496,7 @@ export interface TransaksiKeuangan {
   catatan?: string;
   /** Pembelian persediaan mengurangi kas, bukan laba rugi saat dibeli. */
   dampak_laba_rugi?: boolean;
-  jenis_transaksi?: 'pembelian_persediaan' | 'operasional';
+  jenis_transaksi?: 'pembelian_persediaan' | 'pembelian_aset' | 'operasional' | 'non_pendapatan';
   dibuat_oleh_uid?: string;
   dibuat_oleh_nama?: string;
   createdAt?: Timestamp;
@@ -516,6 +516,25 @@ export interface BudgetBulanan {
 }
 
 export type BudgetBulananInput = Omit<BudgetBulanan, 'id' | 'createdAt' | 'updatedAt'>;
+
+export interface SaldoAwalKeuangan {
+  id: string;
+  tanggal: Timestamp;
+  saldo_kas: number;
+  modal_awal: number;
+  catatan?: string;
+  dibuat_oleh_uid?: string;
+  dibuat_oleh_nama?: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export type SaldoAwalKeuanganInput = Omit<
+  SaldoAwalKeuangan,
+  'id' | 'tanggal' | 'createdAt' | 'updatedAt'
+> & {
+  tanggal: Date | Timestamp;
+};
 
 export type TransaksiKeuanganInput = Omit<
   TransaksiKeuangan,
@@ -544,6 +563,10 @@ export interface AsetPerusahaan {
   harga_satuan: number;
   total_harga: number;
   nilai_saat_ini?: number;
+  metode_penyusutan?: 'garis_lurus';
+  masa_manfaat_bulan?: number;
+  nilai_residu?: number;
+  tanggal_mulai_penyusutan?: Timestamp;
   lokasi?: string;
   supplier?: string;
   metode_pembayaran?: 'cash' | 'transfer' | 'e-wallet' | 'lainnya';
@@ -559,9 +582,10 @@ export interface AsetPerusahaan {
 
 export type AsetPerusahaanInput = Omit<
   AsetPerusahaan,
-  'id' | 'tanggal_beli' | 'total_harga' | 'createdAt' | 'updatedAt'
+  'id' | 'tanggal_beli' | 'total_harga' | 'tanggal_mulai_penyusutan' | 'createdAt' | 'updatedAt'
 > & {
   tanggal_beli: Date | Timestamp;
+  tanggal_mulai_penyusutan?: Date | Timestamp;
 };
 
 // ─── PENGGAJIAN ──────────────────────────────────────────────────
