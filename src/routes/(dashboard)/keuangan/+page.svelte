@@ -4,6 +4,7 @@
   import { getRiwayatBarangKeluarByPeriod, getStokBarangJadi } from "$lib/firebase/barang-jadi";
   import { getKaryawanList } from "$lib/firebase/karyawan";
   import { getModelBajuList } from "$lib/firebase/model-baju";
+  import { stokKainCache } from "$lib/stores/data-cache.svelte";
   import {
     addAsetPerusahaan,
     addTransaksiKeuangan,
@@ -31,6 +32,7 @@
     KondisiAset,
     ModelBaju,
     StokBarangJadi,
+    StokKain,
     TransaksiKeuangan,
     TipeTransaksiKeuangan,
     UserProfile,
@@ -78,7 +80,7 @@
   };
 
   let reportDateRange = $state<DateRange>(getPeriodRange("semua"));
-  let transactionDateRange = $state<DateRange>(getPeriodRange("hari_ini"));
+  let transactionDateRange = $state<DateRange>(getPeriodRange("semua"));
   let overviewDateRange = $state<DateRange>(getPeriodRange("semua"));
   let barangKeluar = $state<BarangKeluar[]>([]);
   let modelList = $state<ModelBaju[]>([]);
@@ -86,6 +88,7 @@
   let pembayaranGaji = $state<PembayaranGajiRecord[]>([]);
   let asetList = $state<AsetPerusahaan[]>([]);
   let stokBarangJadi = $state<StokBarangJadi[]>([]);
+  let stokKainList = $state<StokKain[]>([]);
   let karyawanList = $state<UserProfile[]>([]);
   let loading = $state(true);
   let saving = $state(false);
@@ -260,8 +263,25 @@
     const gajiTerbayar = overviewLines
       .filter((line) => line.source === "gaji")
       .reduce((sum, line) => sum + line.nominal, 0);
+    const gajiReguler = overviewLines
+      .filter((line) => line.source === "gaji" && line.jenisGaji === "reguler")
+      .reduce((sum, line) => sum + line.nominal, 0);
+    const labaKotor = penjualan - hpp;
     const kasTercatat = pemasukan - pengeluaran - pembelianPersediaan - pembelianAset - gajiTerbayar;
-    return { penjualan, pemasukanManual, pemasukan, hpp, pengeluaran, pembelianPersediaan, kasTercatat, labaBersih: pemasukan - hpp - pengeluaran };
+    return {
+      penjualan,
+      pemasukanManual,
+      pemasukan,
+      hpp,
+      pengeluaran,
+      pembelianPersediaan,
+      pembelianAset,
+      gajiReguler,
+      kasTercatat,
+      labaKotor,
+      marginKotor: penjualan > 0 ? Math.round((labaKotor / penjualan) * 100) : 0,
+      labaBersih: pemasukan - hpp - pengeluaran,
+    };
   });
 
   let filteredLines = $derived.by(() => {
@@ -330,6 +350,7 @@
       const model = modelMap.get(stok.model_id) ?? modelNameMap.get(stok.nama_model.toLowerCase());
       return sum + stok.stok_tersedia * hargaJualUntukUkuran(model, stok.ukuran);
     }, 0);
+    const gudangKain = stokKainList.reduce((sum, kain) => sum + kain.stok_tersedia * (kain.harga_per_unit ?? 0), 0);
     const marginKotor = penjualan > 0 ? Math.round((labaKotor / penjualan) * 100) : 0;
     return {
       penjualan,
@@ -350,6 +371,7 @@
       totalAset,
       gudangProduksi,
       gudangJual,
+      gudangKain,
       marginKotor,
       transaksi: allLines.length,
     };
@@ -441,9 +463,8 @@
 
   let expenseBreakdown = $derived.by(() => {
     const map = new Map<string, number>();
-    for (const trx of transaksiManual.filter((item) => item.tipe === "pengeluaran" && item.kategori !== "bahan_baku" && item.dampak_laba_rugi !== false)) {
-      const label = kategoriLabel(trx.tipe, trx.kategori);
-      map.set(label, (map.get(label) ?? 0) + trx.nominal);
+    for (const line of reportLines.filter((item) => item.source === "manual" && item.tipe === "pengeluaran" && !item.isInventoryPurchase && item.kategori !== "Aset")) {
+      map.set(line.kategori, (map.get(line.kategori) ?? 0) + line.nominal);
     }
     if (summary.totalBebanGaji > 0) {
       map.set("Gaji Karyawan Reguler", (map.get("Gaji Karyawan Reguler") ?? 0) + summary.totalBebanGaji);
@@ -638,13 +659,14 @@
     loading = true;
     errorMsg = null;
     try {
-      const [keluar, models, transaksi, gaji, aset, stokJadi, karyawan] = await Promise.all([
+      const [keluar, models, transaksi, gaji, aset, stokJadi, stokKain, karyawan] = await Promise.all([
         getRiwayatBarangKeluarByPeriod(null),
         getModelBajuList(false),
         getTransaksiKeuangan(null),
         getPembayaranGajiPeriode(null),
         getAsetPerusahaan(),
         getStokBarangJadi(),
+        stokKainCache.get(),
         getKaryawanList(),
       ]);
       barangKeluar = keluar;
@@ -653,6 +675,7 @@
       pembayaranGaji = gaji;
       asetList = aset;
       stokBarangJadi = stokJadi;
+      stokKainList = stokKain;
       karyawanList = karyawan;
     } catch (error) {
       errorMsg = error instanceof Error ? error.message : "Gagal memuat data keuangan.";
@@ -886,8 +909,8 @@
   </div>
 
   {#if pageMode === "ringkasan"}
-    <div class="mb-5 grid grid-cols-1 gap-4 xl:grid-cols-5">
-      <section class="rounded-xl border border-gray-900 bg-gray-950 p-5 text-white shadow-sm xl:col-span-2">
+    <div class="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <section class="rounded-xl border border-gray-900 bg-gray-950 p-5 text-white shadow-sm sm:col-span-2 xl:col-span-2">
         <div class="flex items-start justify-between gap-3">
           <div>
             <p class="text-sm text-gray-300">Laba bersih estimasi</p>
@@ -925,6 +948,41 @@
         valueClass="text-green-700"
       />
       <StatCard
+        title="HPP"
+        value={rupiah(overviewSummary.hpp)}
+        icon={BoxesIcon}
+        {loading}
+        footerSubtext="biaya produksi barang terjual"
+        class="border-orange-100 bg-orange-50"
+        valueClass="text-orange-700"
+      />
+      <StatCard
+        title="Laba Kotor"
+        value={rupiah(overviewSummary.labaKotor)}
+        icon={TrendingUpIcon}
+        {loading}
+        footerSubtext="penjualan - HPP"
+        valueClass={overviewSummary.labaKotor < 0 ? "text-red-600" : "text-gray-900"}
+      />
+      <StatCard
+        title="Beban Operasional"
+        value={rupiah(overviewSummary.pengeluaran)}
+        icon={TrendingDownIcon}
+        {loading}
+        footerSubtext="beban yang mengurangi laba"
+        class="border-red-100 bg-red-50"
+        valueClass="text-red-700"
+      />
+      <StatCard
+        title="Gaji Reguler"
+        value={rupiah(overviewSummary.gajiReguler)}
+        icon={ReceiptIcon}
+        {loading}
+        footerSubtext="gaji terbayar pada periode"
+        class="border-blue-100 bg-blue-50"
+        valueClass="text-blue-700"
+      />
+      <StatCard
         title="Kas Bersih"
         value={rupiah(overviewSummary.kasTercatat)}
         icon={BanknoteIcon}
@@ -935,11 +993,11 @@
       />
       <StatCard
         title="Margin Kotor"
-        value={`${overviewSummary.pemasukan > 0 ? Math.round(((overviewSummary.pemasukan - overviewSummary.hpp) / overviewSummary.pemasukan) * 100) : 0}%`}
+        value={`${overviewSummary.marginKotor}%`}
         icon={ReceiptIcon}
         {loading}
-        footerSubtext={rupiah(overviewSummary.pemasukan - overviewSummary.hpp)}
-        valueClass={overviewSummary.pemasukan - overviewSummary.hpp < 0 ? "text-red-600" : "text-gray-900"}
+        footerSubtext={rupiah(overviewSummary.labaKotor)}
+        valueClass={overviewSummary.labaKotor < 0 ? "text-red-600" : "text-gray-900"}
       />
     </div>
   {:else if pageMode === "pengeluaran"}
@@ -999,8 +1057,8 @@
       <section class="h-fit rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
         <h2 class="text-sm font-semibold text-gray-800">Komposisi Nilai</h2>
         <div class="mt-5 space-y-4">
-          {#each [["Kas", summary.kasTercatat, "bg-blue-500"], ["Aset", summary.totalAset, "bg-violet-500"], ["Gudang", summary.gudangProduksi, "bg-teal-500"]] as item}
-            {@const totalKomposisi = Math.max(1, Math.abs(summary.kasTercatat) + summary.totalAset + summary.gudangProduksi)}
+          {#each [["Kas", summary.kasTercatat, "bg-blue-500"], ["Aset", summary.totalAset, "bg-violet-500"], ["Barang jadi", summary.gudangProduksi, "bg-teal-500"], ["Kain", summary.gudangKain, "bg-cyan-500"]] as item}
+            {@const totalKomposisi = Math.max(1, Math.abs(summary.kasTercatat) + summary.totalAset + summary.gudangProduksi + summary.gudangKain)}
             <div>
               <div class="flex items-center justify-between gap-3 text-sm">
                 <span class="font-medium text-gray-700">{item[0]}</span>
@@ -1276,6 +1334,12 @@
 
   {#if pageMode !== "ringkasan" || activePanel === "transaksi"}
   <section class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
+    {#if pageMode === "ringkasan"}
+      <div class="border-b border-gray-100 px-4 pt-4">
+        <h2 class="text-sm font-semibold text-gray-800">Transaksi Terbaru</h2>
+        <p class="mt-0.5 text-xs text-gray-400">Pendapatan dan pengeluaran terbaru dengan pagination.</p>
+      </div>
+    {/if}
     <div class="flex flex-wrap items-center gap-3 border-b border-gray-100 p-4">
       <div class="min-w-[220px] flex-1">
         <Input placeholder="Cari transaksi, kategori, referensi..." bind:value={searchQuery} />
@@ -1471,6 +1535,10 @@
           <div>
             <p class="text-xs text-gray-400">Estimasi nilai jual</p>
             <p class="font-bold text-gray-900">{rupiah(summary.gudangJual)}</p>
+          </div>
+          <div>
+            <p class="text-xs text-gray-400">Nilai stok kain</p>
+            <p class="font-bold text-cyan-700">{rupiah(summary.gudangKain)}</p>
           </div>
         </div>
       </div>
