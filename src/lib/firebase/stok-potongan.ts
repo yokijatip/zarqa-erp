@@ -5,6 +5,7 @@ import {
   query, orderBy, where,
 } from 'firebase/firestore';
 import { db } from './config';
+import { getCursorPage, type FirestoreCursor, type CursorPage } from './pagination';
 import { canonicalUkuran, ukuranAliases, type StokPotongan, type UkuranBaju } from '$lib/types';
 
 const COL = 'stok_potongan';
@@ -25,14 +26,30 @@ export async function getStokPotonganList(): Promise<StokPotongan[]> {
   return mergeLegacySizes(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as StokPotongan));
 }
 
+export async function getStokPotonganPage(
+  cursor: FirestoreCursor,
+  pageSize = 25,
+): Promise<CursorPage<StokPotongan>> {
+  return getCursorPage(
+    query(collection(db, COL), orderBy('nama_model')),
+    cursor,
+    (d) => ({ id: d.id, ...d.data() }) as StokPotongan,
+    pageSize,
+  );
+}
+
 function mergeLegacySizes(rows: StokPotongan[]): StokPotongan[] {
   const merged = new Map<string, StokPotongan>();
   for (const row of rows) {
-    const ukuran = canonicalUkuran(row.ukuran);
-    const key = `${row.model_id}|${row.nama_warna ?? ''}|${ukuran}`;
+    const isHijab = row.jenis_produk === 'hijab' || !!row.model_hijab_id || !row.ukuran;
+    const ukuran = !isHijab && row.ukuran ? canonicalUkuran(row.ukuran) : undefined;
+    const key = `${isHijab ? 'hijab' : 'baju'}|${row.model_hijab_id ?? row.model_id}|${row.nama_warna ?? ''}|${ukuran ?? ''}`;
     const current = merged.get(key);
     if (!current) {
-      merged.set(key, { ...row, ukuran });
+      merged.set(key, {
+        ...row,
+        ...(isHijab ? { jenis_produk: 'hijab' as const, ukuran: undefined } : { ukuran }),
+      });
       continue;
     }
     current.stok_tersedia += row.stok_tersedia;

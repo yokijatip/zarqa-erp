@@ -9,6 +9,7 @@ import {
   where,
 } from 'firebase/firestore';
 import { db } from './config';
+import { getCursorPage, type FirestoreCursor, type CursorPage } from './pagination';
 import type { MasterKain, MasterKainInput } from '$lib/types';
 
 const COL = 'master_kain';
@@ -21,6 +22,18 @@ export async function getMasterKainList(): Promise<MasterKain[]> {
   const q = query(collection(db, COL), orderBy('nama_kain', 'asc'));
   const snap = await getDocs(q);
   return snap.docs.map((d) => ({ id: d.id, ...d.data() } as MasterKain));
+}
+
+export async function getMasterKainPage(
+  cursor: FirestoreCursor,
+  pageSize = 25,
+): Promise<CursorPage<MasterKain>> {
+  return getCursorPage(
+    query(collection(db, COL), orderBy('nama_kain', 'asc')),
+    cursor,
+    (d) => ({ id: d.id, ...d.data() }) as MasterKain,
+    pageSize,
+  );
 }
 
 export async function addMasterKain(data: MasterKainInput): Promise<string> {

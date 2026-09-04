@@ -110,7 +110,7 @@
         return `
           <tr>
             <td>${index + 1}</td>
-            <td>${escapeHtml(item.nama_model)}${item.nama_warna ? `<br /><small>${escapeHtml(item.nama_warna)}</small>` : ""}</td>
+            <td>${escapeHtml(item.nama_varian ?? item.nama_model)}${item.nama_varian && item.nama_varian !== item.nama_model ? `<br /><small>Model stok: ${escapeHtml(item.nama_model)}</small>` : ""}${item.nama_warna ? `<br /><small>${escapeHtml(item.nama_warna)}</small>` : ""}</td>
             <td>${detail}</td>
             <td class="right">${item.total_pcs} pcs</td>
             <td>${item.status === "pending" ? "Pending" : "Keluar"}</td>
@@ -339,8 +339,11 @@
                 <div class="flex items-start justify-between gap-3">
                   <div class="min-w-0">
                     <p class="text-sm font-medium text-gray-800">
-                      {item.nama_model}{item.nama_warna ? ` - ${item.nama_warna}` : ""}
+                      {item.nama_varian ?? item.nama_model}{item.nama_warna ? ` - ${item.nama_warna}` : ""}
                     </p>
+                    {#if item.nama_varian && item.nama_varian !== item.nama_model}
+                      <p class="mt-0.5 text-xs text-gray-400">Model stok: {item.nama_model}</p>
+                    {/if}
                     <div class="mt-1 space-y-0.5 text-xs text-gray-500">
                       {#each item.detail_keluar as detail}
                         <p>{detail.ukuran}: {detail.jumlah_pcs} pcs x {formatRupiah(priceForDetail(item, detail.ukuran))}</p>

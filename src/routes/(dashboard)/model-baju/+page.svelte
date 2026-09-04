@@ -7,10 +7,23 @@
     nonaktifkanModel,
     aktifkanModel,
     deleteModelBaju,
+    getModelBajuPage,
   } from "$lib/firebase/model-baju";
-  import { modelBajuCache, warnaCache } from "$lib/stores/data-cache.svelte";
+  import type { FirestoreCursor } from "$lib/firebase/pagination";
+  import { modelBajuCache, modelHijabCache, stokHijabCache, warnaCache } from "$lib/stores/data-cache.svelte";
   import { isAdmin } from "$lib/stores/auth.store";
-  import { UKURAN_ORDER, type ModelBaju, type UkuranBaju, type Warna, type WarnaTersedia } from "$lib/types";
+  import {
+    UKURAN_ORDER,
+    getAddOnPenjualan,
+    type KomponenVarianPenjualan,
+    type ModelBaju,
+    type ModelHijab,
+    type StokHijab,
+    type UkuranBaju,
+    type VarianPenjualan,
+    type Warna,
+    type WarnaTersedia,
+  } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
   import * as Popover from "$lib/components/ui/popover";
   import StatCard from "$lib/components/StatCard.svelte";
@@ -30,14 +43,35 @@
   let successMsg = $state<string | null>(null);
   let searchQuery = $state("");
   let tampilNonaktif = $state(false);
+  const PAGE_SIZE = 12;
+  let currentPage = $state(1);
+  let pageCursors = $state<FirestoreCursor[]>([null]);
+  let pageHasNext = $state<boolean[]>([]);
+  let pageCache = $state<ModelBaju[][]>([]);
+  let pageLoading = $state(false);
   let openForm = $state(false);
   let editingId = $state<string | null>(null);
   let konfirmasiId = $state<string | null>(null);
   let openHapus = $state(false);
   let selectedModelHapus = $state<ModelBaju | null>(null);
+  let openVarian = $state(false);
+  let variantModel = $state<ModelBaju | null>(null);
+  let variantList = $state<VarianPenjualan[]>([]);
+  let variantSaving = $state(false);
+  let variantError = $state<string | null>(null);
+  let fVariantName = $state("");
+  let fVariantSku = $state("");
+  let fVariantPrice = $state("");
+  let fVariantProductionPrice = $state("");
+  let fVariantHijabId = $state("");
+  let fVariantAccessoryId = $state("");
+  let fVariantAccessoryQty = $state("1");
+  let stokHijabList = $state<StokHijab[]>([]);
+  let modelHijabList = $state<Array<ModelHijab & { stok_tersedia: number }>>([]);
 
   // Form fields
   let fNama = $state("");
+  let fStokModelId = $state("");
   let fFotoUrl = $state("");
   let fFotoFile = $state<File | null>(null);
   let fDeskripsi = $state("");
@@ -59,6 +93,53 @@
     }
     return list;
   });
+
+  async function fetchFirstPage(force = false) {
+    void force;
+    const result = await getModelBajuPage(tampilNonaktif, null, PAGE_SIZE);
+    modelList = result.items;
+    pageCache = [result.items];
+    pageCursors = [null, result.cursor];
+    pageHasNext = [result.hasNext];
+    currentPage = 1;
+  }
+
+  async function nextPage() {
+    if (pageLoading || !pageHasNext[currentPage - 1]) return;
+    pageLoading = true;
+    try {
+      const result = await getModelBajuPage(tampilNonaktif, pageCursors[currentPage] ?? null, PAGE_SIZE);
+      pageCache[currentPage] = result.items;
+      pageCursors[currentPage + 1] = result.cursor;
+      pageHasNext[currentPage] = result.hasNext;
+      pageCache = [...pageCache];
+      pageCursors = [...pageCursors];
+      pageHasNext = [...pageHasNext];
+      currentPage += 1;
+      modelList = result.items;
+    } catch (e) {
+      showError(e instanceof Error ? e.message : "Gagal memuat halaman model berikutnya.");
+    } finally {
+      pageLoading = false;
+    }
+  }
+
+  function previousPage() {
+    if (currentPage <= 1 || pageLoading) return;
+    currentPage -= 1;
+    modelList = pageCache[currentPage - 1] ?? modelList;
+  }
+
+  function setSearch(value: string) {
+    searchQuery = value;
+    currentPage = 1;
+    modelList = pageCache[0] ?? modelList;
+  }
+
+  async function toggleTampilNonaktif() {
+    tampilNonaktif = !tampilNonaktif;
+    await load(true);
+  }
 
   let totalAktif = $derived(modelList.filter((m) => m.aktif).length);
   let totalNonaktif = $derived(modelList.filter((m) => !m.aktif).length);
@@ -103,6 +184,7 @@
 
   function resetForm() {
     fNama = "";
+    fStokModelId = "";
     fFotoUrl = "";
     fFotoFile = null;
     fDeskripsi = "";
@@ -117,6 +199,199 @@
     editingId = null;
   }
 
+  function resetVariantForm() {
+    fVariantName = "";
+    fVariantSku = "";
+    fVariantPrice = "";
+    fVariantProductionPrice = "";
+    fVariantHijabId = "";
+    fVariantAccessoryId = "";
+    fVariantAccessoryQty = "1";
+    variantError = null;
+  }
+
+  function openVariantManager(model: ModelBaju) {
+    variantModel = model;
+    variantList = getAddOnPenjualan(model).map((variant) => ({
+      ...variant,
+      komponen: variant.komponen.map((component) => ({ ...component })),
+    }));
+    resetVariantForm();
+    openVarian = true;
+  }
+
+  function variantId() {
+    return `varian_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  function addVariant() {
+    const name = fVariantName.trim();
+    if (!variantModel || !name) {
+      variantError = "Nama add-on wajib diisi.";
+      return;
+    }
+    if (!fVariantHijabId) {
+      variantError = "Pilih model hijab untuk add-on ini.";
+      return;
+    }
+    if (!fVariantAccessoryId) {
+      variantError = "Pilih stok hijab yang akan dikurangi saat barang keluar.";
+      return;
+    }
+    if (variantList.some((variant) => variant.nama_varian.trim().toLowerCase() === name.toLowerCase())) {
+      variantError = "Nama varian sudah digunakan pada model ini.";
+      return;
+    }
+
+    const stokModelId = variantModel.stok_model_id ?? variantModel.id;
+    const stokModelNama = modelList.find((model) => model.id === stokModelId)?.nama_model ?? variantModel.nama_model;
+    const komponen: KomponenVarianPenjualan[] = [
+      {
+        tipe: "model_baju",
+        ref_id: stokModelId,
+        nama: stokModelNama,
+        jumlah: 1,
+        kelola_stok: true,
+      },
+    ];
+    const modelHijab = modelHijabList.find((item) => item.id === fVariantHijabId);
+    const accessory = stokHijabList.find((item) => item.id === fVariantAccessoryId && (!item.model_hijab_id || item.model_hijab_id === fVariantHijabId));
+    const accessoryQty = Math.max(1, Number(fVariantAccessoryQty) || 1);
+    if (modelHijab || accessory) {
+      komponen.push({
+        tipe: "aksesori",
+        nama: modelHijab?.nama_hijab ?? accessory?.nama_hijab ?? "Hijab",
+        jumlah: accessoryQty,
+        kelola_stok: Boolean(accessory),
+        ...(accessory?.id ? { ref_id: accessory.id, stok_hijab_id: accessory.id } : {}),
+        ...(modelHijab?.id ? { model_hijab_id: modelHijab.id } : {}),
+      });
+    }
+
+    variantList = [
+      ...variantList,
+      {
+        id: variantId(),
+        nama_varian: name,
+        ...(fVariantSku.trim() ? { sku: fVariantSku.trim() } : {}),
+        ...(Number(fVariantPrice) > 0 ? { harga_jual: Number(fVariantPrice) } : {}),
+        ...(Number(fVariantProductionPrice) > 0 ? { harga_produksi: Number(fVariantProductionPrice) } : {}),
+        komponen,
+        aktif: true,
+      },
+    ];
+    resetVariantForm();
+  }
+
+  function updateVariant(index: number, patch: Partial<VarianPenjualan>) {
+    variantList = variantList.map((variant, itemIndex) =>
+      itemIndex === index ? { ...variant, ...patch } : variant,
+    );
+  }
+
+  function updateVariantComponent(variantIndex: number, componentIndex: number, patch: Partial<KomponenVarianPenjualan>) {
+    variantList = variantList.map((variant, index) => {
+      if (index !== variantIndex) return variant;
+      return {
+        ...variant,
+        komponen: variant.komponen.map((component, itemIndex) =>
+          itemIndex === componentIndex ? { ...component, ...patch } : component,
+        ),
+      };
+    });
+  }
+
+  function stockIdForComponent(component: KomponenVarianPenjualan): string {
+    return component.stok_hijab_id ?? component.ref_id ?? "";
+  }
+
+  function modelHijabIdForComponent(component: KomponenVarianPenjualan): string {
+    const stock = stokHijabList.find((item) => item.id === stockIdForComponent(component));
+    return component.model_hijab_id ?? stock?.model_hijab_id ?? "";
+  }
+
+  function stokUntukModelHijab(modelId: string): StokHijab[] {
+    return stokHijabList.filter((item) => item.model_hijab_id === modelId);
+  }
+
+  function labelStokHijab(item: StokHijab): string {
+    return item.nama_warna ? `${item.nama_hijab} · ${item.nama_warna}` : item.nama_hijab;
+  }
+
+  function pilihHijabBaru(modelId: string) {
+    fVariantHijabId = modelId === "__none__" ? "" : modelId;
+    fVariantAccessoryId = stokUntukModelHijab(fVariantHijabId)[0]?.id ?? "";
+  }
+
+  function pilihModelHijabUntukKomponen(variantIndex: number, componentIndex: number, modelId: string) {
+    const model = modelHijabList.find((item) => item.id === modelId);
+    const stock = model ? stokUntukModelHijab(model.id)[0] : undefined;
+    updateVariantComponent(variantIndex, componentIndex, model
+      ? { model_hijab_id: model.id, ref_id: stock?.id, stok_hijab_id: stock?.id, nama: model.nama_hijab, kelola_stok: Boolean(stock) }
+      : { model_hijab_id: undefined, ref_id: undefined, stok_hijab_id: undefined, kelola_stok: false });
+  }
+
+  function pilihStokHijabUntukKomponen(variantIndex: number, componentIndex: number, stockId: string) {
+    const stock = stokHijabList.find((item) => item.id === stockId);
+    updateVariantComponent(variantIndex, componentIndex, stock
+      ? { ref_id: stock.id, stok_hijab_id: stock.id, model_hijab_id: stock.model_hijab_id, nama: modelHijabList.find((item) => item.id === stock.model_hijab_id)?.nama_hijab ?? stock.nama_hijab, kelola_stok: true }
+      : { ref_id: undefined, stok_hijab_id: undefined, kelola_stok: false });
+  }
+
+  function cleanVariantComponent(component: KomponenVarianPenjualan): KomponenVarianPenjualan {
+    const { ref_id, model_hijab_id, stok_hijab_id, ...rest } = component;
+    return {
+      ...rest,
+      ...(ref_id ? { ref_id } : {}),
+      ...(model_hijab_id ? { model_hijab_id } : {}),
+      ...(stok_hijab_id ? { stok_hijab_id } : {}),
+    };
+  }
+
+  function removeVariant(index: number) {
+    variantList = variantList.filter((_, itemIndex) => itemIndex !== index);
+  }
+
+  async function saveVariants() {
+    if (!variantModel) return;
+    const validVariants = variantList
+      .map((variant) => ({
+        ...variant,
+        nama_varian: variant.nama_varian.trim(),
+        komponen: variant.komponen
+          .filter((component) => component.jumlah > 0)
+          .map(cleanVariantComponent),
+      }))
+      .filter((variant) => variant.nama_varian);
+    if (new Set(validVariants.map((variant) => variant.nama_varian.toLowerCase())).size !== validVariants.length) {
+      variantError = "Nama varian tidak boleh sama.";
+      return;
+    }
+
+    variantSaving = true;
+    variantError = null;
+    try {
+      const firestoreVariants = validVariants.map((variant) => {
+        const { sku, harga_jual, harga_produksi, ...rest } = variant;
+        return {
+          ...rest,
+          ...(sku?.trim() ? { sku: sku.trim() } : {}),
+          ...(harga_jual != null && harga_jual > 0 ? { harga_jual } : {}),
+          ...(harga_produksi != null && harga_produksi > 0 ? { harga_produksi } : {}),
+        };
+      });
+      await updateModelBaju(variantModel.id, { varian_penjualan: firestoreVariants });
+      await load(true);
+      openVarian = false;
+      variantModel = null;
+      showSuccess("Varian penjualan berhasil disimpan.");
+    } catch (e: unknown) {
+      variantError = e instanceof Error ? e.message : "Gagal menyimpan varian penjualan.";
+    } finally {
+      variantSaving = false;
+    }
+  }
+
   function bukaAdd() {
     resetForm();
     openForm = true;
@@ -125,6 +400,7 @@
   function bukaEdit(model: ModelBaju) {
     editingId = model.id;
     fNama = model.nama_model;
+    fStokModelId = model.stok_model_id ?? "";
     fFotoUrl = model.foto_url ?? "";
     fFotoFile = null;
     fDeskripsi = model.deskripsi ?? "";
@@ -180,12 +456,19 @@
   async function load(force = false) {
     loading = true;
     try {
-      const [models, warna] = await Promise.all([
-        modelBajuCache.get(force),
+      const [warna, stokHijab, modelHijab] = await Promise.all([
         warnaCache.get(force),
+        stokHijabCache.get(force),
+        modelHijabCache.get(force),
       ]);
-      modelList = models;
       warnaList = warna;
+      stokHijabList = stokHijab;
+      const stokPerModel = new Map<string, number>();
+      for (const item of stokHijab) {
+        if (item.model_hijab_id) stokPerModel.set(item.model_hijab_id, (stokPerModel.get(item.model_hijab_id) ?? 0) + item.stok_tersedia);
+      }
+      modelHijabList = modelHijab.map((item) => ({ ...item, stok_tersedia: stokPerModel.get(item.id) ?? 0 }));
+      await fetchFirstPage(force);
     } catch {
       showError("Gagal memuat data. Periksa koneksi Firebase.");
     } finally {
@@ -202,6 +485,7 @@
       if (fFotoFile) fotoUrl = await uploadToCloudinary(fFotoFile, 'products');
       const input = {
         nama_model: fNama.trim(),
+        stok_model_id: fStokModelId || null,
         ...(fotoUrl ? { foto_url: fotoUrl } : {}),
         ...(fDeskripsi.trim() ? { deskripsi: fDeskripsi.trim() } : {}),
         ukuran_tersedia: fUkuran,
@@ -415,14 +699,15 @@
     <input
       type="text"
       placeholder="Cari nama model..."
-      bind:value={searchQuery}
+      value={searchQuery}
+      oninput={(event) => setSearch((event.currentTarget as HTMLInputElement).value)}
       class="w-full rounded-lg border border-gray-200 bg-white py-2 pl-9 pr-4 text-sm text-gray-700 placeholder:text-gray-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
     />
   </div>
 
   <!-- Toggle nonaktif -->
   <button
-    onclick={() => (tampilNonaktif = !tampilNonaktif)}
+    onclick={toggleTampilNonaktif}
     class="flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition
       {tampilNonaktif
       ? 'border-blue-200 bg-blue-50 text-blue-700'
@@ -534,6 +819,7 @@
   <div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
     {#each filteredList as model}
       {@const nonaktif = !model.aktif}
+      {@const addOns = getAddOnPenjualan(model)}
 
       <div
         class="flex flex-col overflow-hidden rounded-xl border {nonaktif
@@ -614,6 +900,28 @@
                     {w.nama_warna}
                   </span>
                 {/each}
+              </div>
+            </div>
+          {/if}
+
+          {#if model.stok_model_id}
+            <div class="rounded-md border border-blue-100 bg-blue-50 px-2.5 py-2 text-xs text-blue-700">
+              Stok mengikuti: <span class="font-semibold">{modelList.find((item) => item.id === model.stok_model_id)?.nama_model ?? "Model lain"}</span>
+            </div>
+          {/if}
+
+          {#if addOns.length > 0}
+            <div>
+              <p class="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+                Add-on Penjualan
+              </p>
+              <div class="space-y-1.5">
+              {#each addOns as variant}
+                <div class="flex items-center justify-between gap-2 rounded-md border border-gray-100 bg-gray-50 px-2.5 py-1.5 text-xs">
+                  <span class="min-w-0 truncate font-medium text-gray-700">{variant.nama_varian}</span>
+                  <span class="shrink-0 text-gray-400">{variant.komponen.filter((component) => component.tipe === "aksesori").map((component) => `${component.jumlah}x ${component.nama}`).join(", ")}</span>
+                </div>
+              {/each}
               </div>
             </div>
           {/if}
@@ -722,6 +1030,14 @@
               <Button
                 variant="outline"
                 size="sm"
+                class="w-full border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 hover:text-blue-800"
+                onclick={() => openVariantManager(model)}
+              >
+                Kelola Add-on
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
                 class="flex-1"
                 onclick={() => bukaEdit(model)}
               >
@@ -818,11 +1134,18 @@
   </div>
 
   <!-- Footer count -->
-  <p class="mt-4 text-center text-xs text-gray-400">
+  <div class="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-gray-400">
     Menampilkan {filteredList.length} dari {tampilNonaktif
       ? modelList.length
-      : totalAktif} model
-  </p>
+      : totalAktif} model pada halaman {currentPage}
+    {#if currentPage > 1 || pageHasNext[currentPage - 1]}
+      <div class="flex items-center gap-2">
+        <Button variant="outline" size="sm" disabled={currentPage === 1 || pageLoading} onclick={previousPage}>Sebelumnya</Button>
+        <span class="font-medium text-gray-700">Halaman {currentPage}{pageLoading ? "..." : ""}</span>
+        <Button variant="outline" size="sm" disabled={pageLoading || !pageHasNext[currentPage - 1]} onclick={nextPage}>Berikutnya</Button>
+      </div>
+    {/if}
+  </div>
 {/if}
 
 <!-- ── Sheet: Tambah / Edit Model ─────────────────────────────────── -->
@@ -859,6 +1182,26 @@
             placeholder="Contoh: Gamis Syar'i Polos, Tunik Batik..."
             bind:value={fNama}
           />
+        </div>
+
+        <!-- Sumber stok barang jadi -->
+        <div>
+          <label class="mb-1.5 block text-sm font-medium text-gray-700" for="stok-model">
+            Kaitkan stok ke model lain <span class="text-xs font-normal text-gray-400">(opsional)</span>
+          </label>
+          <select
+            id="stok-model"
+            bind:value={fStokModelId}
+            class="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground"
+          >
+            <option value="">Gunakan stok model ini sendiri</option>
+            {#each modelList.filter((model) => model.id !== editingId && model.aktif) as sourceModel}
+              <option value={sourceModel.id}>{sourceModel.nama_model}</option>
+            {/each}
+          </select>
+          <p class="mt-1.5 text-[11px] text-gray-400">
+            Model ini tetap punya nama dan harga sendiri, tetapi barang keluar akan mengurangi stok model yang dipilih.
+          </p>
         </div>
 
         <!-- Foto produk -->
@@ -1174,6 +1517,231 @@
         {:else}
           {isEditing ? "Simpan Perubahan" : "Tambah Model"}
         {/if}
+      </Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
+
+<Dialog.Root
+  bind:open={openVarian}
+  onOpenChange={(open) => {
+    if (!open) {
+      variantModel = null;
+      resetVariantForm();
+    }
+  }}
+>
+  <Dialog.Content class="flex max-h-[90vh] max-w-xl flex-col gap-0 p-0">
+    <Dialog.Header class="shrink-0 px-6 pb-2 pt-6">
+    <Dialog.Title>Add-on Penjualan</Dialog.Title>
+      <Dialog.Description>
+        Tambahkan bentuk paket seperti set hijab. Model utama tetap berdiri sendiri dan stok baju mengikuti model yang sudah dikaitkan.
+      </Dialog.Description>
+    </Dialog.Header>
+
+    <div class="flex-1 space-y-4 overflow-y-auto px-6 py-5">
+      <div class="rounded-lg border border-blue-100 bg-blue-50 px-3.5 py-3 text-xs text-blue-800">
+        Semua add-on memakai stok model terkait berdasarkan warna dan ukuran. Jika add-on mengaitkan Model Hijab dan stoknya, setiap barang keluar juga mengurangi stok hijab sesuai jumlah per set.
+      </div>
+
+      <div class="space-y-2.5">
+        <p class="text-sm font-semibold text-gray-800">Add-on tersimpan</p>
+        {#each variantList as variant, index}
+          <div class="rounded-lg border border-gray-200 bg-gray-50/70 p-3.5">
+            <div class="grid gap-2.5 sm:grid-cols-[1fr_8rem_8rem_auto] sm:items-end">
+              <div>
+                <label class="mb-1 block text-[11px] font-medium text-gray-600" for={`variant-name-${variant.id}`}>Nama add-on</label>
+                <Input
+                  id={`variant-name-${variant.id}`}
+                  value={variant.nama_varian}
+                  oninput={(event) => updateVariant(index, { nama_varian: (event.currentTarget as HTMLInputElement).value })}
+                />
+              </div>
+              <div>
+                <label class="mb-1 block text-[11px] font-medium text-gray-600" for={`variant-price-${variant.id}`}>Harga jual</label>
+                <Input
+                  id={`variant-price-${variant.id}`}
+                  type="number"
+                  min="0"
+                  value={variant.harga_jual != null ? String(variant.harga_jual) : ""}
+                  oninput={(event) => {
+                    const value = Number((event.currentTarget as HTMLInputElement).value);
+                    updateVariant(index, { harga_jual: value > 0 ? value : undefined });
+                  }}
+                  placeholder="Ikuti model"
+                />
+              </div>
+              <div>
+                <label class="mb-1 block text-[11px] font-medium text-gray-600" for={`variant-production-price-${variant.id}`}>Harga produksi</label>
+                <Input
+                  id={`variant-production-price-${variant.id}`}
+                  type="number"
+                  min="0"
+                  value={variant.harga_produksi != null ? String(variant.harga_produksi) : ""}
+                  oninput={(event) => {
+                    const value = Number((event.currentTarget as HTMLInputElement).value);
+                    updateVariant(index, { harga_produksi: value > 0 ? value : undefined });
+                  }}
+                  placeholder="Ikuti model"
+                />
+              </div>
+              <button
+                type="button"
+                class="inline-flex h-9 items-center justify-center rounded-md border border-red-200 px-2.5 text-xs font-medium text-red-600 hover:bg-red-50"
+                onclick={() => removeVariant(index)}
+                aria-label={`Hapus add-on ${variant.nama_varian}`}
+              >
+                Hapus
+              </button>
+            </div>
+            <div class="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-gray-500">
+              <span class="rounded-md bg-white px-2 py-1">1x {variantModel?.nama_model}</span>
+              {#each variant.komponen as component, componentIndex}
+                {#if component.tipe === "aksesori"}
+                  <div class="flex w-full flex-wrap items-center gap-2 rounded-md border border-gray-200 bg-white px-2 py-2">
+                    <span class="shrink-0 font-medium text-gray-600">Hijab</span>
+                    <Select.Root
+                      type="single"
+                      value={modelHijabIdForComponent(component) || "__none__"}
+                      onValueChange={(value) => pilihModelHijabUntukKomponen(index, componentIndex, value ?? "__none__")}
+                    >
+                      <Select.Trigger class="h-8 min-w-48 flex-1 text-xs">
+                        {modelHijabIdForComponent(component)
+                          ? (modelHijabList.find((item) => item.id === modelHijabIdForComponent(component))?.nama_hijab ?? component.nama)
+                          : "Pilih model hijab"}
+                      </Select.Trigger>
+                      <Select.Content>
+                        <Select.Item value="__none__">Pilih model hijab</Select.Item>
+                        {#each modelHijabList.filter((item) => item.aktif) as hijab}
+                          <Select.Item value={hijab.id}>{hijab.nama_hijab} · {hijab.stok_tersedia.toLocaleString("id-ID")} pcs</Select.Item>
+                        {/each}
+                      </Select.Content>
+                    </Select.Root>
+                    {#if modelHijabIdForComponent(component)}
+                      <Select.Root
+                        type="single"
+                        value={stockIdForComponent(component) || "__none__"}
+                        onValueChange={(value) => pilihStokHijabUntukKomponen(index, componentIndex, value ?? "__none__")}
+                      >
+                        <Select.Trigger class="h-8 min-w-44 flex-1 text-xs">
+                          {stokHijabList.find((item) => item.id === stockIdForComponent(component))
+                            ? labelStokHijab(stokHijabList.find((item) => item.id === stockIdForComponent(component))!)
+                            : "Pilih stok hijab"}
+                        </Select.Trigger>
+                        <Select.Content>
+                          <Select.Item value="__none__">Belum dikaitkan ke stok</Select.Item>
+                          {#each stokUntukModelHijab(modelHijabIdForComponent(component)) as hijab}
+                            <Select.Item value={hijab.id}>{labelStokHijab(hijab)} · {hijab.stok_tersedia.toLocaleString("id-ID")} pcs</Select.Item>
+                          {/each}
+                        </Select.Content>
+                      </Select.Root>
+                    {/if}
+                    <Input
+                      class="h-8 w-20 text-xs"
+                      type="number"
+                      min="1"
+                      value={String(component.jumlah)}
+                      aria-label={`Jumlah ${component.nama}`}
+                      oninput={(event) => updateVariantComponent(index, componentIndex, { jumlah: Math.max(1, Number((event.currentTarget as HTMLInputElement).value) || 1) })}
+                    />
+                    <span class="shrink-0 text-gray-400">/ set</span>
+                  </div>
+                {/if}
+              {/each}
+              <span class="text-gray-400">Stok: model induk</span>
+            </div>
+          </div>
+        {/each}
+      </div>
+
+      <div class="rounded-lg border border-dashed border-gray-300 p-3.5">
+        <p class="mb-2.5 text-sm font-semibold text-gray-800">Tambah add-on</p>
+        <div class="grid gap-2.5 sm:grid-cols-2">
+          <div>
+            <label class="mb-1 block text-[11px] font-medium text-gray-600" for="new-variant-name">Nama add-on</label>
+            <Input id="new-variant-name" bind:value={fVariantName} placeholder="Contoh: Set Hijab" />
+          </div>
+          <div>
+            <label class="mb-1 block text-[11px] font-medium text-gray-600" for="new-variant-sku">SKU (opsional)</label>
+            <Input id="new-variant-sku" bind:value={fVariantSku} placeholder="Contoh: LUNA-SET" />
+          </div>
+          <div>
+            <label class="mb-1 block text-[11px] font-medium text-gray-600" for="new-variant-price">Harga jual add-on</label>
+            <Input id="new-variant-price" type="number" min="0" bind:value={fVariantPrice} placeholder="Ikuti harga model" />
+          </div>
+          <div>
+            <label class="mb-1 block text-[11px] font-medium text-gray-600" for="new-variant-production-price">Harga produksi add-on</label>
+            <Input id="new-variant-production-price" type="number" min="0" bind:value={fVariantProductionPrice} placeholder="Ikuti harga model" />
+          </div>
+          <div>
+            <label class="mb-1 block text-[11px] font-medium text-gray-600" for="new-variant-hijab">Model Hijab (wajib)</label>
+            <Select.Root
+              type="single"
+              value={fVariantHijabId || "__none__"}
+              onValueChange={(value) => pilihHijabBaru(value ?? "__none__")}
+            >
+              <Select.Trigger id="new-variant-hijab" class="w-full text-xs">
+                {#if fVariantHijabId}
+                  {modelHijabList.find((item) => item.id === fVariantHijabId)?.nama_hijab ?? "Pilih model hijab"}
+                {:else}
+                  Pilih model hijab
+                {/if}
+              </Select.Trigger>
+              <Select.Content>
+                <Select.Item value="__none__">Pilih model hijab</Select.Item>
+                {#each modelHijabList.filter((item) => item.aktif) as hijab}
+                  <Select.Item value={hijab.id}>{hijab.nama_hijab} · {hijab.stok_tersedia.toLocaleString("id-ID")} pcs</Select.Item>
+                {/each}
+              </Select.Content>
+            </Select.Root>
+            {#if modelHijabList.length === 0}
+              <a class="mt-1 block text-[11px] text-blue-600 hover:underline" href="/stok-hijab">Tambah stok hijab terlebih dahulu →</a>
+            {/if}
+          </div>
+          {#if fVariantHijabId}
+            <div>
+              <label class="mb-1 block text-[11px] font-medium text-gray-600" for="new-variant-stock">Stok hijab yang dipakai</label>
+              <Select.Root
+                type="single"
+                value={fVariantAccessoryId || "__none__"}
+                onValueChange={(value) => (fVariantAccessoryId = value === "__none__" ? "" : (value ?? ""))}
+              >
+                <Select.Trigger id="new-variant-stock" class="w-full text-xs">
+                  {stokHijabList.find((item) => item.id === fVariantAccessoryId)
+                    ? labelStokHijab(stokHijabList.find((item) => item.id === fVariantAccessoryId)!)
+                    : "Belum dikaitkan ke stok"}
+                </Select.Trigger>
+                <Select.Content>
+                  <Select.Item value="__none__">Belum dikaitkan ke stok</Select.Item>
+                  {#each stokUntukModelHijab(fVariantHijabId) as hijab}
+                    <Select.Item value={hijab.id}>{labelStokHijab(hijab)} · {hijab.stok_tersedia.toLocaleString("id-ID")} pcs</Select.Item>
+                  {/each}
+                </Select.Content>
+              </Select.Root>
+              {#if stokUntukModelHijab(fVariantHijabId).length === 0}
+                <a class="mt-1 block text-[11px] text-blue-600 hover:underline" href="/stok-hijab">Kaitkan stok hijab terlebih dahulu</a>
+              {/if}
+            </div>
+            <div>
+              <label class="mb-1 block text-[11px] font-medium text-gray-600" for="new-variant-accessory-qty">Jumlah hijab / set</label>
+              <Input id="new-variant-accessory-qty" type="number" min="1" bind:value={fVariantAccessoryQty} />
+            </div>
+          {/if}
+        </div>
+        <Button variant="outline" size="sm" class="mt-3" onclick={addVariant}>
+          Tambah ke daftar
+        </Button>
+      </div>
+
+      {#if variantError}
+        <p class="text-xs text-red-600">{variantError}</p>
+      {/if}
+    </div>
+
+    <Dialog.Footer class="shrink-0 gap-2 border-t border-gray-100 px-6 py-4">
+      <Button variant="outline" onclick={() => (openVarian = false)}>Batal</Button>
+      <Button onclick={saveVariants} disabled={variantSaving}>
+        {variantSaving ? "Menyimpan..." : "Simpan Add-on"}
       </Button>
     </Dialog.Footer>
   </Dialog.Content>

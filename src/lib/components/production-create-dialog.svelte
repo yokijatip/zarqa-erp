@@ -7,7 +7,9 @@
   import {
     batchCache,
     modelBajuCache,
+    modelHijabCache,
     stokPotonganCache,
+    stokHijabCache,
     stokKainCache,
   } from "$lib/stores/data-cache.svelte";
   import { currentUser } from "$lib/stores/auth.store";
@@ -16,8 +18,10 @@
     canonicalUkuran,
     type BatchProduksi,
     type ModelBaju,
+    type ModelHijab,
     type SumberCutting,
     type StokPotongan,
+    type StokHijab,
     type UkuranBaju,
     type UserProfile,
     type UserRole,
@@ -38,7 +42,10 @@
 
   type StokPotonganGroup = {
     key: string;
+    jenis_produk: "baju" | "hijab";
     model_id: string;
+    model_hijab_id?: string;
+    warna_id?: string;
     nama_model: string;
     nama_warna?: string;
     kode_hex_warna?: string;
@@ -47,7 +54,10 @@
   };
 
   let open = $state(false);
+  let jenisProduk = $state<"baju" | "hijab">("baju");
   let modelList = $state<ModelBaju[]>([]);
+  let modelHijabList = $state<ModelHijab[]>([]);
+  let stokHijabList = $state<StokHijab[]>([]);
   let loadingModels = $state(false);
   let loadingWorkers = $state(false);
   let loadingStock = $state(false);
@@ -58,6 +68,7 @@
   let fPotonganKey = $state("");
   let fWarnaId = $state("");
   let fUkuran = $state<UkuranBaju | "">("");
+  let fJumlahHijab = $state("");
   let fCatatan = $state("");
   let fPenugasanUid = $state("");
   let fKain = $state<
@@ -97,6 +108,9 @@
   let selectedModel = $derived(
     modelList.find((model) => model.id === fModelId) ?? null,
   );
+  let selectedModelHijab = $derived(
+    modelHijabList.find((model) => model.id === fModelId) ?? null,
+  );
   let selectedModelUkuran = $derived(
     [...new Set((selectedModel?.ukuran_tersedia ?? []).map((ukuran) => canonicalUkuran(ukuran)))],
   );
@@ -105,25 +119,30 @@
 
     for (const item of stokPotonganModel) {
       if (item.stok_tersedia <= 0) continue;
-      const key = `${item.model_id}__${item.nama_warna ?? ""}`;
+      const key = `${item.jenis_produk ?? "baju"}__${item.model_hijab_id ?? item.model_id}__${item.nama_warna ?? ""}`;
       const group = map.get(key);
 
       if (group) {
         group.items.push(item);
-        group.ukuran_tersedia = UKURAN_ORDER.filter((ukuran) =>
-          group.items.some(
-            (stok) => stok.ukuran === ukuran && stok.stok_tersedia > 0,
-          ),
-        );
+        if (group.jenis_produk === "baju") {
+          group.ukuran_tersedia = UKURAN_ORDER.filter((ukuran) =>
+            group.items.some(
+              (stok) => stok.ukuran === ukuran && stok.stok_tersedia > 0,
+            ),
+          );
+        }
       } else {
         map.set(key, {
           key,
+          jenis_produk: item.jenis_produk ?? "baju",
           model_id: item.model_id,
+          model_hijab_id: item.model_hijab_id,
+          warna_id: item.warna_id,
           nama_model: item.nama_model,
           nama_warna: item.nama_warna,
           kode_hex_warna: item.kode_hex_warna,
           items: [item],
-          ukuran_tersedia: [item.ukuran],
+          ukuran_tersedia: item.ukuran ? [item.ukuran] : [],
         });
       }
     }
@@ -137,23 +156,34 @@
   let selectedPotonganGroup = $derived(
     stokPotonganGroups.find((group) => group.key === fPotonganKey) ?? null,
   );
+  let isHijab = $derived(
+    mode === "cutting"
+      ? jenisProduk === "hijab"
+      : selectedPotonganGroup?.jenis_produk === "hijab",
+  );
   let selectedWarna = $derived(
-    mode === "jahit"
-      ? selectedPotonganGroup?.nama_warna
-        ? {
-            warna_id: fPotonganKey,
+      mode === "jahit"
+        ? selectedPotonganGroup && (selectedPotonganGroup.nama_warna || selectedPotonganGroup.warna_id)
+          ? {
+            warna_id: selectedPotonganGroup.warna_id ?? fPotonganKey,
             nama_warna: selectedPotonganGroup.nama_warna,
             kode_hex: selectedPotonganGroup.kode_hex_warna ?? "",
           }
         : null
-      : (selectedModel?.warna_tersedia?.find(
-          (warna) => warna.warna_id === fWarnaId,
-        ) ?? null),
+      : (isHijab
+        ? (selectedModelHijab?.warna_tersedia?.find(
+            (warna) => warna.warna_id === fWarnaId,
+          ) ?? null)
+        : (selectedModel?.warna_tersedia?.find(
+            (warna) => warna.warna_id === fWarnaId,
+          ) ?? null)),
   );
   let selectedNamaModel = $derived(
     mode === "jahit"
       ? selectedPotonganGroup?.nama_model
-      : selectedModel?.nama_model,
+      : isHijab
+        ? selectedModelHijab?.nama_hijab
+        : selectedModel?.nama_model,
   );
   // Stok potongan yang relevan untuk model+warna yang dipilih
   let stokPotonganFiltered = $derived(
@@ -169,6 +199,9 @@
     mode === "jahit"
       ? (selectedPotonganGroup?.ukuran_tersedia ?? [])
       : selectedModelUkuran,
+  );
+  let stokPotonganTersedia = $derived(
+    selectedPotonganGroup?.items.reduce((sum, item) => sum + item.stok_tersedia, 0) ?? 0,
   );
 
   let stokKainGroups = $derived.by(() => {
@@ -275,7 +308,9 @@
 
   // Detail ukuran: 1 entry untuk cutting, array multi-ukuran untuk jahit
   let detailUkuran = $derived(
-    mode === "cutting"
+    isHijab
+      ? []
+      : mode === "cutting"
       ? fUkuran !== ""
         ? [{ ukuran: fUkuran as UkuranBaju, jumlah_pcs: jumlahJadi() }]
         : []
@@ -292,7 +327,9 @@
   );
 
   let totalPcs = $derived(
-    detailUkuran.reduce((sum, item) => sum + item.jumlah_pcs, 0),
+    isHijab
+      ? Math.max(0, Math.floor(Number(fJumlahHijab) || 0))
+      : detailUkuran.reduce((sum, item) => sum + item.jumlah_pcs, 0),
   );
   let kainDibutuhkan = $derived(
     fKain
@@ -306,17 +343,20 @@
   );
   let canSubmit = $derived(
     (mode === "jahit" ? !!selectedPotonganGroup : fModelId !== "") &&
-      (mode === "jahit" || fUkuran !== "") &&
+      (mode === "jahit" || isHijab || fUkuran !== "") &&
       (mode === "jahit" ? totalPcs > 0 : true) &&
+       (mode !== "cutting" || !isHijab || (totalPcs > 0 && kainDibutuhkan.length === fKain.length && jumlahJadi() >= totalPcs)) &&
       // Kain mentah hanya wajib diisi untuk mode cutting — jahit memakai stok
       // potongan (hasil cutting), bukan kain mentah, jadi tidak butuh input ini.
-      (mode !== "jahit" ||
-        detailUkuran.every((item) => {
-          const stok = stokPotonganFiltered.find(
-            (entry) => entry.ukuran === item.ukuran,
-          );
-          return stok && stok.stok_tersedia >= item.jumlah_pcs;
-        })) &&
+       (mode !== "jahit" ||
+         (isHijab
+           ? totalPcs > 0 && totalPcs <= stokPotonganTersedia
+           : detailUkuran.every((item) => {
+               const stok = stokPotonganFiltered.find(
+                 (entry) => entry.ukuran === item.ukuran,
+               );
+               return stok && stok.stok_tersedia >= item.jumlah_pcs;
+             }))) &&
       fPenugasanUid !== "",
   );
 
@@ -374,13 +414,18 @@
   async function loadModels() {
     loadingModels = true;
     try {
-      const allModels = await modelBajuCache.get();
+      const [allModels, allHijabs] = await Promise.all([
+        modelBajuCache.get(),
+        modelHijabCache.get(),
+      ]);
       modelList = allModels
         .filter((model) => model.aktif)
         .map((model) => ({
           ...model,
           ukuran_tersedia: [...new Set(model.ukuran_tersedia.map((ukuran) => canonicalUkuran(ukuran)))],
         }));
+      modelHijabList = allHijabs.filter((model) => model.aktif);
+      stokHijabList = await stokHijabCache.get();
     } finally {
       loadingModels = false;
     }
@@ -398,12 +443,16 @@
   async function loadReadyPotongan() {
     loadingStock = true;
     try {
-      const [stok, batches] = await Promise.all([
+      const [stok, batches, hijabStocks, hijabModels] = await Promise.all([
         stokPotonganCache.get(),
         batchCache.get(),
+        stokHijabCache.get(),
+        modelHijabCache.get(),
       ]);
       stokPotonganModel = stok;
       batchList = batches;
+      stokHijabList = hijabStocks;
+      modelHijabList = hijabModels.filter((model) => model.aktif);
     } catch {
       stokPotonganModel = [];
       batchList = [];
@@ -435,10 +484,12 @@
     fPotonganKey = "";
     fWarnaId = "";
     fUkuran = "";
+    fJumlahHijab = "";
     fCatatan = "";
     fPenugasanUid = "";
     fJumlah = {};
     fKain = [];
+    jenisProduk = "baju";
     stokPotonganModel = [];
     batchList = [];
     errorMsg = null;
@@ -451,12 +502,14 @@
   async function onModelChange(value: string) {
     fModelId = value;
     const model = modelList.find((item) => item.id === value) ?? null;
-    const warnas = model?.warna_tersedia ?? [];
+    const hijab = modelHijabList.find((item) => item.id === value) ?? null;
+    const warnas = isHijab ? hijab?.warna_tersedia ?? [] : model?.warna_tersedia ?? [];
     fWarnaId = warnas.length === 1 ? warnas[0].warna_id : "";
     fUkuran = "";
+    fJumlahHijab = "";
     fJumlah = {};
     // Rasio kebutuhan kain spesifik per ukuran/model — perlu diisi ulang
-    applyDefaultYardPerPcs();
+    if (!isHijab) applyDefaultYardPerPcs();
     errorMsg = null;
     stokPotonganModel = [];
   }
@@ -465,9 +518,20 @@
     fPotonganKey = value;
     const group = stokPotonganGroups.find((item) => item.key === value) ?? null;
     fModelId = group?.model_id ?? "";
-    fWarnaId = group?.key ?? "";
+    fWarnaId = group?.warna_id ?? "";
     fUkuran = "";
+    fJumlahHijab = "";
     fJumlah = {};
+    errorMsg = null;
+  }
+
+  function onJenisProdukChange(value: "baju" | "hijab") {
+    jenisProduk = value;
+    fModelId = "";
+    fWarnaId = "";
+    fUkuran = "";
+    fJumlahHijab = "";
+    fKain = [];
     errorMsg = null;
   }
 
@@ -479,8 +543,54 @@
     try {
       const sumberCutting =
         mode === "jahit" ? cuttingSourcesForGroup(selectedPotonganGroup) : [];
+      const selectedHijabForCost =
+        mode === "jahit"
+          ? modelHijabList.find(
+              (model) => model.id === selectedPotonganGroup?.model_hijab_id,
+            )
+          : selectedModelHijab;
+      const produkFields =
+        mode === "cutting"
+          ? {
+              jenis_produk: jenisProduk,
+              ...(isHijab ? { model_hijab_id: fModelId } : {}),
+              ...(isHijab ? { jumlah_target: totalPcs } : {}),
+              ...(isHijab
+                ? {
+                    harga_produksi_per_pcs:
+                      selectedHijabForCost?.harga_produksi ?? 0,
+                  }
+                : {}),
+              ...(selectedWarna ? { warna_id: selectedWarna.warna_id } : {}),
+            }
+          : {
+              jenis_produk: isHijab ? ("hijab" as const) : ("baju" as const),
+              ...(isHijab
+                ? {
+                    model_hijab_id: selectedPotonganGroup?.model_hijab_id ?? fModelId,
+                    jumlah_target: totalPcs,
+                    harga_produksi_per_pcs:
+                      selectedHijabForCost?.harga_produksi ?? 0,
+                    ...(selectedWarna ? { warna_id: selectedWarna.warna_id } : {}),
+                  }
+                : {}),
+            };
       const inputData = {
         model_id: mode === "jahit" ? selectedPotonganGroup!.model_id : fModelId,
+        ...produkFields,
+        ...(isHijab
+          ? stokHijabList.find((stock) =>
+              stock.model_hijab_id === (mode === "jahit" ? selectedPotonganGroup?.model_hijab_id : fModelId) &&
+              (stock.warna_id ?? "") === (selectedWarna?.warna_id ?? ""),
+            )?.id
+            ? {
+                stok_hijab_id: stokHijabList.find((stock) =>
+                  stock.model_hijab_id === (mode === "jahit" ? selectedPotonganGroup?.model_hijab_id : fModelId) &&
+                  (stock.warna_id ?? "") === (selectedWarna?.warna_id ?? ""),
+                )?.id,
+              }
+            : {}
+          : {}),
         nama_model: selectedNamaModel,
         ...(selectedWarna
           ? {
@@ -490,7 +600,7 @@
           : {}),
         detail_ukuran: detailUkuran,
         kain_digunakan:
-          mode === "cutting" && jumlahJadi() <= 0 ? [] : kainDibutuhkan,
+          mode === "cutting" && !isHijab && jumlahJadi() <= 0 ? [] : kainDibutuhkan,
         ...(sumberCutting.length > 0 ? { sumber_cutting: sumberCutting } : {}),
         penugasan: {
           [mode]: {
@@ -549,23 +659,41 @@
           </div>
         {/if}
 
+        {#if mode === "cutting"}
+          <div>
+            <p class="mb-1.5 block text-sm font-medium text-gray-700">Jenis Produk</p>
+            <div class="grid grid-cols-2 gap-2 rounded-lg bg-gray-100 p-1">
+              {#each [{ value: "baju", label: "Baju", hint: "Pakai ukuran" }, { value: "hijab", label: "Hijab", hint: "Tanpa ukuran" }] as option}
+                <button
+                  type="button"
+                  class="rounded-md px-3 py-2 text-left transition {jenisProduk === option.value ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}"
+                  onclick={() => onJenisProdukChange(option.value as "baju" | "hijab")}
+                >
+                  <span class="block text-sm font-semibold">{option.label}</span>
+                  <span class="block text-[11px] text-gray-400">{option.hint}</span>
+                </button>
+              {/each}
+            </div>
+          </div>
+        {/if}
+
         <div>
           <label
             class="mb-1.5 block text-sm font-medium text-gray-700"
             for="model-select-stage"
           >
-            {mode === "jahit" ? "Stok Cutting" : "Model Baju"}
+            {mode === "jahit" ? "Stok Cutting" : isHijab ? "Model Hijab" : "Model Baju"}
             <span class="text-red-500">*</span>
           </label>
           {#if mode === "jahit" ? loadingStock : loadingModels}
             <p class="text-xs text-gray-400">
               {mode === "jahit" ? "Memuat stok cutting..." : "Memuat model..."}
             </p>
-          {:else if mode === "jahit" ? stokPotonganGroups.length === 0 : modelList.length === 0}
+          {:else if mode === "jahit" ? stokPotonganGroups.length === 0 : (isHijab ? modelHijabList.length === 0 : modelList.length === 0)}
             <p class="text-xs text-gray-400">
               {mode === "jahit"
                 ? "Belum ada stok cutting yang siap dijahit."
-                : "Belum ada model aktif."}
+                : isHijab ? "Belum ada model hijab aktif." : "Belum ada model baju aktif."}
             </p>
           {:else}
             <Select.Root
@@ -589,11 +717,16 @@
                         ? `${selectedNamaModel} - ${selectedPotonganGroup.nama_warna}`
                         : selectedNamaModel}
                     </span>
-                    {#if mode === "cutting" && selectedModel && (selectedModel.warna_tersedia?.length ?? 0) > 0}
+                    {#if mode === "jahit" && selectedPotonganGroup}
+                      <span class="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-500">
+                        {selectedPotonganGroup.jenis_produk === "hijab" ? "Hijab" : "Baju"}
+                      </span>
+                    {/if}
+                    {#if mode === "cutting" && (isHijab ? selectedModelHijab : selectedModel) && (isHijab ? (selectedModelHijab?.warna_tersedia?.length ?? 0) : (selectedModel?.warna_tersedia?.length ?? 0)) > 0}
                       <span
                         class="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-500"
                       >
-                        {(selectedModel.warna_tersedia ?? []).length} warna
+                        {(isHijab ? selectedModelHijab?.warna_tersedia : selectedModel?.warna_tersedia)?.length} warna
                       </span>
                     {/if}
                   </span>
@@ -624,6 +757,9 @@
                             {group.nama_model}
                             {group.nama_warna ? ` - ${group.nama_warna}` : ""}
                           </span>
+                          <span class="shrink-0 rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-500">
+                            {group.jenis_produk === "hijab" ? "Hijab" : "Baju"}
+                          </span>
                           <span class="ml-auto shrink-0 text-xs text-gray-400">
                             {group.items.reduce(
                               (sum, item) => sum + item.stok_tersedia,
@@ -634,6 +770,17 @@
                         <span class="truncate text-[11px] text-gray-400"
                           >{cuttingInfoForGroup(group)}</span
                         >
+                      </span>
+                    </Select.Item>
+                  {/each}
+                {:else if isHijab}
+                  {#each modelHijabList as model}
+                    <Select.Item value={model.id} class="overflow-hidden">
+                      <span class="flex min-w-0 items-center gap-2">
+                        <span class="truncate">{model.nama_hijab}</span>
+                        {#if (model.warna_tersedia?.length ?? 0) > 0}
+                          <span class="ml-auto shrink-0 text-xs text-gray-400">{model.warna_tersedia?.length} warna</span>
+                        {/if}
                       </span>
                     </Select.Item>
                   {/each}
@@ -685,7 +832,7 @@
           </div>
         {/if}
 
-        {#if mode === "cutting" && selectedModel && (selectedModel.warna_tersedia?.length ?? 0) > 0}
+        {#if mode === "cutting" && (isHijab ? selectedModelHijab : selectedModel) && (isHijab ? (selectedModelHijab?.warna_tersedia?.length ?? 0) : (selectedModel?.warna_tersedia?.length ?? 0)) > 0}
           <div>
             <p class="mb-1.5 block text-sm font-medium text-gray-700">
               Warna Produksi <span class="text-red-500">*</span>
@@ -715,7 +862,7 @@
                 {/if}
               </Select.Trigger>
               <Select.Content preventScroll={false}>
-                {#each selectedModel?.warna_tersedia ?? [] as warna}
+                {#each (isHijab ? selectedModelHijab?.warna_tersedia : selectedModel?.warna_tersedia) ?? [] as warna}
                   <Select.Item value={warna.warna_id}>
                     <span class="flex items-center gap-1.5">
                       <span
@@ -731,7 +878,7 @@
           </div>
         {/if}
 
-        {#if selectedNamaModel && mode === "cutting" && selectedWarna}
+        {#if selectedNamaModel && mode === "cutting" && selectedWarna && !isHijab}
           <!-- Dropdown Ukuran -->
           <div>
             <label class="mb-1.5 block text-sm font-medium text-gray-700">
@@ -758,17 +905,38 @@
           </div>
         {/if}
 
+        {#if selectedNamaModel && mode === "cutting" && isHijab}
+          <div>
+            <label class="mb-1.5 block text-sm font-medium text-gray-700" for="jumlah-hijab">
+              Jumlah target <span class="text-red-500">*</span>
+            </label>
+            <div class="flex items-center gap-2">
+              <input
+                id="jumlah-hijab"
+                type="number"
+                min="1"
+                step="1"
+                bind:value={fJumlahHijab}
+                placeholder="0"
+                class="h-9 w-full rounded-md border border-gray-200 bg-white px-3 text-sm text-gray-700 placeholder:text-gray-400"
+              />
+              <span class="text-sm text-gray-500">pcs</span>
+            </div>
+            <p class="mt-1 text-xs text-gray-400">Hijab tidak memakai pembagian ukuran.</p>
+          </div>
+        {/if}
+
         {#if selectedNamaModel && mode === "cutting"}
           <!-- Kain yang Digunakan -->
-          {#if fUkuran !== ""}
+          {#if fUkuran !== "" || isHijab}
             <div>
               <p
                 class="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-600"
               >
-                Pembagian Kain (opsional)
+                Pembagian Kain {isHijab ? "*" : "(opsional)"}
               </p>
               <p class="mb-2 text-xs text-gray-500">
-                Kosongkan dulu jika total yard baru diketahui saat kain dibagikan.
+                {isHijab ? "Isi kain dan rasio pemakaian agar stok kain dipotong saat batch dibuat." : "Kosongkan dulu jika total yard baru diketahui saat kain dibagikan."}
               </p>
               <div class="space-y-2">
                 {#each fKain as kainEntry, i}
@@ -1013,7 +1181,7 @@
                       </div>
                       <div>
                         <label class="mb-0.5 block text-[10px] text-gray-500">
-                          Yard / pcs ({fUkuran})
+                            {isHijab ? "Rasio per pcs" : `Yard / pcs (${fUkuran})`}
                         </label>
                         <input
                           type="number"
@@ -1072,7 +1240,7 @@
 
           <!-- Kalkulasi Jadi — di bawah kain. Rasio "1 pcs = ? yard" sudah
                diisi per kain di atas (tiap kain punya kebutuhannya sendiri). -->
-          {#if fUkuran !== "" && fKain.length > 0}
+          {#if (fUkuran !== "" || isHijab) && fKain.length > 0}
             <div
               class="rounded-lg border border-blue-200 bg-blue-50 p-4 space-y-3"
             >
@@ -1080,7 +1248,17 @@
                 Kalkulasi Jadi — Ukuran {fUkuran}
               </p>
 
-              {#if perKainEstimasi.length > 0}
+              {#if isHijab}
+                <div class="rounded-lg border border-blue-200 bg-white p-3 text-center">
+                  <p class="text-3xl font-bold text-blue-700">{totalPcs}</p>
+                  <p class="text-xs text-gray-500">target pcs hijab</p>
+                  {#if perKainEstimasi.length < fKain.length || jumlahJadi() < totalPcs}
+                    <p class="mt-1 text-xs text-amber-600">Kapasitas kain belum mencukupi target.</p>
+                  {:else}
+                    <p class="mt-1 text-xs text-emerald-600">Kapasitas kain mencukupi.</p>
+                  {/if}
+                </div>
+              {:else if perKainEstimasi.length > 0}
                 <div
                   class="rounded-lg bg-white border border-blue-200 p-3 text-center"
                 >
@@ -1166,7 +1344,54 @@
           </div>
         {/if}
 
-        {#if selectedNamaModel && mode === "jahit"}
+        {#if selectedNamaModel && mode === "jahit" && isHijab}
+          <div class="rounded-lg border border-blue-200 bg-blue-50 p-3">
+            <label class="mb-1.5 block text-sm font-medium text-gray-700" for="jumlah-hijab-jahit">
+              Jumlah diambil dari stok potongan <span class="text-red-500">*</span>
+            </label>
+            <div class="flex items-center gap-2">
+              <input
+                id="jumlah-hijab-jahit"
+                type="number"
+                min="1"
+                max={stokPotonganTersedia}
+                step="1"
+                bind:value={fJumlahHijab}
+                placeholder="0"
+                class="h-9 w-full rounded-md border border-gray-200 bg-white px-3 text-sm text-gray-700 placeholder:text-gray-400"
+              />
+              <span class="shrink-0 text-sm text-gray-500">pcs</span>
+            </div>
+            <p class="mt-1 text-xs text-gray-500">
+              Tersedia {stokPotonganTersedia} pcs potongan hijab. Hijab tidak memakai ukuran.
+            </p>
+          </div>
+          <div>
+            <label class="mb-1.5 block text-sm font-medium text-gray-700">
+              {penugasanLabel} <span class="text-red-500">*</span>
+            </label>
+            {#if loadingWorkers}
+              <p class="text-xs text-gray-400">Memuat petugas...</p>
+            {:else if filteredWorkers.length === 0}
+              <p class="text-xs text-red-600">Belum ada akun {penugasanLabel} di sistem.</p>
+            {:else}
+              <Select.Root
+                type="single"
+                value={fPenugasanUid || undefined}
+                onValueChange={(value) => (fPenugasanUid = value ?? "")}
+              >
+                <Select.Trigger class="w-full">
+                  {filteredWorkers.find((worker) => worker.uid === fPenugasanUid)?.name ?? "â€” Pilih petugas â€”"}
+                </Select.Trigger>
+                <Select.Content preventScroll={false}>
+                  {#each filteredWorkers as worker}
+                    <Select.Item value={worker.uid}>{worker.name}</Select.Item>
+                  {/each}
+                </Select.Content>
+              </Select.Root>
+            {/if}
+          </div>
+        {:else if selectedNamaModel && mode === "jahit"}
           <!-- Jahit: petugas, lalu grid ukuran -->
           <div>
             <label class="mb-1.5 block text-sm font-medium text-gray-700">

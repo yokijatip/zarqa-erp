@@ -1,5 +1,5 @@
 // src/lib/firebase/performa.ts
-import { collectionGroup, getDocs } from 'firebase/firestore';
+import { collectionGroup, getDocs, orderBy, query, Timestamp, where } from 'firebase/firestore';
 import { db } from './config';
 import type { RiwayatProses, StatusBatch } from '$lib/types';
 
@@ -25,10 +25,19 @@ const STATUS_DIVISI: Partial<Record<StatusBatch, DivisiKey>> = {
 
 /** Performa dikelompokkan per divisi — satu karyawan bisa muncul di beberapa divisi */
 export async function getPerformaPerDivisi(options?: { dari?: string; sampai?: string }): Promise<Record<DivisiKey, PerformaKaryawan[]>> {
-  const snap = await getDocs(collectionGroup(db, 'riwayat_proses'));
-
   const dari = options?.dari ? new Date(`${options.dari}T00:00:00`) : null;
   const sampai = options?.sampai ? new Date(`${options.sampai}T23:59:59.999`) : null;
+  const base = collectionGroup(db, 'riwayat_proses');
+  const snap = await getDocs(
+    dari || sampai
+      ? query(
+          base,
+          ...(dari ? [where('timestamp', '>=', Timestamp.fromDate(dari))] : []),
+          ...(sampai ? [where('timestamp', '<=', Timestamp.fromDate(sampai))] : []),
+          orderBy('timestamp', 'desc'),
+        )
+      : base,
+  );
 
   // Map per (uid + divisi)
   const map = new Map<string, PerformaKaryawan>();

@@ -6,6 +6,7 @@ import {
 } from 'firebase/firestore';
 import { PUBLIC_FIREBASE_API_KEY } from '$env/static/public';
 import { db } from './config';
+import { getCursorPage, type FirestoreCursor, type CursorPage } from './pagination';
 import type { UserProfile, UserRole, TipePenggajian } from '$lib/types';
 
 const COL = 'users';
@@ -152,6 +153,21 @@ export async function getKaryawanList(): Promise<UserProfile[]> {
   return snap.docs
     .map((d) => ({ uid: d.id, ...d.data() } as UserProfile))
     .filter((u) => u.role !== 'developer');
+}
+
+export async function getKaryawanPage(
+  cursor: FirestoreCursor,
+  pageSize = 25,
+): Promise<CursorPage<UserProfile>> {
+  return getCursorPage(
+    query(collection(db, COL), orderBy('name', 'asc')),
+    cursor,
+    (d) => ({ uid: d.id, ...d.data() }) as UserProfile,
+    pageSize,
+  ).then((page) => ({
+    ...page,
+    items: page.items.filter((user) => user.role !== 'developer'),
+  }));
 }
 
 export async function getKaryawanById(uid: string): Promise<UserProfile | null> {

@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import {
-    getKaryawanList,
+    getKaryawanPage,
     createAkunKaryawan,
     updateKaryawan,
     hapusAkunKaryawan,
@@ -10,6 +10,7 @@
     ROLE_KARYAWAN,
     tipeKaryawanLabel,
   } from "$lib/firebase/karyawan";
+  import type { FirestoreCursor } from "$lib/firebase/pagination";
   import { isKaryawanManager } from "$lib/stores/auth.store";
   import type { UserProfile, UserRole, TipePenggajian } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
@@ -31,6 +32,12 @@
   let successMsg = $state<string | null>(null);
   let searchQuery = $state("");
   let filterTipe = $state<"semua" | "permanent" | "temporary">("semua");
+  const PAGE_SIZE = 25;
+  let currentPage = $state(1);
+  let pageCursors = $state<FirestoreCursor[]>([null]);
+  let pageHasNext = $state<boolean[]>([]);
+  let pageCache = $state<UserProfile[][]>([]);
+  let pageLoading = $state(false);
 
   // Dialog state
   let openTambah = $state(false);
@@ -160,12 +167,55 @@
     loading = true;
     errorMsg = null;
     try {
-      karyawanList = await getKaryawanList();
+      const firstPage = await getKaryawanPage(null, PAGE_SIZE);
+      karyawanList = firstPage.items;
+      pageCache = [firstPage.items];
+      pageCursors = [null, firstPage.cursor];
+      pageHasNext = [firstPage.hasNext];
+      currentPage = 1;
     } catch {
       showError("Gagal memuat data karyawan.");
     } finally {
       loading = false;
     }
+  }
+
+  async function nextPage() {
+    if (pageLoading || !pageHasNext[currentPage - 1]) return;
+    pageLoading = true;
+    try {
+      const result = await getKaryawanPage(pageCursors[currentPage] ?? null, PAGE_SIZE);
+      pageCache[currentPage] = result.items;
+      pageCursors[currentPage + 1] = result.cursor;
+      pageHasNext[currentPage] = result.hasNext;
+      pageCache = [...pageCache];
+      pageCursors = [...pageCursors];
+      pageHasNext = [...pageHasNext];
+      currentPage += 1;
+      karyawanList = result.items;
+    } catch {
+      showError("Gagal memuat halaman karyawan berikutnya.");
+    } finally {
+      pageLoading = false;
+    }
+  }
+
+  function previousPage() {
+    if (currentPage <= 1 || pageLoading) return;
+    currentPage -= 1;
+    karyawanList = pageCache[currentPage - 1] ?? karyawanList;
+  }
+
+  function setSearch(value: string) {
+    searchQuery = value;
+    currentPage = 1;
+    karyawanList = pageCache[0] ?? karyawanList;
+  }
+
+  function setFilter(value: "semua" | "permanent" | "temporary") {
+    filterTipe = value;
+    currentPage = 1;
+    karyawanList = pageCache[0] ?? karyawanList;
   }
 
   // ── Dialog helpers ──────────────────────────────────────────────────
@@ -426,7 +476,8 @@
       <input
         type="text"
         placeholder="Cari nama, email, kode, divisi..."
-        bind:value={searchQuery}
+        value={searchQuery}
+        oninput={(event) => setSearch((event.currentTarget as HTMLInputElement).value)}
         class="w-full rounded-lg border border-gray-200 bg-white py-2 pl-9 pr-4 text-sm text-gray-700 placeholder:text-gray-400 focus:outline-none"
       />
     </div>
@@ -437,7 +488,7 @@
         <Button
           size="sm"
           variant={filterTipe === val ? "default" : "outline"}
-          onclick={() => (filterTipe = val)}>{lbl}</Button
+          onclick={() => setFilter(val)}>{lbl}</Button
         >
       {/each}
     </div>
@@ -659,8 +710,15 @@
         class="flex items-center justify-between border-t border-gray-100 bg-gray-50 px-5 py-3"
       >
         <p class="text-xs text-gray-400">
-          Menampilkan {filteredList.length} dari {karyawanList.length} karyawan
+          Menampilkan {filteredList.length} karyawan pada halaman {currentPage}
         </p>
+        {#if currentPage > 1 || pageHasNext[currentPage - 1]}
+          <div class="flex items-center gap-2">
+            <Button variant="outline" size="sm" disabled={currentPage === 1 || pageLoading} onclick={previousPage}>Sebelumnya</Button>
+            <span class="text-xs font-medium text-gray-700">Halaman {currentPage}{pageLoading ? "..." : ""}</span>
+            <Button variant="outline" size="sm" disabled={pageLoading || !pageHasNext[currentPage - 1]} onclick={nextPage}>Berikutnya</Button>
+          </div>
+        {/if}
       </div>
     {/if}
   </div>

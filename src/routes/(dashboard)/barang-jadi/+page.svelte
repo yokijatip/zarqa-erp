@@ -1,7 +1,8 @@
 <script lang="ts">
   import { goto, afterNavigate } from "$app/navigation";
   import { onMount } from "svelte";
-  import { tambahStokBarangJadi } from "$lib/firebase/barang-jadi";
+  import { tambahStokBarangJadi, getStokBarangJadiPage } from "$lib/firebase/barang-jadi";
+  import type { FirestoreCursor } from "$lib/firebase/pagination";
   import { barangJadiCache, modelBajuCache } from "$lib/stores/data-cache.svelte";
   import { currentUser } from "$lib/stores/auth.store";
   import { UKURAN_ORDER, type StokBarangJadi, type UkuranBaju, type ModelBaju } from "$lib/types";
@@ -27,6 +28,12 @@
   let sortBy = $state<"kritis" | "terbanyak" | "nama" | "keluar">("kritis");
   let filterStatus = $state<"semua" | "kritis" | "low" | "kosong">("semua");
   let lastLoaded = $state<Date | null>(null);
+  const PAGE_SIZE = 25;
+  let currentPage = $state(1);
+  let pageCursors = $state<FirestoreCursor[]>([null]);
+  let pageHasNext = $state<boolean[]>([]);
+  let pageCache = $state<StokBarangJadi[][]>([]);
+  let pageLoading = $state(false);
 
   // Collapse state: set of expanded model names
   let expandedModels = $state<Set<string>>(new Set());
@@ -333,11 +340,15 @@
     loading = true;
     errorMsg = null;
     try {
-      const [stok, models] = await Promise.all([
-        barangJadiCache.get(force),
+      const [firstPage, models] = await Promise.all([
+        getStokBarangJadiPage(null, PAGE_SIZE),
         modelBajuCache.get(force),
       ]);
-      stokList = stok;
+      stokList = firstPage.items;
+      pageCache = [firstPage.items];
+      pageCursors = [null, firstPage.cursor];
+      pageHasNext = [firstPage.hasNext];
+      currentPage = 1;
       modelList = models.filter((model) => model.aktif);
       lastLoaded = new Date();
     } catch {
@@ -345,6 +356,32 @@
     } finally {
       loading = false;
     }
+  }
+
+  async function nextPage() {
+    if (pageLoading || !pageHasNext[currentPage - 1]) return;
+    pageLoading = true;
+    try {
+      const result = await getStokBarangJadiPage(pageCursors[currentPage] ?? null, PAGE_SIZE);
+      pageCache[currentPage] = result.items;
+      pageCursors[currentPage + 1] = result.cursor;
+      pageHasNext[currentPage] = result.hasNext;
+      pageCache = [...pageCache];
+      pageCursors = [...pageCursors];
+      pageHasNext = [...pageHasNext];
+      currentPage += 1;
+      stokList = result.items;
+    } catch (e) {
+      showError(e instanceof Error ? e.message : "Gagal memuat halaman stok berikutnya.");
+    } finally {
+      pageLoading = false;
+    }
+  }
+
+  function previousPage() {
+    if (currentPage <= 1 || pageLoading) return;
+    currentPage -= 1;
+    stokList = pageCache[currentPage - 1] ?? stokList;
   }
 
   async function bukaTambah() {
@@ -914,12 +951,19 @@
         <span class="font-medium text-gray-400">{modelKosong} model habis</span>
       {/if}
     </div>
+    {#if currentPage > 1 || pageHasNext[currentPage - 1]}
+      <div class="flex items-center gap-2">
+        <Button variant="outline" size="sm" disabled={currentPage === 1 || pageLoading} onclick={previousPage}>Sebelumnya</Button>
+        <span class="text-xs font-medium text-gray-700">Halaman {currentPage}{pageLoading ? "..." : ""}</span>
+        <Button variant="outline" size="sm" disabled={pageLoading || !pageHasNext[currentPage - 1]} onclick={nextPage}>Berikutnya</Button>
+      </div>
+    {/if}
   </div>
 {/if}
 
 <!-- ── Dialog: Tambah Stok Awal ──────────────────────────────────── -->
 <Dialog.Root bind:open={openTambah}>
-  <Dialog.Content class="max-w-md">
+  <Dialog.Content class="w-full max-w-2xl max-h-[calc(100vh-2rem)] overflow-hidden">
     <Dialog.Header>
       <Dialog.Title>Tambah Stok Awal</Dialog.Title>
       <Dialog.Description>
@@ -927,7 +971,7 @@
       </Dialog.Description>
     </Dialog.Header>
 
-    <div class="max-h-[60vh] space-y-4 overflow-y-auto pr-1">
+    <div class="min-h-0 max-h-[60vh] space-y-4 overflow-y-auto pr-2">
       <!-- Pilih model -->
       <div>
         <label class="mb-1.5 block text-sm font-medium text-gray-700" for="tambah-model">
@@ -981,12 +1025,12 @@
           <p class="mb-1.5 text-sm font-medium text-gray-700">
             Warna <span class="text-red-500">*</span>
           </p>
-          <div class="max-h-36 space-y-2 overflow-y-auto rounded-lg border border-gray-100 bg-gray-50 p-2">
+          <div class="grid max-h-56 grid-cols-1 gap-2 overflow-y-auto rounded-lg border border-gray-100 bg-gray-50 p-2 sm:grid-cols-2">
             {#each selectedModel.warna_tersedia ?? [] as w}
               {@const checked = fWarnaIds.includes(w.warna_id)}
               <label
-                class="flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2 {checked
-                  ? 'bg-white shadow-sm ring-1 ring-blue-100'
+                class="flex min-h-10 cursor-pointer items-center gap-3 rounded-lg px-3 py-2 transition-colors {checked
+                  ? 'bg-blue-50 shadow-sm ring-1 ring-blue-200'
                   : 'hover:bg-white/70'}"
               >
                 <input

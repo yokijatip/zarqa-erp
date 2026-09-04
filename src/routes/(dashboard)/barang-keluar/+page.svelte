@@ -3,11 +3,12 @@
   import { goto } from "$app/navigation";
   import {
     catatBarangKeluar,
-    getRiwayatBarangKeluarByPeriod,
+    getRiwayatBarangKeluarPage,
     batalBarangKeluar,
     batalItemBarangKeluar,
     prosesPendingBarangKeluar,
   } from "$lib/firebase/barang-jadi";
+  import type { FirestoreCursor } from "$lib/firebase/pagination";
   import { barangJadiCache, modelBajuCache } from "$lib/stores/data-cache.svelte";
   import { currentUser, userRole } from "$lib/stores/auth.store";
   import {
@@ -608,35 +609,13 @@
     );
   });
 
-  const PAGE_SIZE = 100;
+  const PAGE_SIZE = 50;
   let currentPage = $state(1);
-  let totalPages = $derived(Math.max(1, Math.ceil(filteredRiwayat.length / PAGE_SIZE)));
-  let paginatedRiwayat = $derived(
-    filteredRiwayat.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE),
-  );
-  let pageNumbers = $derived.by((): Array<number | "..."> => {
-    if (totalPages <= 7) return Array.from({ length: totalPages }, (_, i) => i + 1);
-    const pages: Array<number | "..."> = [1];
-    if (currentPage > 4) pages.push("...");
-    const start = Math.max(2, currentPage - 1);
-    const end = Math.min(totalPages - 1, currentPage + 1);
-    for (let page = start; page <= end; page++) pages.push(page);
-    if (currentPage < totalPages - 3) pages.push("...");
-    pages.push(totalPages);
-    return pages;
-  });
-
-  $effect(() => {
-    filteredRiwayat.length;
-    dateRange?.start;
-    dateRange?.end;
-    searchQuery;
-    currentPage = 1;
-  });
-
-  $effect(() => {
-    if (currentPage > totalPages) currentPage = totalPages;
-  });
+  let pageCursors = $state<FirestoreCursor[]>([null]);
+  let pageHasNext = $state<boolean[]>([]);
+  let pageCache = $state<BarangKeluar[][]>([]);
+  let pageLoading = $state(false);
+  let paginatedRiwayat = $derived(filteredRiwayat);
 
   function jumlahWarna(warnaKey: string, ukuran: UkuranBaju): number {
     return fJumlahByWarna[warnaKey]?.[ukuran] ?? 0;
@@ -774,11 +753,18 @@
     loading = true;
     errorMsg = null;
     try {
-      [stokList, modelList, riwayat] = await Promise.all([
+      const [stok, models, firstPage] = await Promise.all([
         barangJadiCache.get(force),
         modelBajuCache.get(force),
-        getRiwayatBarangKeluarByPeriod(dateRange),
+        getRiwayatBarangKeluarPage(dateRange, null, PAGE_SIZE),
       ]);
+      stokList = stok;
+      modelList = models;
+      riwayat = firstPage.items;
+      pageCache = [firstPage.items];
+      pageCursors = [null, firstPage.cursor];
+      pageHasNext = [firstPage.hasNext];
+      currentPage = 1;
     } catch {
       showError("Gagal memuat data. Periksa koneksi Firebase.");
     } finally {
@@ -786,12 +772,36 @@
     }
   }
 
+  async function nextPage() {
+    if (pageLoading || !pageHasNext[currentPage - 1]) return;
+    pageLoading = true;
+    try {
+      const result = await getRiwayatBarangKeluarPage(dateRange, pageCursors[currentPage] ?? null, PAGE_SIZE);
+      pageCache[currentPage] = result.items;
+      pageCursors[currentPage + 1] = result.cursor;
+      pageHasNext[currentPage] = result.hasNext;
+      pageCache = [...pageCache];
+      pageCursors = [...pageCursors];
+      pageHasNext = [...pageHasNext];
+      currentPage += 1;
+      riwayat = result.items;
+    } catch {
+      showError("Gagal memuat pengiriman berikutnya.");
+    } finally {
+      pageLoading = false;
+    }
+  }
+
+  function previousPage() {
+    if (currentPage <= 1 || pageLoading) return;
+    currentPage -= 1;
+    riwayat = pageCache[currentPage - 1] ?? riwayat;
+  }
+
   // Re-fetch riwayat saat periode berubah
   $effect(() => {
     const range = dateRange;
-    getRiwayatBarangKeluarByPeriod(range).then((data) => {
-      riwayat = data;
-    });
+    load();
   });
 
   // ── Actions ──────────────────────────────────────────────────────
@@ -1414,9 +1424,7 @@
       class="flex items-center justify-between border-t border-gray-100 bg-gray-50 px-5 py-3"
     >
       <p class="text-xs text-gray-400">
-        Menampilkan {filteredRiwayat.length === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1}
-        -{Math.min(currentPage * PAGE_SIZE, filteredRiwayat.length)} dari {filteredRiwayat.length}
-        pengiriman
+        Menampilkan {filteredRiwayat.length} pengiriman pada halaman {currentPage}
       </p>
       <p class="text-xs text-gray-400">
         Total: <span class="font-semibold text-gray-700"
@@ -1424,39 +1432,24 @@
         >
       </p>
     </div>
-    {#if totalPages > 1}
+    {#if currentPage > 1 || pageHasNext[currentPage - 1]}
       <div class="flex flex-wrap items-center justify-center gap-1 border-t border-gray-100 px-5 py-3">
         <Button
           variant="outline"
           size="sm"
           aria-label="Halaman sebelumnya"
-          disabled={currentPage === 1}
-          onclick={() => (currentPage = Math.max(1, currentPage - 1))}
+          disabled={currentPage === 1 || pageLoading}
+          onclick={previousPage}
         >
           Sebelumnya
         </Button>
-        {#each pageNumbers as page}
-          {#if page === "..."}
-            <span class="px-1 text-sm text-gray-400">...</span>
-          {:else}
-            <Button
-              variant={currentPage === page ? "default" : "outline"}
-              size="sm"
-              class="min-w-9"
-              aria-label={`Halaman ${page}`}
-              aria-current={currentPage === page ? "page" : undefined}
-              onclick={() => (currentPage = page)}
-            >
-              {page}
-            </Button>
-          {/if}
-        {/each}
+        <span class="px-2 text-xs font-medium text-gray-700">Halaman {currentPage}{pageLoading ? "..." : ""}</span>
         <Button
           variant="outline"
           size="sm"
           aria-label="Halaman berikutnya"
-          disabled={currentPage === totalPages}
-          onclick={() => (currentPage = Math.min(totalPages, currentPage + 1))}
+          disabled={pageLoading || !pageHasNext[currentPage - 1]}
+          onclick={nextPage}
         >
           Berikutnya
         </Button>

@@ -7,9 +7,10 @@
     tambahStokBarangJadi,
     kurangiStokManual,
     setStokManual,
-    getRiwayatKeluarByModel,
-    getRiwayatBarangJadiByModel,
+    getRiwayatKeluarByModelPage,
+    getRiwayatBarangJadiByModelPage,
   } from "$lib/firebase/barang-jadi";
+  import type { FirestoreCursor } from "$lib/firebase/pagination";
   import { getRiwayatBatch, getBatchById } from "$lib/firebase/batch-produksi";
   import { currentUser } from "$lib/stores/auth.store";
   import {
@@ -49,6 +50,15 @@
   const HISTORY_PAGE_SIZE = 50;
   let masukPage = $state(1);
   let keluarPage = $state(1);
+  let masukCursor = $state<FirestoreCursor>(null);
+  let keluarCursor = $state<FirestoreCursor>(null);
+  let masukHasNext = $state(false);
+  let keluarHasNext = $state(false);
+  let historyPageLoading = $state(false);
+  let masukPageCache = $state<RiwayatBarangJadi[][]>([]);
+  let keluarPageCache = $state<BarangKeluar[][]>([]);
+  let masukCursors = $state<FirestoreCursor[]>([null]);
+  let keluarCursors = $state<FirestoreCursor[]>([null]);
 
   // Cache detail batch (nama tukang cutting + timeline lengkap) per batch_id, di-fetch lazy saat card di-expand
   type BatchTimelineEntry = {
@@ -221,10 +231,7 @@
       return waktu >= dari && waktu <= sampai && itemsForCurrentView(r).length > 0;
     });
   });
-  let riwayatKeluarTampil = $derived(
-    riwayatKeluarTerfilter.slice((keluarPage - 1) * HISTORY_PAGE_SIZE, keluarPage * HISTORY_PAGE_SIZE),
-  );
-  let keluarTotalPages = $derived(Math.max(1, Math.ceil(riwayatKeluarTerfilter.length / HISTORY_PAGE_SIZE)));
+  let riwayatKeluarTampil = $derived(riwayatKeluarTerfilter);
 
   function totalItemPcsByStatus(
     items: BarangKeluarItem[],
@@ -310,15 +317,29 @@
       const modelId = $page.params.model_id!;
       const [stokResult, keluarResult, masukResult] = await Promise.allSettled([
         getStokByModel(modelId),
-        getRiwayatKeluarByModel(modelId),
-        getRiwayatBarangJadiByModel(modelId),
+        getRiwayatKeluarByModelPage(modelId, null, HISTORY_PAGE_SIZE),
+        getRiwayatBarangJadiByModelPage(modelId, null, HISTORY_PAGE_SIZE),
       ]);
 
       stokList = stokResult.status === "fulfilled" ? stokResult.value : [];
       riwayatKeluar =
-        keluarResult.status === "fulfilled" ? keluarResult.value : [];
+        keluarResult.status === "fulfilled" ? keluarResult.value.items : [];
       riwayatMasuk =
-        masukResult.status === "fulfilled" ? masukResult.value : [];
+        masukResult.status === "fulfilled" ? masukResult.value.items : [];
+      masukPageCache = [riwayatMasuk];
+      keluarPageCache = [riwayatKeluar];
+      if (keluarResult.status === "fulfilled") {
+        keluarCursor = keluarResult.value.cursor;
+        keluarHasNext = keluarResult.value.hasNext;
+        keluarPage = 1;
+        keluarCursors = [null, keluarResult.value.cursor];
+      }
+      if (masukResult.status === "fulfilled") {
+        masukCursor = masukResult.value.cursor;
+        masukHasNext = masukResult.value.hasNext;
+        masukPage = 1;
+        masukCursors = [null, masukResult.value.cursor];
+      }
 
       if (stokResult.status === "rejected") {
         console.error("getStokByModel failed:", stokResult.reason);
@@ -336,6 +357,48 @@
       }
     } finally {
       loading = false;
+    }
+  }
+
+  async function nextHistoryPage(kind: "masuk" | "keluar") {
+    if (historyPageLoading) return;
+    historyPageLoading = true;
+    try {
+      const modelId = $page.params.model_id!;
+      if (kind === "masuk" && masukHasNext) {
+        const result = await getRiwayatBarangJadiByModelPage(modelId, masukCursors[masukPage] ?? masukCursor, HISTORY_PAGE_SIZE);
+        riwayatMasuk = result.items;
+        masukPageCache[masukPage] = result.items;
+        masukPageCache = [...masukPageCache];
+        masukCursors[masukPage + 1] = result.cursor;
+        masukCursors = [...masukCursors];
+        masukCursor = result.cursor;
+        masukHasNext = result.hasNext;
+        masukPage += 1;
+      } else if (kind === "keluar" && keluarHasNext) {
+        const result = await getRiwayatKeluarByModelPage(modelId, keluarCursors[keluarPage] ?? keluarCursor, HISTORY_PAGE_SIZE);
+        riwayatKeluar = result.items;
+        keluarPageCache[keluarPage] = result.items;
+        keluarPageCache = [...keluarPageCache];
+        keluarCursors[keluarPage + 1] = result.cursor;
+        keluarCursors = [...keluarCursors];
+        keluarCursor = result.cursor;
+        keluarHasNext = result.hasNext;
+        keluarPage += 1;
+      }
+    } finally {
+      historyPageLoading = false;
+    }
+  }
+
+  function previousHistoryPage(kind: "masuk" | "keluar") {
+    if (kind === "masuk" && masukPage > 1) {
+      masukPage -= 1;
+      riwayatMasuk = masukPageCache[masukPage - 1] ?? riwayatMasuk;
+    }
+    if (kind === "keluar" && keluarPage > 1) {
+      keluarPage -= 1;
+      riwayatKeluar = keluarPageCache[keluarPage - 1] ?? riwayatKeluar;
     }
   }
 
@@ -491,10 +554,7 @@
       (a, b) => tsMillis(b.timestamp) - tsMillis(a.timestamp),
     );
   });
-  let riwayatMasukTampil = $derived(
-    riwayatMasukGrouped.slice((masukPage - 1) * HISTORY_PAGE_SIZE, masukPage * HISTORY_PAGE_SIZE),
-  );
-  let masukTotalPages = $derived(Math.max(1, Math.ceil(riwayatMasukGrouped.length / HISTORY_PAGE_SIZE)));
+  let riwayatMasukTampil = $derived(riwayatMasukGrouped);
 
   $effect(() => {
     riwayatMasukGrouped.length;
@@ -502,6 +562,7 @@
     filterMasukSampai;
     selectedColor;
     masukPage = 1;
+    riwayatMasuk = masukPageCache[0] ?? riwayatMasuk;
   });
 
   $effect(() => {
@@ -510,11 +571,7 @@
     filterKeluarSampai;
     selectedColor;
     keluarPage = 1;
-  });
-
-  $effect(() => {
-    if (masukPage > masukTotalPages) masukPage = masukTotalPages;
-    if (keluarPage > keluarTotalPages) keluarPage = keluarTotalPages;
+    riwayatKeluar = keluarPageCache[0] ?? riwayatKeluar;
   });
 
   // Prefetch nama tukang cutting untuk tiap batch begitu muncul di list,
@@ -1413,13 +1470,13 @@
         {/each}
       </div>
       <p class="mt-2 text-right text-[11px] text-gray-300">
-        Menampilkan {Math.min((masukPage - 1) * HISTORY_PAGE_SIZE + 1, riwayatMasukGrouped.length)}-{Math.min(masukPage * HISTORY_PAGE_SIZE, riwayatMasukGrouped.length)} dari {riwayatMasukGrouped.length} entri
+        Menampilkan {riwayatMasukTampil.length} entri pada halaman {masukPage}
       </p>
-      {#if masukTotalPages > 1}
+      {#if masukPage > 1 || masukHasNext}
         <div class="mt-3 flex items-center justify-end gap-2">
-          <Button variant="outline" size="sm" disabled={masukPage === 1} onclick={() => (masukPage = Math.max(1, masukPage - 1))}>Sebelumnya</Button>
-          <span class="text-xs text-gray-500">Halaman {masukPage} / {masukTotalPages}</span>
-          <Button variant="outline" size="sm" disabled={masukPage === masukTotalPages} onclick={() => (masukPage = Math.min(masukTotalPages, masukPage + 1))}>Berikutnya</Button>
+          <Button variant="outline" size="sm" disabled={masukPage === 1 || historyPageLoading} onclick={() => previousHistoryPage("masuk")}>Sebelumnya</Button>
+          <span class="text-xs text-gray-500">Halaman {masukPage}</span>
+          <Button variant="outline" size="sm" disabled={!masukHasNext || historyPageLoading} onclick={() => nextHistoryPage("masuk")}>Berikutnya</Button>
         </div>
       {/if}
     {/if}
@@ -1542,13 +1599,13 @@
         {/each}
       </div>
       <p class="mt-2 text-right text-[11px] text-gray-300">
-        Menampilkan {Math.min((keluarPage - 1) * HISTORY_PAGE_SIZE + 1, riwayatKeluarTerfilter.length)}-{Math.min(keluarPage * HISTORY_PAGE_SIZE, riwayatKeluarTerfilter.length)} dari {riwayatKeluarTerfilter.length} catatan
+        Menampilkan {riwayatKeluarTampil.length} catatan pada halaman {keluarPage}
       </p>
-      {#if keluarTotalPages > 1}
+      {#if keluarPage > 1 || keluarHasNext}
         <div class="mt-3 flex items-center justify-end gap-2">
-          <Button variant="outline" size="sm" disabled={keluarPage === 1} onclick={() => (keluarPage = Math.max(1, keluarPage - 1))}>Sebelumnya</Button>
-          <span class="text-xs text-gray-500">Halaman {keluarPage} / {keluarTotalPages}</span>
-          <Button variant="outline" size="sm" disabled={keluarPage === keluarTotalPages} onclick={() => (keluarPage = Math.min(keluarTotalPages, keluarPage + 1))}>Berikutnya</Button>
+          <Button variant="outline" size="sm" disabled={keluarPage === 1 || historyPageLoading} onclick={() => previousHistoryPage("keluar")}>Sebelumnya</Button>
+          <span class="text-xs text-gray-500">Halaman {keluarPage}</span>
+          <Button variant="outline" size="sm" disabled={!keluarHasNext || historyPageLoading} onclick={() => nextHistoryPage("keluar")}>Berikutnya</Button>
         </div>
       {/if}
     {/if}

@@ -6,9 +6,11 @@ import {
   query, orderBy, where, onSnapshot,
   type DocumentData,
   type DocumentSnapshot,
+  type QueryConstraint,
   type Unsubscribe,
 } from 'firebase/firestore';
 import { db } from './config';
+import { getCursorPage, type FirestoreCursor, type CursorPage } from './pagination';
 import { createRejectItemsInTransaction } from './reject-items';
 import { appendSumberProduksiLot } from './barang-jadi';
 import { ukuranAliases, type BatchProduksi, type BatchProduksiInput, type StatusBatch, type RiwayatProses, type PenugasanWorker, type DetailUkuran, type KainDigunakan, type ModelBaju, type SumberCutting, type RejectAttribusi, type SumberProduksi } from '$lib/types';
@@ -46,12 +48,17 @@ function buildStokPotonganDocId(modelId: string, ukuran: string, namaWarna?: str
   return `${modelId}__${ukuran}__${warnaDocKey(namaWarna)}`;
 }
 
-function buildSumberCutting(batch: BatchProduksi, ukuran: string, jumlahPcs: number): SumberCutting {
+function buildStokPotonganHijabDocId(modelId: string, warnaId?: string, namaWarna?: string): string {
+  const warna = warnaId || (namaWarna ? warnaDocKey(namaWarna) : 'tanpa_warna');
+  return `${modelId}__tanpa_ukuran__${warna}`;
+}
+
+function buildSumberCutting(batch: BatchProduksi, ukuran: string | undefined, jumlahPcs: number): SumberCutting {
   return {
     batch_id: batch.id,
     nama_model: batch.nama_model,
     ...(batch.nama_warna ? { nama_warna: batch.nama_warna } : {}),
-    ukuran,
+    ...(ukuran ? { ukuran } : {}),
     jumlah_pcs: jumlahPcs,
     ...(batch.penugasan?.cutting ? { penugasan: { cutting: batch.penugasan.cutting } } : {}),
   };
@@ -111,6 +118,13 @@ function totalDetailUkuran(detail: DetailUkuran[]): number {
   return detail.reduce((sum, u) => sum + (u.jumlah_pcs ?? 0), 0);
 }
 
+function totalBatchPcs(batch: Pick<BatchProduksi, 'jenis_produk' | 'jumlah_target' | 'total_pcs' | 'detail_ukuran'>): number {
+  if (batch.jenis_produk === 'hijab') {
+    return Math.max(0, Math.floor(batch.jumlah_target ?? batch.total_pcs ?? 0));
+  }
+  return totalDetailUkuran(batch.detail_ukuran ?? []);
+}
+
 function stokKainRiwayatPayload(
   batchId: string,
   data: Pick<BatchProduksiInput, 'model_id' | 'nama_model' | 'nama_warna' | 'detail_ukuran'>,
@@ -141,7 +155,14 @@ export async function createBatchProduksi(
   data: BatchProduksiInput,
   dibuatOlehUid: string
 ): Promise<string> {
-  const totalPcs = totalDetailUkuran(data.detail_ukuran);
+  const isHijab = data.jenis_produk === 'hijab';
+  const totalPcs = isHijab
+    ? Math.max(0, Math.floor(Number(data.jumlah_target) || 0))
+    : totalDetailUkuran(data.detail_ukuran);
+  if (isHijab && !data.model_hijab_id) {
+    throw new Error('Model hijab belum dipilih');
+  }
+  if (totalPcs <= 0) throw new Error('Jumlah pcs harus lebih dari 0');
   const ref = doc(collection(db, COL));
   const kainList = (data.kain_digunakan ?? []).filter((kain) => (kain.jumlah_dipakai ?? 0) > 0);
   const siapCutting = totalPcs > 0 && kainList.length > 0;
@@ -297,10 +318,89 @@ export async function lengkapiKainBatchCutting(
 
 // Buat order produksi dari stok potongan kain (kain sudah dipotong sebelumnya)
 // Tidak memotong stok kain mentah — langsung masuk CUTTING_DONE
+async function createBatchHijabDariPotongan(
+  data: BatchProduksiInput,
+  dibuatOlehUid: string,
+): Promise<string> {
+  const modelHijabId = data.model_hijab_id || data.model_id;
+  const totalPcs = Math.max(0, Math.floor(Number(data.jumlah_target) || 0));
+  if (!modelHijabId) throw new Error('Model hijab belum dipilih');
+  if (totalPcs <= 0) throw new Error('Jumlah pcs harus lebih dari 0');
+
+  // Stok potongan hijab hanya dibedakan berdasarkan model dan warna. Query satu
+  // field dulu agar tidak menambah composite index khusus untuk stok hijab.
+  const stokSnap = await getDocs(
+    query(collection(db, 'stok_potongan'), where('model_hijab_id', '==', modelHijabId)),
+  );
+  const existing = stokSnap.docs.find((item) => {
+    const stok = item.data() as { nama_warna?: string };
+    return (stok.nama_warna ?? '') === (data.nama_warna ?? '');
+  });
+  const stokRef = existing
+    ? existing.ref
+    : doc(db, 'stok_potongan', buildStokPotonganHijabDocId(modelHijabId, data.warna_id, data.nama_warna));
+
+  const ref = doc(collection(db, COL));
+  await runTransaction(db, async (transaction) => {
+    const stokSnapshot = await transaction.get(stokRef);
+    if (!stokSnapshot.exists()) {
+      throw new Error(`Stok potongan hijab ${data.nama_model}${data.nama_warna ? ` (${data.nama_warna})` : ''} tidak ditemukan`);
+    }
+
+    const stok = stokSnapshot.data() as {
+      stok_tersedia: number;
+      total_terpakai?: number;
+      sumber_cutting?: SumberCutting[];
+    };
+    if ((stok.stok_tersedia ?? 0) < totalPcs) {
+      throw new Error(`Stok potongan hijab tidak mencukupi (tersedia: ${stok.stok_tersedia ?? 0} pcs)`);
+    }
+
+    const { consumed, remaining } = consumeSumberCuttingLots(stok.sumber_cutting, totalPcs);
+    const sumberCutting = [
+      ...(data.sumber_cutting ?? []),
+      ...consumed.map((lot) => {
+        const { ukuran: _ukuran, ...lotTanpaUkuran } = lot;
+        return lotTanpaUkuran;
+      }),
+    ];
+
+    transaction.update(stokRef, {
+      stok_tersedia: (stok.stok_tersedia ?? 0) - totalPcs,
+      total_terpakai: (stok.total_terpakai ?? 0) + totalPcs,
+      sumber_cutting: remaining,
+      updatedAt: serverTimestamp(),
+    });
+
+    transaction.set(ref, {
+      ...data,
+      jenis_produk: 'hijab' as const,
+      model_id: data.model_id || modelHijabId,
+      model_hijab_id: modelHijabId,
+      detail_ukuran: [],
+      jumlah_target: totalPcs,
+      kain_digunakan: [],
+      total_pcs: totalPcs,
+      pcs_saat_ini: totalPcs,
+      status: 'CUTTING_DONE' as StatusBatch,
+      dari_potongan: true,
+      ...(sumberCutting.length > 0 ? { sumber_cutting: sumberCutting } : {}),
+      dibuat_oleh: dibuatOlehUid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  });
+
+  return ref.id;
+}
+
 export async function createBatchDariPotongan(
   data: BatchProduksiInput,
   dibuatOlehUid: string
 ): Promise<string> {
+  if (data.jenis_produk === 'hijab') {
+    return createBatchHijabDariPotongan(data, dibuatOlehUid);
+  }
   const totalPcs = data.detail_ukuran.reduce((sum, u) => sum + u.jumlah_pcs, 0);
   const stokPotonganRefs = new Map<string, ReturnType<typeof doc>>();
 
@@ -383,6 +483,37 @@ export async function getBatchList(status?: StatusBatch): Promise<BatchProduksi[
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as BatchProduksi);
 }
 
+export async function getBatchPage(
+  status: StatusBatch | StatusBatch[] | undefined,
+  cursor: FirestoreCursor,
+  pageSize = 25,
+  range?: { start: Date; end: Date } | null,
+): Promise<CursorPage<BatchProduksi>> {
+  const constraints: QueryConstraint[] = [];
+  if (status) {
+    constraints.push(
+      Array.isArray(status)
+        ? where('status', 'in', status)
+        : where('status', '==', status),
+    );
+  }
+  if (range) {
+    constraints.push(
+      where('createdAt', '>=', Timestamp.fromDate(range.start)),
+      where('createdAt', '<=', Timestamp.fromDate(range.end)),
+    );
+  }
+  constraints.push(orderBy('createdAt', 'desc'));
+  const baseQuery = query(collection(db, COL), ...constraints);
+
+  return getCursorPage(
+    baseQuery,
+    cursor,
+    (d) => ({ id: d.id, ...d.data() }) as BatchProduksi,
+    pageSize,
+  );
+}
+
 // Ambil satu batch by ID
 export async function getBatchById(id: string): Promise<BatchProduksi | null> {
   const snap = await getDoc(doc(db, COL, id));
@@ -438,7 +569,7 @@ export async function updateStatusBatch(
       let kainList: KainDigunakan[] = (batch.kain_digunakan ?? []).filter(k => (k.jumlah_dipakai ?? 0) > 0);
 
       // Total pcs batch — kalau > 0 tapi tidak ada kain, berarti user belum input kain
-      const totalPcs = batch.detail_ukuran.reduce((s, du) => s + (du.jumlah_pcs ?? 0), 0);
+      const totalPcs = totalBatchPcs(batch);
       if (totalPcs > 0 && kainList.length === 0) {
         throw new Error('Kain belum diinput. Buka detail batch dan tambahkan kain sebelum mulai cutting.');
       }
@@ -499,7 +630,7 @@ export async function updateStatusBatch(
       timestamp: serverTimestamp(),
     });
 
-    if (riwayat.detail_reject && riwayat.detail_reject.length > 0) {
+    if (batch.jenis_produk !== 'hijab' && riwayat.detail_reject && riwayat.detail_reject.length > 0) {
       createRejectItemsInTransaction(transaction, {
         batchId,
         modelId: batch.model_id,
@@ -581,7 +712,7 @@ export async function recordBatchProgress(
       timestamp: serverTimestamp(),
     });
 
-    if (riwayat.detail_reject && riwayat.detail_reject.length > 0) {
+    if (batch.jenis_produk !== 'hijab' && riwayat.detail_reject && riwayat.detail_reject.length > 0) {
       createRejectItemsInTransaction(transaction, {
         batchId,
         modelId: batch.model_id,
@@ -617,6 +748,9 @@ export async function splitJahitPartialToSteam(
     if (!batchSnap.exists()) throw new Error('Batch tidak ditemukan');
 
     const batch = { id: batchSnap.id, ...batchSnap.data() } as BatchProduksi;
+    if (batch.jenis_produk === 'hijab') {
+      throw new Error('Batch hijab tidak menggunakan setor parsial per ukuran');
+    }
     if (batch.status !== 'JAHIT_IN_PROGRESS') {
       throw new Error('Setor parsial hanya bisa dilakukan dari status Sedang Jahit');
     }
@@ -714,14 +848,96 @@ export async function splitJahitPartialToSteam(
   return createdChildId;
 }
 
-// Sinkronkan hasil cutting batch ke stok_potongan
-// Dipakai untuk batch CUTTING_DONE yang hasil cuttingnya belum masuk stok_potongan
+async function sinkronStokPotonganHijabBatch(batch: BatchProduksi): Promise<void> {
+  const modelHijabId = batch.model_hijab_id || batch.model_id;
+  const candidates = await getDocs(
+    query(collection(db, 'stok_potongan'), where('model_hijab_id', '==', modelHijabId)),
+  );
+  const existing = candidates.docs.find((item) => {
+    const stok = item.data() as { nama_warna?: string };
+    return (stok.nama_warna ?? '') === (batch.nama_warna ?? '');
+  });
+  const stokRef = existing
+    ? existing.ref
+    : doc(db, 'stok_potongan', buildStokPotonganHijabDocId(modelHijabId, batch.warna_id, batch.nama_warna));
+  const batchRef = doc(db, COL, batch.id);
+
+  await runTransaction(db, async (transaction) => {
+    const [batchSnap, stokSnap] = await Promise.all([
+      transaction.get(batchRef),
+      transaction.get(stokRef),
+    ]);
+    if (!batchSnap.exists()) throw new Error('Batch tidak ditemukan');
+
+    const currentBatch = { id: batchSnap.id, ...batchSnap.data() } as BatchProduksi;
+    if (currentBatch.status !== 'CUTTING_DONE') {
+      throw new Error('Hanya batch Cutting Selesai yang bisa disinkronkan');
+    }
+    if (currentBatch.jenis_produk !== 'hijab') {
+      throw new Error('Batch ini bukan batch hijab');
+    }
+    if (currentBatch.dari_potongan) {
+      throw new Error('Batch ini bukan batch cutting original');
+    }
+    if (currentBatch.stok_potongan_synced) return;
+
+    const jumlahMasuk = Math.max(0, Math.floor(currentBatch.pcs_saat_ini ?? currentBatch.total_pcs));
+    if (jumlahMasuk <= 0) throw new Error('PCS batch tidak valid');
+    const stok = stokSnap.exists()
+      ? stokSnap.data() as { stok_tersedia?: number; total_masuk?: number; total_terpakai?: number; sumber_cutting?: SumberCutting[] }
+      : null;
+    const lot = buildSumberCutting(currentBatch, undefined, jumlahMasuk);
+
+    if (!stok) {
+      transaction.set(stokRef, {
+        jenis_produk: 'hijab',
+        model_id: currentBatch.model_id,
+        model_hijab_id: modelHijabId,
+        nama_model: currentBatch.nama_model,
+        ...(currentBatch.warna_id ? { warna_id: currentBatch.warna_id } : {}),
+        ...(currentBatch.nama_warna ? { nama_warna: currentBatch.nama_warna } : {}),
+        ...(currentBatch.kode_hex_warna ? { kode_hex_warna: currentBatch.kode_hex_warna } : {}),
+        stok_tersedia: jumlahMasuk,
+        total_masuk: jumlahMasuk,
+        total_terpakai: 0,
+        sumber_cutting: [lot],
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      transaction.update(stokRef, {
+        jenis_produk: 'hijab',
+        model_id: currentBatch.model_id,
+        model_hijab_id: modelHijabId,
+        ...(currentBatch.warna_id ? { warna_id: currentBatch.warna_id } : {}),
+        ...(currentBatch.nama_warna ? { nama_warna: currentBatch.nama_warna } : {}),
+        ...(currentBatch.kode_hex_warna ? { kode_hex_warna: currentBatch.kode_hex_warna } : {}),
+        stok_tersedia: (stok.stok_tersedia ?? 0) + jumlahMasuk,
+        total_masuk: (stok.total_masuk ?? 0) + jumlahMasuk,
+        total_terpakai: stok.total_terpakai ?? 0,
+        sumber_cutting: appendSumberCuttingLot(stok.sumber_cutting, lot),
+        updatedAt: serverTimestamp(),
+      });
+    }
+
+    transaction.update(batchRef, {
+      stok_potongan_synced: true,
+      updatedAt: serverTimestamp(),
+    });
+  });
+}
+
+// Sinkronkan hasil cutting batch ke stok_potongan.
+// Baju disimpan per ukuran, sedangkan Hijab disimpan per model + warna tanpa ukuran.
 export async function sinkronStokPotonganBatch(batchId: string): Promise<void> {
   const batch = await getBatchById(batchId);
   if (!batch) throw new Error('Batch tidak ditemukan');
   if (batch.status !== 'CUTTING_DONE') throw new Error('Hanya batch Cutting Selesai yang bisa disinkronkan');
   if (batch.dari_potongan) throw new Error('Batch ini bukan batch cutting original');
   if (batch.stok_potongan_synced) return; // sudah pernah disinkronkan, skip
+  if (batch.jenis_produk === 'hijab') {
+    await sinkronStokPotonganHijabBatch(batch);
+    return;
+  }
 
   function hitungDetailBerhasil(source: BatchProduksi): DetailUkuran[] {
     const pcsBerhasil = source.pcs_saat_ini ?? source.total_pcs;
@@ -814,6 +1030,105 @@ export async function sinkronStokPotonganBatch(batchId: string): Promise<void> {
   });
 }
 
+function buildStokHijabDocId(modelId: string, warnaId?: string, namaWarna?: string): string {
+  const warna = warnaId || (namaWarna ? warnaDocKey(namaWarna) : 'tanpa_warna');
+  return `${modelId}__${warna}`;
+}
+
+async function completeBatchHijabProduksi(
+  batchId: string,
+  updatedByUid: string,
+  updatedByNama: string,
+  riwayat: Omit<RiwayatProses, 'status_ke' | 'updated_by_uid' | 'updated_by_nama' | 'timestamp'>,
+): Promise<void> {
+  const batch = await getBatchById(batchId);
+  if (!batch?.model_hijab_id) throw new Error('Batch hijab tidak memiliki model hijab');
+
+  const batchRef = doc(db, COL, batchId);
+  const modelRef = doc(db, 'model_hijab', batch.model_hijab_id);
+  const stokRef = doc(
+    db,
+    'stok_hijab',
+    batch.stok_hijab_id || buildStokHijabDocId(batch.model_hijab_id, batch.warna_id, batch.nama_warna),
+  );
+  const riwayatBatchRef = doc(collection(db, COL, batchId, 'riwayat_proses'));
+  const riwayatStokRef = doc(collection(db, 'stok_hijab', stokRef.id, 'riwayat'));
+
+  await runTransaction(db, async (transaction) => {
+    const [batchSnap, stokSnap, modelSnap] = await Promise.all([
+      transaction.get(batchRef),
+      transaction.get(stokRef),
+      transaction.get(modelRef),
+    ]);
+    if (!batchSnap.exists()) throw new Error('Batch tidak ditemukan');
+
+    const currentBatch = { id: batchSnap.id, ...batchSnap.data() } as BatchProduksi;
+    if (currentBatch.jenis_produk !== 'hijab') {
+      throw new Error('Batch ini bukan batch hijab');
+    }
+    if (currentBatch.status === 'COMPLETED') {
+      throw new Error('Batch sudah diselesaikan oleh pengguna lain');
+    }
+    if (currentBatch.status !== 'STEAM_DONE' && currentBatch.status !== 'STEAM_IN_PROGRESS') {
+      throw new Error('Status batch sudah berubah, muat ulang halaman lalu coba lagi');
+    }
+
+    const stokSebelum = stokSnap.exists()
+      ? Number((stokSnap.data() as { stok_tersedia?: number }).stok_tersedia) || 0
+      : 0;
+    const hargaProduksi = Math.max(
+      0,
+      Number(
+        currentBatch.harga_produksi_per_pcs ??
+          (modelSnap.data() as { harga_produksi?: number } | undefined)?.harga_produksi,
+      ) || 0,
+    );
+    const jumlahMasuk = Math.max(0, Math.floor(Number(riwayat.pcs_berhasil) || 0));
+    const stokSesudah = stokSebelum + jumlahMasuk;
+
+    transaction.update(batchRef, {
+      status: 'COMPLETED' as StatusBatch,
+      pcs_saat_ini: jumlahMasuk,
+      updatedAt: serverTimestamp(),
+    });
+    transaction.set(riwayatBatchRef, {
+      ...riwayat,
+      tipe: 'status_update',
+      status_dari: currentBatch.status,
+      status_ke: 'COMPLETED' as StatusBatch,
+      updated_by_uid: updatedByUid,
+      updated_by_nama: updatedByNama,
+      timestamp: serverTimestamp(),
+    });
+
+    const stockPayload = {
+      model_hijab_id: currentBatch.model_hijab_id,
+      nama_hijab: currentBatch.nama_model,
+      ...(currentBatch.warna_id ? { warna_id: currentBatch.warna_id } : {}),
+      ...(currentBatch.nama_warna ? { nama_warna: currentBatch.nama_warna } : {}),
+      ...(currentBatch.kode_hex_warna ? { kode_hex_warna: currentBatch.kode_hex_warna } : {}),
+      satuan: 'pcs' as const,
+      stok_tersedia: stokSesudah,
+      total_masuk: (Number(stokSnap.data()?.total_masuk) || 0) + jumlahMasuk,
+      total_keluar: Number(stokSnap.data()?.total_keluar) || 0,
+      ...(hargaProduksi > 0 ? { harga_per_unit: hargaProduksi } : {}),
+      updatedAt: serverTimestamp(),
+    };
+    if (!stokSnap.exists()) transaction.set(stokRef, stockPayload);
+    else transaction.update(stokRef, stockPayload);
+
+    transaction.set(riwayatStokRef, {
+      tipe: 'hasil_produksi',
+      jumlah: jumlahMasuk,
+      stok_sebelum: stokSebelum,
+      stok_sesudah: stokSesudah,
+      batch_id: batchId,
+      catatan: `Hasil produksi batch hijab ${currentBatch.nama_model}`,
+      timestamp: serverTimestamp(),
+    });
+  });
+}
+
 // Selesaikan batch + tambah stok barang jadi dalam satu transaction
 // Bisa dipanggil dari STEAM_IN_PROGRESS (skip STEAM_DONE) atau STEAM_DONE (recovery)
 export async function completeBatchProduksi(
@@ -830,6 +1145,10 @@ export async function completeBatchProduksi(
   }
   if (riwayat.pcs_berhasil <= 0) {
     throw new Error('PCS berhasil harus lebih dari 0 untuk menyelesaikan batch');
+  }
+  if (batch.jenis_produk === 'hijab') {
+    await completeBatchHijabProduksi(batchId, updatedByUid, updatedByNama, riwayat);
+    return;
   }
 
   // Gunakan newDetailUkuran jika disertakan (hasil aktual per ukuran dari form),
@@ -1006,6 +1325,22 @@ export async function getRiwayatBatch(batchId: string): Promise<RiwayatProses[]>
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as RiwayatProses);
 }
 
+export async function getRiwayatBatchPage(
+  batchId: string,
+  cursor: FirestoreCursor,
+  pageSize = 25,
+): Promise<CursorPage<RiwayatProses>> {
+  return getCursorPage(
+    query(
+      collection(db, COL, batchId, 'riwayat_proses'),
+      orderBy('timestamp', 'asc'),
+    ),
+    cursor,
+    (d) => ({ id: d.id, ...d.data() }) as RiwayatProses,
+    pageSize,
+  );
+}
+
 // Hapus batch produksi + kembalikan stok kain
 // Hanya boleh untuk batch yang belum COMPLETED
 export async function deleteBatchProduksi(batchId: string): Promise<void> {
@@ -1059,14 +1394,18 @@ export async function editKuantitasBatch(
   newDetailUkuran: DetailUkuran[],
   updatedByUid: string,
   updatedByNama: string,
-  alasan?: string
+  alasan?: string,
+  newJumlahTarget?: number,
 ): Promise<void> {
   const batch = await getBatchById(batchId);
   if (!batch) throw new Error('Batch tidak ditemukan');
   if (batch.status === 'COMPLETED') throw new Error('Batch selesai tidak dapat diedit');
 
-  const oldTotal = batch.total_pcs;
-  const newTotal = newDetailUkuran.reduce((s, du) => s + du.jumlah_pcs, 0);
+  const isHijab = batch.jenis_produk === 'hijab';
+  const oldTotal = totalBatchPcs(batch);
+  const newTotal = isHijab
+    ? Math.max(0, Math.floor(Number(newJumlahTarget) || 0))
+    : newDetailUkuran.reduce((s, du) => s + du.jumlah_pcs, 0);
   if (newTotal <= 0) throw new Error('Total pcs harus lebih dari 0');
 
   const newKainDigunakan = batch.kain_digunakan.map(kd => {
@@ -1127,8 +1466,10 @@ export async function editKuantitasBatch(
     }
 
     transaction.update(batchRef, {
-      detail_ukuran: newDetailUkuran,
+      detail_ukuran: isHijab ? [] : newDetailUkuran,
+      ...(isHijab ? { jumlah_target: newTotal } : {}),
       total_pcs: newTotal,
+      ...(isHijab ? { pcs_saat_ini: newTotal } : {}),
       kain_digunakan: newKainDigunakan,
       updatedAt: serverTimestamp(),
     });

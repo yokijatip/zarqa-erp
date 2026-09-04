@@ -11,7 +11,9 @@
     sinkronStokPotonganBatch,
     updateStatusBatch,
     completeBatchProduksi,
+    getBatchPage,
   } from "$lib/firebase/batch-produksi";
+  import type { FirestoreCursor } from "$lib/firebase/pagination";
   import {
     STATUS_LABEL,
     type BatchProduksi,
@@ -59,6 +61,10 @@
   let searchQuery = $state("");
   const PAGE_SIZE = 10;
   let currentPage = $state(1);
+  let pageCursors = $state<FirestoreCursor[]>([null]);
+  let pageHasNext = $state<boolean[]>([]);
+  let pageRows = $state<BatchProduksi[][]>([]);
+  let pageLoading = $state(false);
 
   // Quick-action dialog (steam inline popup)
   let quickOpen = $state(false);
@@ -84,27 +90,29 @@
   let quickWorkers = $derived(
     karyawanList.filter((k) => k.role === config.quickActionWorkerRole),
   );
-  let quickTotalBerhasil = $derived(
-    quickUkuranBerhasil.reduce((s, n) => s + n, 0),
-  );
   let quickTotalReject = $derived(
     quickUkuranReject.reduce((s, n) => s + (Number(n) || 0), 0),
   );
   let quickMaxPcs = $derived(
     quickBatch ? (quickBatch.pcs_saat_ini ?? quickBatch.total_pcs) : 0,
   );
+  let quickTotalBerhasil = $derived(
+    quickBatch?.jenis_produk === "hijab"
+      ? Math.max(0, quickMaxPcs - quickTotalReject)
+      : quickUkuranBerhasil.reduce((s, n) => s + n, 0),
+  );
   let quickFormValid = $derived.by(() => {
     if (!quickNextStatus) return false;
     if (quickNeedsWorker && !quickWorkerUid && !quickBatch?.penugasan?.steam)
       return false;
-    if (quickNeedsPcs && quickTotalReject > quickMaxPcs) return false;
+    if (quickNeedsPcs && (quickTotalReject > quickMaxPcs || quickTotalBerhasil + quickTotalReject !== quickMaxPcs)) return false;
     return true;
   });
 
   function openQuickAction(batch: BatchProduksi) {
     quickBatch = batch;
     quickWorkerUid = batch.penugasan?.steam?.uid ?? "";
-    quickUkuranReject = batch.detail_ukuran.map(() => 0);
+    quickUkuranReject = batch.jenis_produk === "hijab" ? [0] : batch.detail_ukuran.map(() => 0);
     quickError = null;
     quickOpen = true;
   }
@@ -130,7 +138,7 @@
         ? quickTotalBerhasil
         : (quickBatch.pcs_saat_ini ?? quickBatch.total_pcs);
       const pcsReject = quickNeedsPcs ? quickTotalReject : 0;
-      const newDetailUkuran = quickNeedsPcs
+      const newDetailUkuran = quickNeedsPcs && quickBatch.jenis_produk !== "hijab"
         ? quickBatch.detail_ukuran
             .map((du) => ({
               ukuran: du.ukuran,
@@ -212,18 +220,41 @@
     return list;
   });
 
-  let totalPages = $derived(Math.max(1, Math.ceil(filteredBatches.length / PAGE_SIZE)));
-  let visibleBatches = $derived(
-    filteredBatches.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE),
-  );
+  let totalPages = $derived(Math.max(1, pageHasNext[currentPage - 1] ? currentPage + 1 : currentPage));
+  let visibleBatches = $derived(filteredBatches);
 
   function setSearchQuery(value: string) {
     searchQuery = value;
     currentPage = 1;
+    batchList = pageRows[0] ?? batchList;
   }
 
-  function setPage(page: number) {
-    currentPage = Math.max(1, Math.min(page, totalPages));
+  async function setPage(page: number) {
+    const target = Math.max(1, page);
+    if (target === currentPage || pageLoading) return;
+    if (target < currentPage) {
+      currentPage = target;
+      batchList = pageRows[target - 1] ?? [];
+      return;
+    }
+    if (!pageHasNext[currentPage - 1]) return;
+
+    pageLoading = true;
+    try {
+      const result = await getBatchPage(config.activeStatuses, pageCursors[currentPage - 1] ?? null, PAGE_SIZE);
+      pageRows[target - 1] = result.items;
+      pageCursors[target] = result.cursor;
+      pageHasNext[target - 1] = result.hasNext;
+      pageRows = [...pageRows];
+      pageCursors = [...pageCursors];
+      pageHasNext = [...pageHasNext];
+      currentPage = target;
+      batchList = result.items;
+    } catch {
+      errorMsg = "Gagal memuat halaman batch berikutnya.";
+    } finally {
+      pageLoading = false;
+    }
   }
 
   $effect(() => {
@@ -297,8 +328,16 @@
   async function load(force = false) {
     loading = true;
     errorMsg = null;
+    currentPage = 1;
+    pageCursors = [null];
+    pageHasNext = [];
+    pageRows = [];
     try {
-      batchList = await batchCache.get(force);
+      const result = await getBatchPage(config.activeStatuses, null, PAGE_SIZE);
+      batchList = result.items;
+      pageRows = [result.items];
+      pageCursors = [null, result.cursor];
+      pageHasNext = [result.hasNext];
     } catch {
       errorMsg = "Gagal memuat batch produksi.";
     } finally {
@@ -359,11 +398,8 @@
   // Otomatis sync semua batch CUTTING_DONE yang belum masuk stok_potongan
   async function autoSyncPending() {
     if (config.key !== "cutting") return;
-    const pending = batchList.filter(
-      (b) =>
-        b.status === "CUTTING_DONE" &&
-        !b.dari_potongan &&
-        !b.stok_potongan_synced,
+    const pending = (await getBatchPage(["CUTTING_DONE"], null, 50)).items.filter(
+      (b) => !b.dari_potongan && !b.stok_potongan_synced,
     );
     if (pending.length === 0) return;
     let synced = false;
@@ -610,6 +646,9 @@
                       <p class="text-sm font-medium text-gray-800">
                         {batch.nama_model}
                       </p>
+                      <span class="rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px] font-semibold text-gray-500">
+                        {batch.jenis_produk === "hijab" ? "Hijab" : "Baju"}
+                      </span>
                       {#if batch.nama_warna}
                         <span
                           class="inline-flex items-center gap-1 rounded-full bg-gray-100 px-1.5 py-0.5 text-[11px] font-medium text-gray-600"
@@ -622,6 +661,7 @@
                         </span>
                       {/if}
                     </div>
+                    {#if batch.jenis_produk !== "hijab"}
                     <div class="flex flex-wrap gap-1">
                       {#each batch.detail_ukuran as ukuran}
                         <span
@@ -631,6 +671,7 @@
                         </span>
                       {/each}
                     </div>
+                    {/if}
                   </div>
                 </Table.Cell>
                 <Table.Cell>
@@ -696,9 +737,9 @@
         </Table.Root>
         <div class="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 px-5 py-3 text-xs text-gray-500">
           <span>
-            Menampilkan {Math.min((currentPage - 1) * PAGE_SIZE + 1, filteredBatches.length)}-{Math.min(currentPage * PAGE_SIZE, filteredBatches.length)} dari {filteredBatches.length} batch
+            Menampilkan {filteredBatches.length} batch pada halaman {currentPage}
           </span>
-          {#if totalPages > 1}
+          {#if totalPages > 1 || currentPage > 1}
             <div class="flex items-center gap-2">
               <button
                 type="button"
@@ -709,11 +750,11 @@
               >
                 <ChevronLeftIcon class="h-4 w-4" />
               </button>
-              <span class="min-w-20 text-center font-medium text-gray-700">Halaman {currentPage} / {totalPages}</span>
+              <span class="min-w-20 text-center font-medium text-gray-700">Halaman {currentPage}{pageLoading ? "..." : ""}</span>
               <button
                 type="button"
                 aria-label="Halaman berikutnya"
-                disabled={currentPage === totalPages}
+                disabled={pageLoading || !pageHasNext[currentPage - 1]}
                 onclick={() => setPage(currentPage + 1)}
                 class="inline-flex h-8 w-8 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
               >
@@ -735,7 +776,7 @@
           <Dialog.Title>
             {quickNextStatus === "STEAM_IN_PROGRESS"
               ? "Mulai Steam"
-              : "Selesaikan Steam & Kirim ke Barang Jadi"}
+              : `Selesaikan Steam & Kirim ke ${quickBatch?.jenis_produk === "hijab" ? "Stok Hijab" : "Barang Jadi"}`}
           </Dialog.Title>
           <Dialog.Description>
             <span class="font-medium text-gray-800"
@@ -794,6 +835,17 @@
           {/if}
 
           {#if quickNeedsPcs}
+            {#if quickBatch?.jenis_produk === "hijab"}
+              <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                <div class="flex items-center justify-between text-sm">
+                  <span class="font-medium text-gray-700">Total batch hijab</span>
+                  <span class="font-semibold text-gray-900">{quickMaxPcs} pcs</span>
+                </div>
+                <label class="mt-3 block text-xs font-medium text-gray-600" for="quick-hijab-reject">Reject</label>
+                <Input id="quick-hijab-reject" type="number" min="0" max={quickMaxPcs} class="mt-1" bind:value={quickUkuranReject[0]} />
+                <p class="mt-1 text-xs text-gray-400">Sisa otomatis dihitung sebagai pcs berhasil. Hijab tidak memakai ukuran.</p>
+              </div>
+            {:else}
             <!-- Tabel per-ukuran -->
             <div class="overflow-hidden rounded-lg border border-gray-200">
               <table class="w-full text-sm">
@@ -869,13 +921,14 @@
                 </tfoot>
               </table>
             </div>
+            {/if}
             {#if quickTotalReject > quickMaxPcs}
               <p class="text-xs text-red-500">
                 Total reject melebihi stok saat ini ({quickMaxPcs} pcs)
               </p>
             {/if}
             <p class="text-xs text-emerald-600">
-              Batch akan langsung diselesaikan dan masuk ke stok barang jadi.
+              Batch akan langsung diselesaikan dan masuk ke {quickBatch?.jenis_produk === "hijab" ? "stok hijab" : "stok barang jadi"}.
             </p>
           {/if}
 
@@ -909,7 +962,7 @@
             {:else}
               {quickNextStatus === "STEAM_IN_PROGRESS"
                 ? "Mulai Steam"
-                : "Selesaikan & Kirim ke Barang Jadi"}
+                : `Selesaikan & Kirim ke ${quickBatch?.jenis_produk === "hijab" ? "Stok Hijab" : "Barang Jadi"}`}
             {/if}
           </Button>
         </Dialog.Footer>

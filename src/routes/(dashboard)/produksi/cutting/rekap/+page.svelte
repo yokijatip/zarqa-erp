@@ -1,8 +1,9 @@
 <script lang="ts">
   import { goto } from "$app/navigation";
   import { onMount } from "svelte";
-  import { batchCache } from "$lib/stores/data-cache.svelte";
-  import { STATUS_LABEL, type BatchProduksi, type KainDigunakan } from "$lib/types";
+  import { getBatchPage } from "$lib/firebase/batch-produksi";
+  import { STATUS_LABEL, type BatchProduksi, type KainDigunakan, type StatusBatch } from "$lib/types";
+  import type { FirestoreCursor } from "$lib/firebase/pagination";
   import { Button } from "$lib/components/ui/button";
   import * as Table from "$lib/components/ui/table";
   import ArrowLeftIcon from "@lucide/svelte/icons/arrow-left";
@@ -13,8 +14,15 @@
   let loading = $state(true);
   let exporting = $state(false);
   let searchQuery = $state("");
+  let currentPage = $state(1);
+  let pageHasNext = $state(false);
+  let pageCursor = $state<FirestoreCursor>(null);
+  let pageCursors = $state<FirestoreCursor[]>([null]);
+  let pageCache = $state<BatchProduksi[][]>([]);
+  let pageLoading = $state(false);
+  const PAGE_SIZE = 25;
+  const CUTTING_STATUSES: StatusBatch[] = ["PENDING_CUTTING", "CUTTING_IN_PROGRESS", "CUTTING_DONE"];
 
-  const CUTTING_STATUSES = new Set(["PENDING_CUTTING", "CUTTING_IN_PROGRESS", "CUTTING_DONE"]);
 
   type RekapGroup = {
     nama: string;
@@ -89,7 +97,7 @@
   let rekapRows = $derived.by(() => {
     const q = searchQuery.trim().toLowerCase();
     return batchList
-      .filter((batch) => CUTTING_STATUSES.has(batch.status))
+      .filter((batch) => CUTTING_STATUSES.includes(batch.status))
       .filter((batch) => !batch.dari_potongan)
       .filter((batch) => {
         if (!q) return true;
@@ -127,13 +135,48 @@
       .sort((a, b) => a.nama.localeCompare(b.nama));
   });
 
-  async function load(force = false) {
+  async function load(_force = false) {
     loading = true;
     try {
-      batchList = await batchCache.get(force);
+      const firstPage = await getBatchPage(CUTTING_STATUSES, null, PAGE_SIZE);
+      batchList = firstPage.items;
+      currentPage = 1;
+      pageCursor = firstPage.cursor;
+      pageHasNext = firstPage.hasNext;
+      pageCursors = [null, firstPage.cursor];
+      pageCache = [firstPage.items];
     } finally {
       loading = false;
     }
+  }
+
+  async function nextPage() {
+    if (pageLoading || !pageHasNext) return;
+    pageLoading = true;
+    try {
+      const result = await getBatchPage(
+        CUTTING_STATUSES,
+        pageCursors[currentPage] ?? pageCursor,
+        PAGE_SIZE,
+      );
+      batchList = result.items;
+      pageCache[currentPage] = result.items;
+      pageCache = [...pageCache];
+      pageCursors[currentPage + 1] = result.cursor;
+      pageCursors = [...pageCursors];
+      pageCursor = result.cursor;
+      pageHasNext = result.hasNext;
+      currentPage += 1;
+    } finally {
+      pageLoading = false;
+    }
+  }
+
+  function previousPage() {
+    if (pageLoading || currentPage <= 1) return;
+    currentPage -= 1;
+    batchList = pageCache[currentPage - 1] ?? batchList;
+    pageHasNext = true;
   }
 
   async function exportPdf() {
@@ -276,5 +319,15 @@
         </Table.Root>
       </section>
     {/each}
+    {#if currentPage > 1 || pageHasNext}
+      <div class="flex items-center justify-between rounded-xl border border-gray-100 bg-white px-4 py-3 text-xs text-gray-500 shadow-sm">
+        <span>Menampilkan {rekapRows.length} batch pada halaman {currentPage}</span>
+        <div class="flex items-center gap-2">
+          <Button variant="outline" size="sm" disabled={currentPage === 1 || pageLoading} onclick={previousPage}>Sebelumnya</Button>
+          <span>Halaman {currentPage}</span>
+          <Button variant="outline" size="sm" disabled={!pageHasNext || pageLoading} onclick={nextPage}>{pageLoading ? "Memuat..." : "Berikutnya"}</Button>
+        </div>
+      </div>
+    {/if}
   {/if}
 </div>

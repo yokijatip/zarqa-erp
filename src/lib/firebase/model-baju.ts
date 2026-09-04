@@ -5,6 +5,7 @@ import {
   query, orderBy, where,
 } from 'firebase/firestore';
 import { db } from './config';
+import { getCursorPage, type FirestoreCursor, type CursorPage } from './pagination';
 import { canonicalUkuran, type ModelBaju, type ModelBajuInput, type UkuranBaju } from '$lib/types';
 
 const COL = 'model_baju';
@@ -26,6 +27,13 @@ function normalizeModel(model: ModelBaju): ModelBaju {
     kebutuhan_yard_per_pcs: normalizeSizeMap(model.kebutuhan_yard_per_pcs as Partial<Record<string, number>>),
     harga_jual_per_ukuran: normalizeSizeMap(model.harga_jual_per_ukuran as Partial<Record<string, number>>),
     harga_produksi_per_ukuran: normalizeSizeMap(model.harga_produksi_per_ukuran as Partial<Record<string, number>>),
+    varian_penjualan: Array.isArray(model.varian_penjualan)
+      ? model.varian_penjualan.map((variant) => ({
+          ...variant,
+          komponen: Array.isArray(variant.komponen) ? variant.komponen : [],
+          aktif: variant.aktif !== false,
+        }))
+      : [],
   };
 }
 
@@ -36,6 +44,23 @@ export async function getModelBajuList(hanyaAktif = true): Promise<ModelBaju[]> 
     : query(collection(db, COL), orderBy('nama_model'));
   const snap = await getDocs(q);
   return snap.docs.map((d) => normalizeModel({ id: d.id, ...d.data() } as ModelBaju));
+}
+
+export async function getModelBajuPage(
+  hanyaAktif: boolean,
+  cursor: FirestoreCursor,
+  pageSize = 25,
+): Promise<CursorPage<ModelBaju>> {
+  const baseQuery = hanyaAktif
+    ? query(collection(db, COL), where('aktif', '==', true), orderBy('nama_model'))
+    : query(collection(db, COL), orderBy('nama_model'));
+
+  return getCursorPage(
+    baseQuery,
+    cursor,
+    (d) => normalizeModel({ id: d.id, ...d.data() } as ModelBaju),
+    pageSize,
+  );
 }
 
 // Ambil satu model baju by ID
@@ -89,10 +114,11 @@ export async function deleteModelBaju(id: string): Promise<void> {
     throw new Error('Nonaktifkan model terlebih dahulu sebelum menghapus permanen');
   }
 
-  const [batchSnap, stokPotonganSnap, stokBarangJadiSnap] = await Promise.all([
+  const [batchSnap, stokPotonganSnap, stokBarangJadiSnap, linkedModelSnap] = await Promise.all([
     getDocs(query(collection(db, 'batch_produksi'), where('model_id', '==', id))),
     getDocs(query(collection(db, 'stok_potongan'), where('model_id', '==', id))),
     getDocs(query(collection(db, 'stok_barang_jadi'), where('model_id', '==', id))),
+    getDocs(query(collection(db, COL), where('stok_model_id', '==', id))),
   ]);
 
   if (!batchSnap.empty) {
@@ -105,6 +131,10 @@ export async function deleteModelBaju(id: string): Promise<void> {
 
   if (!stokBarangJadiSnap.empty) {
     throw new Error('Model masih memiliki stok barang jadi dan tidak dapat dihapus');
+  }
+
+  if (!linkedModelSnap.empty) {
+    throw new Error('Model masih menjadi sumber stok model lain dan tidak dapat dihapus');
   }
 
   await deleteDoc(doc(db, COL, id));

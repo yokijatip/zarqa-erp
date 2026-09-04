@@ -1,8 +1,9 @@
 <script lang="ts">
   import { afterNavigate } from "$app/navigation";
   import { stokPotonganCache, batchCache } from "$lib/stores/data-cache.svelte";
-  import { sinkronStokPotonganBatch } from "$lib/firebase/batch-produksi";
-  import { hapusStokPotongan, koreksiStokPotongan } from "$lib/firebase/stok-potongan";
+  import { sinkronStokPotonganBatch, getBatchPage } from "$lib/firebase/batch-produksi";
+  import { hapusStokPotongan, koreksiStokPotongan, getStokPotonganPage } from "$lib/firebase/stok-potongan";
+  import type { FirestoreCursor } from "$lib/firebase/pagination";
   import type { StokPotongan, UkuranBaju } from "$lib/types";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -22,10 +23,18 @@
   let errorMsg = $state<string | null>(null);
   let searchQuery = $state("");
   let refreshInProgress = false;
+  const PAGE_SIZE = 25;
+  let currentPage = $state(1);
+  let pageCursors = $state<FirestoreCursor[]>([null]);
+  let pageHasNext = $state<boolean[]>([]);
+  let pageCache = $state<StokPotongan[][]>([]);
+  let pageLoading = $state(false);
 
   // ── Group per model+warna ─────────────────────────────────────────
   type ModelGroup = {
     key: string;
+    jenis_produk: 'baju' | 'hijab';
+    model_hijab_id?: string;
     model_id: string;
     nama_model: string;
     nama_warna?: string;
@@ -40,10 +49,13 @@
     const map = new Map<string, ModelGroup>();
     for (const s of stokList) {
       // key: model_id + warna (satu model bisa multi warna)
-      const key = `${s.model_id}__${s.nama_warna ?? ''}`;
+      const jenisProduk = s.jenis_produk ?? (s.model_hijab_id || !s.ukuran ? 'hijab' : 'baju');
+      const key = `${jenisProduk}__${s.model_hijab_id ?? s.model_id}__${s.nama_warna ?? ''}`;
       if (!map.has(key)) {
         map.set(key, {
           key,
+          jenis_produk: jenisProduk,
+          model_hijab_id: s.model_hijab_id,
           model_id: s.model_id,
           nama_model: s.nama_model,
           nama_warna: s.nama_warna,
@@ -62,7 +74,10 @@
     }
     // Urutkan items dalam setiap group sesuai urutan ukuran
     for (const g of map.values()) {
-      g.items.sort((a, b) => URUTAN_UKURAN.indexOf(a.ukuran) - URUTAN_UKURAN.indexOf(b.ukuran));
+      g.items.sort((a, b) =>
+        (a.ukuran ? URUTAN_UKURAN.indexOf(a.ukuran) : -1) -
+        (b.ukuran ? URUTAN_UKURAN.indexOf(b.ukuran) : -1),
+      );
     }
     return [...map.values()].sort((a, b) => a.nama_model.localeCompare(b.nama_model, 'id'));
   });
@@ -78,12 +93,26 @@
   let totalPcs   = $derived(stokList.reduce((sum, s) => sum + s.stok_tersedia, 0));
   let stokHabis  = $derived(stokList.filter((s) => s.stok_tersedia === 0).length);
 
+  function produkLabel(item: Pick<StokPotongan, 'jenis_produk' | 'model_hijab_id' | 'ukuran'>): string {
+    return item.jenis_produk === 'hijab' || item.model_hijab_id || !item.ukuran ? 'Hijab' : 'Baju';
+  }
+
+  function potonganLabel(item: Pick<StokPotongan, 'jenis_produk' | 'model_hijab_id' | 'ukuran'>): string {
+    return produkLabel(item) === 'Hijab' ? 'Tanpa ukuran' : item.ukuran ?? 'Tanpa ukuran';
+  }
+
   // ── Data ─────────────────────────────────────────────────────────
   async function load(force = false) {
     loading = true;
     errorMsg = null;
     try {
-      stokList = await stokPotonganCache.get(force);
+      void force;
+      const firstPage = await getStokPotonganPage(null, PAGE_SIZE);
+      stokList = firstPage.items;
+      pageCache = [firstPage.items];
+      pageCursors = [null, firstPage.cursor];
+      pageHasNext = [firstPage.hasNext];
+      currentPage = 1;
     } catch {
       errorMsg = "Gagal memuat data stok potongan.";
     } finally {
@@ -91,11 +120,43 @@
     }
   }
 
+  async function nextPage() {
+    if (pageLoading || !pageHasNext[currentPage - 1]) return;
+    pageLoading = true;
+    try {
+      const result = await getStokPotonganPage(pageCursors[currentPage] ?? null, PAGE_SIZE);
+      pageCache[currentPage] = result.items;
+      pageCursors[currentPage + 1] = result.cursor;
+      pageHasNext[currentPage] = result.hasNext;
+      pageCache = [...pageCache];
+      pageCursors = [...pageCursors];
+      pageHasNext = [...pageHasNext];
+      currentPage += 1;
+      stokList = result.items;
+    } catch (e) {
+      errorMsg = e instanceof Error ? e.message : "Gagal memuat halaman berikutnya.";
+    } finally {
+      pageLoading = false;
+    }
+  }
+
+  function previousPage() {
+    if (currentPage <= 1 || pageLoading) return;
+    currentPage -= 1;
+    stokList = pageCache[currentPage - 1] ?? stokList;
+  }
+
+  function setSearch(value: string) {
+    searchQuery = value;
+    currentPage = 1;
+    stokList = pageCache[0] ?? stokList;
+  }
+
   async function autoSyncPending() {
     try {
-      const batches = await batchCache.get();
-      const pending = batches.filter(
-        (b) => b.status === 'CUTTING_DONE' && !b.dari_potongan && !b.stok_potongan_synced
+      const batches = await getBatchPage(['CUTTING_DONE'], null, 50);
+      const pending = batches.items.filter(
+        (b) => !b.dari_potongan && !b.stok_potongan_synced
       );
       if (pending.length === 0) return;
       let synced = false;
@@ -163,7 +224,7 @@
       stokPotonganCache.invalidate();
       await load(true);
       koreksiOpen = false;
-      successMsg = `Stok ${koreksiTarget.nama_model} ${koreksiTarget.ukuran} dikoreksi ke ${koreksiJumlah} pcs.`;
+      successMsg = `Stok ${koreksiTarget.nama_model} ${potonganLabel(koreksiTarget)} dikoreksi ke ${koreksiJumlah} pcs.`;
       setTimeout(() => (successMsg = null), 3500);
     } catch (e: any) {
       koreksiError = e?.message ?? 'Gagal menyimpan koreksi.';
@@ -187,7 +248,7 @@
       stokPotonganCache.invalidate();
       await load(true);
       hapusOpen = false;
-      successMsg = `Stok potongan ${hapusTarget.nama_model} ${hapusTarget.ukuran} berhasil dihapus.`;
+      successMsg = `Stok potongan ${hapusTarget.nama_model} ${potonganLabel(hapusTarget)} berhasil dihapus.`;
       setTimeout(() => (successMsg = null), 3500);
     } catch (e: any) {
       hapusError = e?.message ?? 'Gagal menghapus stok potongan.';
@@ -230,9 +291,9 @@
       </div>
     {/each}
   {:else}
-    <StatCard title="Jenis Tersedia" value={totalJenis} icon={ScissorsIcon} footerSubtext="jenis ukuran dengan stok > 0" />
+    <StatCard title="Jenis Tersedia" value={totalJenis} icon={ScissorsIcon} footerSubtext="stok potongan dengan stok > 0" />
     <StatCard title="Total PCS Tersedia" value={totalPcs} icon={PackageIcon} footerSubtext="pcs potongan siap pakai" class="border-blue-100 bg-blue-50" valueClass="text-blue-700" />
-    <StatCard title="Stok Habis" value={stokHabis} icon={PackageXIcon} footerSubtext="jenis ukuran dengan stok 0" class="border-red-100 bg-red-50" valueClass="text-red-700" />
+    <StatCard title="Stok Habis" value={stokHabis} icon={PackageXIcon} footerSubtext="stok potongan dengan stok 0" class="border-red-100 bg-red-50" valueClass="text-red-700" />
   {/if}
 </div>
 
@@ -245,7 +306,8 @@
     <input
       type="text"
       placeholder="Cari nama model..."
-      bind:value={searchQuery}
+      value={searchQuery}
+      oninput={(event) => setSearch((event.currentTarget as HTMLInputElement).value)}
       class="w-full rounded-lg border border-gray-200 bg-white py-2 pl-9 pr-4 text-sm text-gray-700 placeholder:text-gray-400 focus:outline-none"
     />
   </div>
@@ -269,7 +331,7 @@
     </div>
     {#if searchQuery}
       <p class="text-sm font-medium text-gray-500">Tidak ada hasil untuk "{searchQuery}"</p>
-      <Button variant="link" size="sm" onclick={() => (searchQuery = "")}>Hapus pencarian</Button>
+      <Button variant="link" size="sm" onclick={() => setSearch("")}>Hapus pencarian</Button>
     {:else}
       <p class="text-sm font-medium text-gray-500">Belum ada stok potongan</p>
       <p class="text-xs text-gray-400">Stok akan muncul otomatis saat cutting selesai</p>
@@ -280,7 +342,7 @@
   <!-- ── Table header ─────────────────────────────────────────────── -->
   <div class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm">
     <div class="grid grid-cols-[1fr_auto_auto_auto] items-center border-b border-gray-100 bg-gray-50 px-5 py-2.5 text-xs font-semibold uppercase tracking-wide text-gray-400">
-      <span>Model & Ukuran</span>
+      <span>Model & Detail Potongan</span>
       <span class="w-32 text-right">Total Tersedia</span>
       <span class="w-28 text-right">Masuk</span>
       <span class="w-28 text-right">Terpakai</span>
@@ -294,6 +356,7 @@
           <div class="min-w-0">
             <div class="mb-2 flex flex-wrap items-center gap-2">
               <p class="text-sm font-semibold text-gray-800">{group.nama_model}</p>
+              <span class="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-500">{group.jenis_produk === 'hijab' ? 'Hijab' : 'Baju'}</span>
               {#if group.nama_warna}
                 <span class="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
                   {#if group.kode_hex_warna}
@@ -310,18 +373,18 @@
                   <button
                     type="button"
                     onclick={() => bukaKoreksi(item)}
-                    title="Koreksi stok {item.ukuran}"
+                    title="Koreksi stok {potonganLabel(item)}"
                     class="inline-flex items-center gap-1 px-2 py-0.5 transition hover:bg-black/5"
                   >
-                    <span class="font-bold">{item.ukuran}</span>
+                    <span class="font-bold">{potonganLabel(item)}</span>
                     <span class="text-[11px] opacity-80">{item.stok_tersedia}</span>
                     <PencilIcon class="h-2.5 w-2.5 opacity-50" />
                   </button>
                   <button
                     type="button"
                     onclick={() => bukaHapus(item)}
-                    title="Hapus stok {item.ukuran}"
-                    aria-label="Hapus stok {item.nama_model} ukuran {item.ukuran}"
+                    title="Hapus stok {potonganLabel(item)}"
+                    aria-label="Hapus stok {item.nama_model} {potonganLabel(item)}"
                     class="border-l border-black/10 px-1.5 py-0.5 text-red-500 transition hover:bg-red-100 hover:text-red-700"
                   >
                     <Trash2Icon class="h-3 w-3" />
@@ -358,6 +421,13 @@
       <p class="text-xs text-gray-400">
         {filteredGroups.length} model · {stokList.length} jenis ukuran total · <span class="text-blue-500">Klik ukuran untuk koreksi stok</span>
       </p>
+      {#if currentPage > 1 || pageHasNext[currentPage - 1]}
+        <div class="mt-3 flex items-center gap-2">
+          <Button variant="outline" size="sm" disabled={currentPage === 1 || pageLoading} onclick={previousPage}>Sebelumnya</Button>
+          <span class="text-xs font-medium text-gray-700">Halaman {currentPage}{pageLoading ? "..." : ""}</span>
+          <Button variant="outline" size="sm" disabled={pageLoading || !pageHasNext[currentPage - 1]} onclick={nextPage}>Berikutnya</Button>
+        </div>
+      {/if}
     </div>
   </div>
 {/if}
@@ -370,7 +440,7 @@
         <Dialog.Title>Koreksi Stok Potongan</Dialog.Title>
         <Dialog.Description>
           <span class="font-semibold text-gray-800">{koreksiTarget.nama_model}</span>
-          ukuran <span class="font-semibold">{koreksiTarget.ukuran}</span>
+          <span class="font-semibold">{potonganLabel(koreksiTarget)}</span>
           {#if koreksiTarget.nama_warna}· {koreksiTarget.nama_warna}{/if}
         </Dialog.Description>
       </Dialog.Header>
@@ -417,14 +487,14 @@
         <Dialog.Title class="text-red-700">Hapus Stok Potongan?</Dialog.Title>
         <Dialog.Description>
           Stok potongan <span class="font-semibold text-gray-800">{hapusTarget.nama_model}</span>
-          ukuran <span class="font-semibold">{hapusTarget.ukuran}</span>
+          <span class="font-semibold">{potonganLabel(hapusTarget)}</span>
           {#if hapusTarget.nama_warna}· {hapusTarget.nama_warna}{/if}
           akan dihapus permanen dari daftar stok.
         </Dialog.Description>
       </Dialog.Header>
       <div class="rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
         Jumlah saat ini: <span class="font-semibold">{hapusTarget.stok_tersedia} pcs</span>.
-        Data total masuk dan terpakai untuk ukuran ini juga ikut hilang.
+        Data total masuk dan terpakai untuk stok ini juga ikut hilang.
       </div>
       {#if hapusError}
         <p class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{hapusError}</p>

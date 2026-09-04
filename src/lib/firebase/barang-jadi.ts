@@ -2,10 +2,11 @@
 import {
   collection, doc, getDocs, getDoc,
   serverTimestamp, runTransaction, deleteDoc,
-  query, orderBy, where, limit, Timestamp,
+  query, orderBy, where, limit, Timestamp, type Transaction,
 } from 'firebase/firestore';
 import { db } from './config';
-import { canonicalUkuran, ukuranAliases, type StokBarangJadi, type BarangKeluar, type BarangKeluarInput, type RiwayatBarangJadi, type TipeRiwayatBarangJadi, type SumberProduksi, type BatchProduksi, type BarangKeluarItem } from '$lib/types';
+import { getCursorPage, type FirestoreCursor, type CursorPage } from './pagination';
+import { canonicalUkuran, ukuranAliases, type StokBarangJadi, type BarangKeluar, type BarangKeluarInput, type RiwayatBarangJadi, type TipeRiwayatBarangJadi, type SumberProduksi, type BatchProduksi, type BarangKeluarItem, type StokHijab, type KomponenVarianPenjualan } from '$lib/types';
 
 const COL_RIWAYAT = 'riwayat_barang_jadi';
 
@@ -19,6 +20,55 @@ type RiwayatMeta = {
 
 const COL_JADI = 'stok_barang_jadi';
 const COL_KELUAR = 'barang_keluar';
+const COL_HIJAB = 'stok_hijab';
+
+type HijabUsage = {
+  id: string;
+  nama: string;
+  jumlah: number;
+  sumber: string[];
+};
+
+function hijabStockId(component: KomponenVarianPenjualan): string | undefined {
+  return component.stok_hijab_id ?? component.ref_id;
+}
+
+function managedHijabComponents(item: BarangKeluarItem): KomponenVarianPenjualan[] {
+  return (item.komponen_varian ?? []).filter(
+    (component) => component.tipe === 'aksesori' && component.kelola_stok && hijabStockId(component) && component.jumlah > 0,
+  );
+}
+
+function aggregateHijabUsage(items: BarangKeluarItem[]): HijabUsage[] {
+  const usage = new Map<string, HijabUsage>();
+  for (const item of items) {
+    for (const component of managedHijabComponents(item)) {
+      const stockId = hijabStockId(component);
+      if (!stockId) continue;
+      const current = usage.get(stockId);
+      const jumlah = item.total_pcs * component.jumlah;
+      usage.set(stockId, {
+        id: stockId,
+        nama: component.nama,
+        jumlah: (current?.jumlah ?? 0) + jumlah,
+        sumber: [...new Set([...(current?.sumber ?? []), [item.nama_model, item.nama_varian].filter(Boolean).join(' - ')])],
+      });
+    }
+  }
+  return [...usage.values()];
+}
+
+function addHijabHistory(
+  transaction: Transaction,
+  hijabId: string,
+  data: { tipe: string; jumlah: number; stok_sebelum: number; stok_sesudah: number; catatan?: string },
+) {
+  const historyRef = doc(collection(db, COL_HIJAB, hijabId, 'riwayat'));
+  transaction.set(historyRef, {
+    ...data,
+    timestamp: serverTimestamp(),
+  });
+}
 
 function warnaDocKey(namaWarna: string): string {
   return namaWarna.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
@@ -80,6 +130,22 @@ export async function getStokBarangJadi(): Promise<StokBarangJadi[]> {
   const q = query(collection(db, COL_JADI), orderBy('nama_model'));
   const snap = await getDocs(q);
   return mergeLegacySizes(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as StokBarangJadi));
+}
+
+function stokModelId(item: BarangKeluarItem): string {
+  return item.stok_model_id ?? item.model_id;
+}
+
+export async function getStokBarangJadiPage(
+  cursor: FirestoreCursor,
+  pageSize = 25,
+): Promise<CursorPage<StokBarangJadi>> {
+  return getCursorPage(
+    query(collection(db, COL_JADI), orderBy('nama_model')),
+    cursor,
+    (d) => ({ id: d.id, ...d.data() }) as StokBarangJadi,
+    pageSize,
+  );
 }
 
 function mergeLegacySizes(rows: StokBarangJadi[]): StokBarangJadi[] {
@@ -198,15 +264,20 @@ export async function catatBarangKeluar(
   const stokRefs = new Map<string, ReturnType<typeof doc>>();
 
   for (const item of keluarItems) {
+    const stockModelId = stokModelId(item);
     for (const detail of item.detail_keluar) {
       const q = item.nama_warna
-        ? query(collection(db, COL_JADI), where('model_id', '==', item.model_id), where('ukuran', 'in', ukuranAliases(detail.ukuran)), where('nama_warna', '==', item.nama_warna))
-        : query(collection(db, COL_JADI), where('model_id', '==', item.model_id), where('ukuran', 'in', ukuranAliases(detail.ukuran)));
+        ? query(collection(db, COL_JADI), where('model_id', '==', stockModelId), where('ukuran', 'in', ukuranAliases(detail.ukuran)), where('nama_warna', '==', item.nama_warna))
+        : query(collection(db, COL_JADI), where('model_id', '==', stockModelId), where('ukuran', 'in', ukuranAliases(detail.ukuran)));
       const snap = await getDocs(q);
       if (snap.empty) throw new Error(`Stok ${item.nama_model} ukuran ${detail.ukuran} tidak ditemukan`);
-      stokRefs.set(`${item.model_id}|${item.nama_warna ?? ''}|${detail.ukuran}`, snap.docs[0].ref);
+      stokRefs.set(`${stockModelId}|${item.nama_warna ?? ''}|${detail.ukuran}`, snap.docs[0].ref);
     }
   }
+
+  const hijabUsage = aggregateHijabUsage(keluarItems);
+  const hijabRefs = new Map<string, ReturnType<typeof doc>>();
+  for (const usage of hijabUsage) hijabRefs.set(usage.id, doc(db, COL_HIJAB, usage.id));
 
   const totalPcs = keluarItems.reduce((sum, item) => sum + item.total_pcs, 0);
   const totalPendingPcs = items
@@ -217,14 +288,25 @@ export async function catatBarangKeluar(
   const ref = doc(collection(db, COL_KELUAR));
 
   await runTransaction(db, async (transaction) => {
-    const stokSnapshots = new Map<string, { ref: ReturnType<typeof doc>; data: StokBarangJadi }>();
+    const stokSnapshots = new Map<string, { ref: ReturnType<typeof doc>; data: StokBarangJadi; jumlahDipakai: number }>();
+    const hijabSnapshots = new Map<string, { ref: ReturnType<typeof doc>; data: StokHijab }>();
 
     for (const item of keluarItems) {
+      const stockModelId = stokModelId(item);
       for (const detail of item.detail_keluar) {
-        const key = `${item.model_id}|${item.nama_warna ?? ''}|${detail.ukuran}`;
+        const key = `${stockModelId}|${item.nama_warna ?? ''}|${detail.ukuran}`;
         const stokRef = stokRefs.get(key);
         if (!stokRef) {
           throw new Error(`Stok ${item.nama_model} ukuran ${detail.ukuran} tidak ditemukan`);
+        }
+
+        const existing = stokSnapshots.get(key);
+        if (existing) {
+          existing.jumlahDipakai += detail.jumlah_pcs;
+          if (existing.data.stok_tersedia < existing.jumlahDipakai) {
+            throw new Error(`Stok ${item.nama_model} ukuran ${detail.ukuran} tidak mencukupi`);
+          }
+          continue;
         }
 
         const existingSnap = await transaction.get(stokRef);
@@ -237,31 +319,67 @@ export async function catatBarangKeluar(
           throw new Error(`Stok ${item.nama_model} ukuran ${detail.ukuran} tidak mencukupi`);
         }
 
-        stokSnapshots.set(key, { ref: stokRef, data: stok });
+        stokSnapshots.set(key, { ref: stokRef, data: stok, jumlahDipakai: detail.jumlah_pcs });
       }
     }
 
+    for (const usage of hijabUsage) {
+      const hijabRef = hijabRefs.get(usage.id);
+      if (!hijabRef) throw new Error(`Stok hijab ${usage.nama} tidak ditemukan`);
+      const hijabSnap = await transaction.get(hijabRef);
+      if (!hijabSnap.exists()) throw new Error(`Stok hijab "${usage.nama}" tidak ditemukan`);
+      const hijab = { id: hijabSnap.id, ...hijabSnap.data() } as StokHijab;
+      if (hijab.stok_tersedia < usage.jumlah) {
+        throw new Error(`Stok hijab "${hijab.nama_hijab}" tidak mencukupi (tersedia: ${hijab.stok_tersedia} pcs, dibutuhkan: ${usage.jumlah} pcs)`);
+      }
+      hijabSnapshots.set(usage.id, { ref: hijabRef, data: hijab });
+    }
+
     for (const item of keluarItems) {
+      const stockModelId = stokModelId(item);
       for (const detail of item.detail_keluar) {
-        const key = `${item.model_id}|${item.nama_warna ?? ''}|${detail.ukuran}`;
+        const key = `${stockModelId}|${item.nama_warna ?? ''}|${detail.ukuran}`;
         const stokSnapshot = stokSnapshots.get(key);
         if (!stokSnapshot) {
           throw new Error(`Stok ${item.nama_model} ukuran ${detail.ukuran} tidak ditemukan`);
         }
 
-        const { ref: stokRef, data: stok } = stokSnapshot;
+        const { data: stok } = stokSnapshot;
         const { consumed, remaining } = consumeSumberProduksiLots(stok.sumber_produksi, detail.jumlah_pcs);
       // Simpan snapshot lot yang terkonsumsi ke detail_keluar item ini, supaya
       // laporan barang keluar bisa menampilkan siapa cutting/jahit/steam-nya.
         detail.sumber = consumed;
-
-        transaction.update(stokRef, {
-          stok_tersedia: stok.stok_tersedia - detail.jumlah_pcs,
-          total_keluar: stok.total_keluar + detail.jumlah_pcs,
-          sumber_produksi: remaining,
-          updatedAt: serverTimestamp(),
-        });
+        stok.stok_tersedia -= detail.jumlah_pcs;
+        stok.total_keluar += detail.jumlah_pcs;
+        stok.sumber_produksi = remaining;
       }
+    }
+
+    for (const snapshot of stokSnapshots.values()) {
+      transaction.update(snapshot.ref, {
+        stok_tersedia: snapshot.data.stok_tersedia,
+        total_keluar: snapshot.data.total_keluar,
+        sumber_produksi: snapshot.data.sumber_produksi,
+        updatedAt: serverTimestamp(),
+      });
+      }
+
+    for (const usage of hijabUsage) {
+      const snapshot = hijabSnapshots.get(usage.id);
+      if (!snapshot) continue;
+      const stokSesudah = snapshot.data.stok_tersedia - usage.jumlah;
+      transaction.update(snapshot.ref, {
+        stok_tersedia: stokSesudah,
+        total_keluar: snapshot.data.total_keluar + usage.jumlah,
+        updatedAt: serverTimestamp(),
+      });
+      addHijabHistory(transaction, usage.id, {
+        tipe: 'barang_keluar',
+        jumlah: usage.jumlah,
+        stok_sebelum: snapshot.data.stok_tersedia,
+        stok_sesudah: stokSesudah,
+        catatan: `Keluar ${usage.sumber.join(', ')} · ${data.tujuan}`,
+      });
     }
 
     transaction.set(ref, {
@@ -330,6 +448,7 @@ export async function kurangiStokManual(
         timestamp: serverTimestamp(),
       });
     }
+
   });
 }
 
@@ -388,6 +507,23 @@ export async function getRiwayatBarangJadiByModel(modelId: string): Promise<Riwa
   );
   const snap = await getDocs(q);
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as RiwayatBarangJadi);
+}
+
+export async function getRiwayatBarangJadiByModelPage(
+  modelId: string,
+  cursor: FirestoreCursor,
+  pageSize = 25,
+): Promise<CursorPage<RiwayatBarangJadi>> {
+  return getCursorPage(
+    query(
+      collection(db, COL_RIWAYAT),
+      where('model_id', '==', modelId),
+      orderBy('timestamp', 'desc'),
+    ),
+    cursor,
+    (d) => ({ id: d.id, ...d.data() }) as RiwayatBarangJadi,
+    pageSize,
+  );
 }
 
 // ─── BARANG KELUAR ───────────────────────────────────────────────
@@ -454,6 +590,50 @@ export async function getRiwayatBarangKeluarByPeriod(
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as BarangKeluar);
 }
 
+export async function getRiwayatKeluarByModelPage(
+  modelId: string,
+  cursor: FirestoreCursor,
+  pageSize = 25,
+): Promise<CursorPage<BarangKeluar>> {
+  const canonical = await getCursorPage(
+    query(collection(db, COL_KELUAR), where('model_ids', 'array-contains', modelId)),
+    cursor,
+    (d) => ({ id: d.id, ...d.data() }) as BarangKeluar,
+    pageSize,
+  );
+  // Data lama menyimpan satu model pada model_id, sedangkan data baru memakai model_ids.
+  // Fallback hanya dilakukan di halaman pertama agar tetap satu query halaman.
+  if (cursor || canonical.items.length > 0) return canonical;
+  return getCursorPage(
+    query(collection(db, COL_KELUAR), where('model_id', '==', modelId)),
+    null,
+    (d) => ({ id: d.id, ...d.data() }) as BarangKeluar,
+    pageSize,
+  );
+}
+
+export async function getRiwayatBarangKeluarPage(
+  range: { start: Date; end: Date } | null,
+  cursor: FirestoreCursor,
+  pageSize = 25,
+): Promise<CursorPage<BarangKeluar>> {
+  const baseQuery = range
+    ? query(
+        collection(db, COL_KELUAR),
+        where('tanggal_keluar', '>=', Timestamp.fromDate(range.start)),
+        where('tanggal_keluar', '<=', Timestamp.fromDate(range.end)),
+        orderBy('tanggal_keluar', 'desc'),
+      )
+    : query(collection(db, COL_KELUAR), orderBy('tanggal_keluar', 'desc'));
+
+  return getCursorPage(
+    baseQuery,
+    cursor,
+    (d) => ({ id: d.id, ...d.data() }) as BarangKeluar,
+    pageSize,
+  );
+}
+
 // ─── BATALKAN BARANG KELUAR ──────────────────────────────────────
 
 export async function prosesPendingBarangKeluar(
@@ -495,6 +675,9 @@ export async function prosesPendingBarangKeluar(
       stokRefs.set(`${target.model_id}|${target.nama_warna ?? ''}|${detail.ukuran}`, snap.docs[0].ref);
     }
   }
+  const hijabComponents = managedHijabComponents(target);
+  const hijabRefs = new Map<string, ReturnType<typeof doc>>();
+  for (const component of hijabComponents) hijabRefs.set(component.ref_id!, doc(db, COL_HIJAB, component.ref_id!));
 
   return runTransaction(db, async (transaction) => {
     const currentSnap = await transaction.get(keluarRef);
@@ -530,26 +713,66 @@ export async function prosesPendingBarangKeluar(
         stokSnapshots.set(key, { ref: stokRef, data: { id: stokSnap.id, ...stokSnap.data() } as StokBarangJadi });
       }
     }
+    const hijabSnapshots = new Map<string, { ref: ReturnType<typeof doc>; data: StokHijab }>();
+    for (const [id, ref] of hijabRefs) {
+      const snap = await transaction.get(ref);
+      if (snap.exists()) {
+        hijabSnapshots.set(id, { ref, data: { id: snap.id, ...snap.data() } as StokHijab });
+      }
+    }
+
+    const workingStok = new Map(
+      [...stokSnapshots.entries()].map(([key, value]) => [key, { ...value, data: { ...value.data } }]),
+    );
+    const workingHijab = new Map(
+      [...hijabSnapshots.entries()].map(([id, value]) => [id, { ...value, data: { ...value.data } }]),
+    );
+    const hijabUsed = new Map<string, number>();
 
     const fulfilledDetails: BarangKeluarItem['detail_keluar'] = [];
     const remainingDetails: BarangKeluarItem['detail_keluar'] = [];
 
     for (const detail of pendingItem.detail_keluar) {
       const key = `${pendingItem.model_id}|${pendingItem.nama_warna ?? ''}|${detail.ukuran}`;
-      const stokSnapshot = stokSnapshots.get(key);
+      const stokSnapshot = workingStok.get(key);
       const tersedia = stokSnapshot?.data.stok_tersedia ?? 0;
-      const fulfilled = Math.min(detail.jumlah_pcs, tersedia);
+      let fulfilled = Math.min(detail.jumlah_pcs, tersedia);
+      for (const component of hijabComponents) {
+        const hijabSnapshot = workingHijab.get(component.ref_id!);
+        const kapasitas = hijabSnapshot
+          ? Math.floor(hijabSnapshot.data.stok_tersedia / component.jumlah)
+          : 0;
+        fulfilled = Math.min(fulfilled, kapasitas);
+      }
       const remaining = detail.jumlah_pcs - fulfilled;
 
       if (fulfilled > 0 && stokSnapshot) {
         const { consumed, remaining: remainingLots } = consumeSumberProduksiLots(stokSnapshot.data.sumber_produksi, fulfilled);
         fulfilledDetails.push({ ...detail, jumlah_pcs: fulfilled, sumber: consumed });
-        transaction.update(stokSnapshot.ref, {
-          stok_tersedia: stokSnapshot.data.stok_tersedia - fulfilled,
-          total_keluar: stokSnapshot.data.total_keluar + fulfilled,
-          sumber_produksi: remainingLots,
-          updatedAt: serverTimestamp(),
+        workingStok.set(key, {
+          ...stokSnapshot,
+          data: {
+            ...stokSnapshot.data,
+            stok_tersedia: stokSnapshot.data.stok_tersedia - fulfilled,
+            total_keluar: stokSnapshot.data.total_keluar + fulfilled,
+            sumber_produksi: remainingLots,
+          },
         });
+
+        for (const component of hijabComponents) {
+          const hijabSnapshot = workingHijab.get(component.ref_id!);
+          if (!hijabSnapshot) continue;
+          const jumlah = fulfilled * component.jumlah;
+          workingHijab.set(component.ref_id!, {
+            ...hijabSnapshot,
+            data: {
+              ...hijabSnapshot.data,
+              stok_tersedia: hijabSnapshot.data.stok_tersedia - jumlah,
+              total_keluar: hijabSnapshot.data.total_keluar + jumlah,
+            },
+          });
+          hijabUsed.set(component.ref_id!, (hijabUsed.get(component.ref_id!) ?? 0) + jumlah);
+        }
 
         if (riwayatMeta) {
           const riwayatRef = doc(collection(db, COL_RIWAYAT));
@@ -572,6 +795,31 @@ export async function prosesPendingBarangKeluar(
       }
 
       if (remaining > 0) remainingDetails.push({ ...detail, jumlah_pcs: remaining });
+    }
+
+    for (const snapshot of workingStok.values()) {
+      transaction.update(snapshot.ref, {
+        stok_tersedia: snapshot.data.stok_tersedia,
+        total_keluar: snapshot.data.total_keluar,
+        sumber_produksi: snapshot.data.sumber_produksi,
+        updatedAt: serverTimestamp(),
+      });
+    }
+    for (const [id, snapshot] of workingHijab) {
+      const jumlah = hijabUsed.get(id) ?? 0;
+      if (jumlah <= 0) continue;
+      transaction.update(snapshot.ref, {
+        stok_tersedia: snapshot.data.stok_tersedia,
+        total_keluar: snapshot.data.total_keluar,
+        updatedAt: serverTimestamp(),
+      });
+      addHijabHistory(transaction, id, {
+        tipe: 'barang_keluar',
+        jumlah,
+        stok_sebelum: snapshot.data.stok_tersedia + jumlah,
+        stok_sesudah: snapshot.data.stok_tersedia,
+        catatan: `Pemenuhan pending ke ${current.tujuan}`,
+      });
     }
 
     const processedPcs = fulfilledDetails.reduce((sum, detail) => sum + detail.jumlah_pcs, 0);
@@ -655,6 +903,9 @@ export async function batalBarangKeluar(
       if (!snap.empty) stokRefs.set(`${item.model_id}|${item.nama_warna ?? ''}|${detail.ukuran}`, snap.docs[0].ref);
     }
   }
+  const hijabUsage = aggregateHijabUsage(keluarItems);
+  const hijabRefs = new Map<string, ReturnType<typeof doc>>();
+  for (const usage of hijabUsage) hijabRefs.set(usage.id, doc(db, COL_HIJAB, usage.id));
 
   await runTransaction(db, async (transaction) => {
     // Baca semua stok dulu, baru tulis
@@ -662,6 +913,11 @@ export async function batalBarangKeluar(
     for (const [key, ref] of stokRefs) {
       const snap = await transaction.get(ref);
       if (snap.exists()) stokSnapshots.set(key, { ref, data: { id: snap.id, ...snap.data() } as StokBarangJadi });
+    }
+    const hijabSnapshots = new Map<string, { ref: ReturnType<typeof doc>; data: StokHijab }>();
+    for (const [key, ref] of hijabRefs) {
+      const snap = await transaction.get(ref);
+      if (snap.exists()) hijabSnapshots.set(key, { ref, data: { id: snap.id, ...snap.data() } as StokHijab });
     }
 
     for (const item of keluarItems) {
@@ -694,6 +950,24 @@ export async function batalBarangKeluar(
           });
         }
       }
+    }
+
+    for (const usage of hijabUsage) {
+      const snapshot = hijabSnapshots.get(usage.id);
+      if (!snapshot) continue;
+      const stokSesudah = snapshot.data.stok_tersedia + usage.jumlah;
+      transaction.update(snapshot.ref, {
+        stok_tersedia: stokSesudah,
+        total_keluar: Math.max(0, snapshot.data.total_keluar - usage.jumlah),
+        updatedAt: serverTimestamp(),
+      });
+      addHijabHistory(transaction, usage.id, {
+        tipe: 'batal_keluar',
+        jumlah: usage.jumlah,
+        stok_sebelum: snapshot.data.stok_tersedia,
+        stok_sesudah: stokSesudah,
+        catatan: riwayatMeta?.catatan ?? `Pembatalan pengiriman ke ${keluar.tujuan}`,
+      });
     }
 
     transaction.delete(keluarRef);
@@ -738,6 +1012,9 @@ export async function batalItemBarangKeluar(
       if (!snap.empty) stokRefs.set(`${target.model_id}|${target.nama_warna ?? ''}|${detail.ukuran}`, snap.docs[0].ref);
     }
   }
+  const hijabUsage = target.status === 'pending' ? [] : aggregateHijabUsage([target]);
+  const hijabRefs = new Map<string, ReturnType<typeof doc>>();
+  for (const usage of hijabUsage) hijabRefs.set(usage.id, doc(db, COL_HIJAB, usage.id));
 
   return runTransaction(db, async (transaction) => {
     const freshKeluarSnap = await transaction.get(keluarRef);
@@ -754,6 +1031,11 @@ export async function batalItemBarangKeluar(
     for (const [key, ref] of stokRefs) {
       const snap = await transaction.get(ref);
       if (snap.exists()) stokSnapshots.set(key, { ref, data: { id: snap.id, ...snap.data() } as StokBarangJadi });
+    }
+    const hijabSnapshots = new Map<string, { ref: ReturnType<typeof doc>; data: StokHijab }>();
+    for (const [key, ref] of hijabRefs) {
+      const snap = await transaction.get(ref);
+      if (snap.exists()) hijabSnapshots.set(key, { ref, data: { id: snap.id, ...snap.data() } as StokHijab });
     }
 
     if (currentTarget.status !== 'pending') {
@@ -793,6 +1075,24 @@ export async function batalItemBarangKeluar(
           });
         }
       }
+    }
+
+    for (const usage of hijabUsage) {
+      const snapshot = hijabSnapshots.get(usage.id);
+      if (!snapshot) continue;
+      const stokSesudah = snapshot.data.stok_tersedia + usage.jumlah;
+      transaction.update(snapshot.ref, {
+        stok_tersedia: stokSesudah,
+        total_keluar: Math.max(0, snapshot.data.total_keluar - usage.jumlah),
+        updatedAt: serverTimestamp(),
+      });
+      addHijabHistory(transaction, usage.id, {
+        tipe: 'batal_keluar',
+        jumlah: usage.jumlah,
+        stok_sebelum: snapshot.data.stok_tersedia,
+        stok_sesudah: stokSesudah,
+        catatan: riwayatMeta?.catatan ?? `Pembatalan item pengiriman ke ${freshKeluar.tujuan}`,
+      });
     }
 
     const nextItems = items.filter((_, index) => index !== itemIndex);
@@ -873,6 +1173,10 @@ export async function returBarangKeluarItem(
     if (snap.empty) throw new Error(`Stok ${target.nama_model} ukuran ${detail.ukuran} tidak ditemukan`);
     stokRefs.set(`${target.model_id}|${target.nama_warna ?? ''}|${detail.ukuran}`, snap.docs[0].ref);
   }
+  const totalReturPcs = normalized.reduce((sum, item) => sum + item.jumlah_pcs, 0);
+  const hijabUsage = aggregateHijabUsage([{ ...target, total_pcs: totalReturPcs }]);
+  const hijabRefs = new Map<string, ReturnType<typeof doc>>();
+  for (const usage of hijabUsage) hijabRefs.set(usage.id, doc(db, COL_HIJAB, usage.id));
 
   return runTransaction(db, async (transaction) => {
     const freshKeluarSnap = await transaction.get(keluarRef);
@@ -890,6 +1194,12 @@ export async function returBarangKeluarItem(
       const snap = await transaction.get(ref);
       if (!snap.exists()) throw new Error('Stok barang jadi tidak ditemukan');
       stokSnapshots.set(key, { ref, data: { id: snap.id, ...snap.data() } as StokBarangJadi });
+    }
+    const hijabSnapshots = new Map<string, { ref: ReturnType<typeof doc>; data: StokHijab }>();
+    for (const [key, ref] of hijabRefs) {
+      const snap = await transaction.get(ref);
+      if (!snap.exists()) throw new Error('Stok hijab tidak ditemukan');
+      hijabSnapshots.set(key, { ref, data: { id: snap.id, ...snap.data() } as StokHijab });
     }
 
     const nextDetail = currentTarget.detail_keluar
@@ -944,6 +1254,24 @@ export async function returBarangKeluarItem(
         };
       })
       .filter((detail) => detail.jumlah_pcs > 0);
+
+    for (const usage of hijabUsage) {
+      const snapshot = hijabSnapshots.get(usage.id);
+      if (!snapshot) throw new Error(`Stok hijab ${usage.nama} tidak ditemukan`);
+      const stokSesudah = snapshot.data.stok_tersedia + usage.jumlah;
+      transaction.update(snapshot.ref, {
+        stok_tersedia: stokSesudah,
+        total_keluar: Math.max(0, snapshot.data.total_keluar - usage.jumlah),
+        updatedAt: serverTimestamp(),
+      });
+      addHijabHistory(transaction, usage.id, {
+        tipe: 'batal_keluar',
+        jumlah: usage.jumlah,
+        stok_sebelum: snapshot.data.stok_tersedia,
+        stok_sesudah: stokSesudah,
+        catatan: riwayatMeta?.catatan ?? `Retur penjualan ${freshKeluar.tujuan}`,
+      });
+    }
 
     for (const item of normalized) {
       if (!currentTarget.detail_keluar.some((detail) => detail.ukuran === item.ukuran)) {

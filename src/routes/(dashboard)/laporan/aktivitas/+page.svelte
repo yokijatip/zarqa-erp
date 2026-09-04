@@ -3,8 +3,15 @@
     collection,
     collectionGroup,
     getDocs,
+    limit,
+    orderBy,
+    query,
     writeBatch,
+    Timestamp,
+    where,
     type DocumentData,
+    type Query,
+    type QueryConstraint,
     type QueryDocumentSnapshot,
   } from "firebase/firestore";
   import { db } from "$lib/firebase/config";
@@ -17,6 +24,8 @@
   import DownloadIcon from "@lucide/svelte/icons/download";
   import TrashIcon from "@lucide/svelte/icons/trash-2";
   import SearchIcon from "@lucide/svelte/icons/search";
+  import ChevronLeftIcon from "@lucide/svelte/icons/chevron-left";
+  import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
 
   type ActivityCategory =
     | "produksi"
@@ -64,6 +73,8 @@
   let categoryFilter = $state<"semua" | ActivityCategory>("semua");
   let flushPassword = $state("");
   let flushConfirm = $state(false);
+  let activityPage = $state(1);
+  const ACTIVITY_PAGE_SIZE = 50;
 
   function toDate(value: any): Date | null {
     if (!value) return null;
@@ -156,6 +167,18 @@
 
   function rowId(source: string, snap: QueryDocumentSnapshot<DocumentData>): string {
     return `${source}:${snap.ref.path}`;
+  }
+
+  function dateQuery(base: Query<DocumentData>, field: string): Query<DocumentData> {
+    const constraints: QueryConstraint[] = [];
+    if (dateRange) {
+      constraints.push(
+        where(field, ">=", Timestamp.fromDate(dateRange.start)),
+        where(field, "<=", Timestamp.fromDate(dateRange.end)),
+      );
+    }
+    constraints.push(orderBy(field, "desc"), limit(500));
+    return query(base, ...constraints);
   }
 
   function makeUserName(data: any, uidKeys: string[], nameKeys: string[]): { uid: string; name: string } {
@@ -331,14 +354,14 @@
       rejectSnap,
       rejectResolutionSnap,
     ] = await Promise.all([
-      getDocs(collectionGroup(db, "riwayat_proses")),
-      getDocs(collection(db, "riwayat_barang_jadi")),
-      getDocs(collectionGroup(db, "riwayat")),
-      getDocs(collection(db, "barang_keluar")),
-      getDocs(collection(db, "transaksi_keuangan")),
-      getDocs(collection(db, "pembayaran_gaji")),
-      getDocs(collection(db, "reject_items")),
-      getDocs(collectionGroup(db, "riwayat_resolusi")),
+      getDocs(dateQuery(collectionGroup(db, "riwayat_proses"), "timestamp")),
+      getDocs(dateQuery(collection(db, "riwayat_barang_jadi"), "timestamp")),
+      getDocs(dateQuery(collectionGroup(db, "riwayat"), "timestamp")),
+      getDocs(dateQuery(collection(db, "barang_keluar"), "tanggal_keluar")),
+      getDocs(dateQuery(collection(db, "transaksi_keuangan"), "tanggal")),
+      getDocs(dateQuery(collection(db, "pembayaran_gaji"), "created_at")),
+      getDocs(dateQuery(collection(db, "reject_items"), "createdAt")),
+      getDocs(dateQuery(collectionGroup(db, "riwayat_resolusi"), "timestamp")),
     ]);
 
     return [
@@ -387,6 +410,9 @@
       return userOk && categoryOk && queryOk;
     });
   });
+
+  const activityTotalPages = $derived(Math.max(1, Math.ceil(filteredRows.length / ACTIVITY_PAGE_SIZE)));
+  const visibleRows = $derived(filteredRows.slice((activityPage - 1) * ACTIVITY_PAGE_SIZE, activityPage * ACTIVITY_PAGE_SIZE));
 
   const activeUserCount = $derived(new Set(filteredRows.map((row) => row.userUid || row.userName)).size);
   const activeCategoryCount = $derived(new Set(filteredRows.map((row) => row.category)).size);
@@ -490,6 +516,14 @@
     win.focus();
     win.print();
   }
+
+  $effect(() => {
+    searchQuery;
+    userFilter;
+    categoryFilter;
+    dateRange;
+    activityPage = 1;
+  });
 
   $effect(() => {
     load();
@@ -603,7 +637,7 @@
               </Table.Cell>
             </Table.Row>
           {:else}
-            {#each filteredRows as row (row.id)}
+            {#each visibleRows as row (row.id)}
               <Table.Row>
                 <Table.Cell class="text-sm text-gray-600">{formatDateTime(row.tanggal)}</Table.Cell>
                 <Table.Cell>
@@ -630,7 +664,7 @@
           {loading ? "Memuat aktivitas..." : "Tidak ada aktivitas pada filter ini."}
         </div>
       {:else}
-        {#each filteredRows as row (row.id)}
+        {#each visibleRows as row (row.id)}
           <article class="min-w-0 rounded-lg border border-gray-100 bg-gray-50/60 p-3">
             <div class="flex min-w-0 items-start justify-between gap-3">
               <div class="min-w-0">
@@ -655,6 +689,16 @@
         {/each}
       {/if}
     </div>
+    {#if filteredRows.length > 0 && activityTotalPages > 1}
+      <div class="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 text-xs text-gray-500">
+        <span>Menampilkan {(activityPage - 1) * ACTIVITY_PAGE_SIZE + 1}-{Math.min(activityPage * ACTIVITY_PAGE_SIZE, filteredRows.length)} dari {filteredRows.length} aktivitas</span>
+        <div class="flex items-center gap-2">
+          <Button variant="outline" size="sm" disabled={activityPage === 1} onclick={() => (activityPage -= 1)}><ChevronLeftIcon class="h-3.5 w-3.5" /> Sebelumnya</Button>
+          <span>Halaman {activityPage} / {activityTotalPages}</span>
+          <Button variant="outline" size="sm" disabled={activityPage === activityTotalPages} onclick={() => (activityPage += 1)}>Berikutnya <ChevronRightIcon class="h-3.5 w-3.5" /></Button>
+        </div>
+      </div>
+    {/if}
   </section>
 
   <section class="rounded-lg border border-red-100 bg-red-50 p-4 shadow-sm">

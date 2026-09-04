@@ -17,6 +17,8 @@
     '/dashboard':        [{ label: 'Dashboard' }],
     '/gudang':           [{ label: 'Gudang' }],
     '/stok-kain':        [{ label: 'Gudang', href: '/gudang' }, { label: 'Stok Kain' }],
+    '/model-hijab':      [{ label: 'Gudang', href: '/gudang' }, { label: 'Model Hijab' }],
+    '/stok-hijab':       [{ label: 'Gudang', href: '/gudang' }, { label: 'Stok Hijab' }],
     '/model-baju':       [{ label: 'Gudang', href: '/gudang' }, { label: 'Model Baju' }],
     '/monitor-produksi': [{ label: 'Monitor Produksi' }],
     '/produksi/cutting': [{ label: 'Monitor Produksi', href: '/monitor-produksi' }, { label: 'Produksi Cutting' }],
@@ -59,6 +61,8 @@
     if (
       pathname.startsWith('/gudang') ||
       pathname.startsWith('/stok-kain') ||
+      pathname.startsWith('/model-hijab') ||
+      pathname.startsWith('/stok-hijab') ||
       pathname.startsWith('/model-baju') ||
       pathname.startsWith('/stok-potongan') ||
       pathname.startsWith('/barang-jadi') ||

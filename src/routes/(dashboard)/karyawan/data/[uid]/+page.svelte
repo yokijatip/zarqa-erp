@@ -7,7 +7,7 @@
     ROLE_LABEL,
     updateKaryawan,
   } from "$lib/firebase/karyawan";
-  import { getPenggajianPeriode, getPembayaranGajiPeriode, type PembayaranGajiRecord } from "$lib/firebase/penggajian";
+  import { getPenggajianPeriode, getPembayaranGajiKaryawanPage, type PembayaranGajiRecord } from "$lib/firebase/penggajian";
   import { getPeriodRange, type DateRange } from "$lib/period";
   import PeriodSelector from "$lib/components/period-selector.svelte";
   import type { TipePenggajian, UserProfile, UserRole } from "$lib/types";
@@ -15,6 +15,7 @@
   import * as Select from "$lib/components/ui/select/index.js";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
+  import type { FirestoreCursor } from "$lib/firebase/pagination";
 
   let karyawan = $state<UserProfile | null>(null);
   let loading = $state(true);
@@ -31,6 +32,11 @@
   let loadedRangeKey = $state("");
   let paymentPage = $state(1);
   const PAYMENT_PAGE_SIZE = 10;
+  let paymentCursor = $state<FirestoreCursor>(null);
+  let paymentHasNext = $state(false);
+  let paymentPageCache = $state<PembayaranGajiRecord[][]>([]);
+  let paymentCursors = $state<FirestoreCursor[]>([null]);
+  let paymentPageLoading = $state(false);
   let openEdit = $state(false);
   let eNama = $state("");
   let eRole = $state<UserRole>("kepala_jahit");
@@ -53,9 +59,8 @@
   const workItems = $derived(payrollKaryawan?.breakdown ?? []);
   const workTotalPages = $derived(Math.max(1, Math.ceil(workItems.length / WORK_PAGE_SIZE)));
   const visibleWorkItems = $derived(workItems.slice((workPage - 1) * WORK_PAGE_SIZE, workPage * WORK_PAGE_SIZE));
-  const paymentsKaryawan = $derived(paymentHistory.filter((payment) => payment.karyawan_uid === uid));
-  const paymentTotalPages = $derived(Math.max(1, Math.ceil(paymentsKaryawan.length / PAYMENT_PAGE_SIZE)));
-  const visiblePayments = $derived(paymentsKaryawan.slice((paymentPage - 1) * PAYMENT_PAGE_SIZE, paymentPage * PAYMENT_PAGE_SIZE));
+  const paymentsKaryawan = $derived(paymentHistory);
+  const visiblePayments = $derived(paymentsKaryawan);
   const isProductionEmployee = $derived(
     !!karyawan &&
       ["kepala_cutting", "kepala_jahit", "kepala_steam"].includes(karyawan.role),
@@ -120,6 +125,15 @@
     if (!karyawan || paymentsKaryawan.length === 0) return;
     exportingPayroll = true;
     try {
+      const payments: PembayaranGajiRecord[] = [];
+      let cursor: FirestoreCursor = null;
+      let hasNext = true;
+      while (hasNext) {
+        const result = await getPembayaranGajiKaryawanPage(uid, paymentDateRange, cursor, PAYMENT_PAGE_SIZE);
+        payments.push(...result.items);
+        cursor = result.cursor;
+        hasNext = result.hasNext;
+      }
       const { jsPDF } = await import("jspdf");
       const autoTable = (await import("jspdf-autotable")).default;
       const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
@@ -132,7 +146,7 @@
       autoTable(doc, {
         startY: 42,
         head: [["Periode", "Total PCS", "Total Gaji", "Diproses"]],
-        body: paymentsKaryawan.map((payment) => [
+        body: payments.map((payment) => [
           paymentPeriod(payment),
           `${payment.total_pcs.toLocaleString("id-ID")} pcs`,
           rupiah(payment.total_gaji),
@@ -243,18 +257,52 @@
       const [profile, payrollData, paymentData] = await Promise.all([
         getKaryawanById(uid),
         getPenggajianPeriode(workDateRange),
-        getPembayaranGajiPeriode(paymentDateRange),
+        getPembayaranGajiKaryawanPage(uid, paymentDateRange, null, PAYMENT_PAGE_SIZE),
       ]);
       karyawan = profile;
       payroll = payrollData;
-      paymentHistory = paymentData;
+      paymentHistory = paymentData.items;
       paymentPage = 1;
+      paymentCursor = paymentData.cursor;
+      paymentHasNext = paymentData.hasNext;
+      paymentPageCache = [paymentData.items];
+      paymentCursors = [null, paymentData.cursor];
       if (!profile) errorMsg = "Data karyawan tidak ditemukan.";
     } catch {
       errorMsg = "Gagal memuat detail karyawan.";
     } finally {
       loading = false;
     }
+  }
+
+  async function nextPaymentPage() {
+    if (paymentPageLoading || !paymentHasNext) return;
+    paymentPageLoading = true;
+    try {
+      const result = await getPembayaranGajiKaryawanPage(
+        uid,
+        paymentDateRange,
+        paymentCursors[paymentPage] ?? paymentCursor,
+        PAYMENT_PAGE_SIZE,
+      );
+      paymentHistory = result.items;
+      paymentPageCache[paymentPage] = result.items;
+      paymentPageCache = [...paymentPageCache];
+      paymentCursors[paymentPage + 1] = result.cursor;
+      paymentCursors = [...paymentCursors];
+      paymentCursor = result.cursor;
+      paymentHasNext = result.hasNext;
+      paymentPage += 1;
+    } finally {
+      paymentPageLoading = false;
+    }
+  }
+
+  function previousPaymentPage() {
+    if (paymentPage <= 1 || paymentPageLoading) return;
+    paymentPage -= 1;
+    paymentHistory = paymentPageCache[paymentPage - 1] ?? paymentHistory;
+    paymentHasNext = true;
   }
 
   $effect(() => {
@@ -489,7 +537,7 @@
       <div class="py-8 text-center text-sm text-gray-400">Belum ada riwayat pembayaran pada periode ini.</div>
     {:else}
       <div class="mt-4 overflow-x-auto rounded-lg border border-gray-100"><table class="w-full text-sm"><thead class="bg-gray-50 text-xs uppercase tracking-wide text-gray-400"><tr><th class="px-4 py-3 text-left">Periode</th><th class="px-4 py-3 text-right">Total PCS</th><th class="px-4 py-3 text-right">Total Gaji</th><th class="px-4 py-3 text-left">Diproses</th></tr></thead><tbody class="divide-y divide-gray-100">{#each visiblePayments as payment}<tr><td class="px-4 py-3 text-gray-700">{paymentPeriod(payment)}</td><td class="px-4 py-3 text-right">{payment.total_pcs.toLocaleString("id-ID")} pcs</td><td class="px-4 py-3 text-right font-semibold text-green-700">{rupiah(payment.total_gaji)}</td><td class="px-4 py-3 text-gray-500">{formatDate(payment.created_at)}</td></tr>{/each}</tbody></table></div>
-      <div class="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-gray-500"><span>Menampilkan {(paymentPage - 1) * PAYMENT_PAGE_SIZE + 1}-{Math.min(paymentPage * PAYMENT_PAGE_SIZE, paymentsKaryawan.length)} dari {paymentsKaryawan.length} pembayaran</span>{#if paymentTotalPages > 1}<div class="flex items-center gap-2"><Button variant="outline" size="sm" disabled={paymentPage === 1} onclick={() => (paymentPage = Math.max(1, paymentPage - 1))}>Sebelumnya</Button><span>Halaman {paymentPage} / {paymentTotalPages}</span><Button variant="outline" size="sm" disabled={paymentPage === paymentTotalPages} onclick={() => (paymentPage = Math.min(paymentTotalPages, paymentPage + 1))}>Berikutnya</Button></div>{/if}</div>
+      <div class="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs text-gray-500"><span>Menampilkan {paymentsKaryawan.length} pembayaran pada halaman {paymentPage}</span>{#if paymentPage > 1 || paymentHasNext}<div class="flex items-center gap-2"><Button variant="outline" size="sm" disabled={paymentPage === 1 || paymentPageLoading} onclick={previousPaymentPage}>Sebelumnya</Button><span>Halaman {paymentPage}</span><Button variant="outline" size="sm" disabled={!paymentHasNext || paymentPageLoading} onclick={nextPaymentPage}>{paymentPageLoading ? "Memuat..." : "Berikutnya"}</Button></div>{/if}</div>
     {/if}
   </section>
 

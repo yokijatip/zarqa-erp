@@ -140,9 +140,37 @@ export interface WarnaTersedia {
   kode_hex: string;
 }
 
+export type TipeKomponenVarianPenjualan = 'model_baju' | 'aksesori';
+
+export interface KomponenVarianPenjualan {
+  tipe: TipeKomponenVarianPenjualan;
+  ref_id?: string;
+  // Master hijab dan stok hijab disimpan terpisah. ref_id tetap dipertahankan
+  // sebagai alias stok untuk membaca transaksi lama.
+  model_hijab_id?: string;
+  stok_hijab_id?: string;
+  nama: string;
+  jumlah: number;
+  // Komponen aksesori dengan kelola_stok=true akan dikurangi saat barang keluar.
+  kelola_stok: boolean;
+}
+
+export interface VarianPenjualan {
+  id: string;
+  nama_varian: string;
+  sku?: string;
+  harga_jual?: number;
+  harga_produksi?: number;
+  komponen: KomponenVarianPenjualan[];
+  aktif: boolean;
+}
+
 export interface ModelBaju {
   id: string;
   nama_model: string;
+  // Model penjualan dapat memakai stok barang jadi dari model lain.
+  // Jika kosong, stok memakai model ini sendiri.
+  stok_model_id?: string | null;
   foto_url?: string;
   deskripsi?: string;
   ukuran_tersedia: UkuranBaju[];
@@ -154,6 +182,9 @@ export interface ModelBaju {
   harga_jual_per_ukuran?: Partial<Record<UkuranBaju, number>>;
   harga_produksi?: number;
   harga_produksi_per_ukuran?: Partial<Record<UkuranBaju, number>>;
+  // Satu model produksi dapat memiliki beberapa bentuk penjualan, misalnya
+  // Luna Zarqa biasa dan Luna Zarqa Set Hijab. Keduanya berbagi stok model ini.
+  varian_penjualan?: VarianPenjualan[];
   tarif_cutting?: number;
   tarif_jahit?: number;
   tarif_steam?: number;
@@ -163,6 +194,70 @@ export interface ModelBaju {
 }
 
 export type ModelBajuInput = Omit<ModelBaju, 'id' | 'aktif' | 'createdAt' | 'updatedAt'>;
+
+// Master hijab berdiri sendiri dari model baju. Hijab tidak memiliki ukuran
+// dan harga jual/produksinya berlaku untuk satu pcs hijab.
+export interface ModelHijab {
+  id: string;
+  nama_hijab: string;
+  foto_url?: string;
+  deskripsi?: string;
+  warna_tersedia?: WarnaTersedia[];
+  harga_jual?: number;
+  harga_produksi?: number;
+  aktif: boolean;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export type ModelHijabInput = Omit<ModelHijab, 'id' | 'aktif' | 'createdAt' | 'updatedAt'>;
+
+export function defaultVarianPenjualan(
+  modelId: string,
+  namaModel: string,
+  stokModelId = modelId,
+  stokNamaModel = namaModel,
+): VarianPenjualan {
+  return {
+    id: `reguler_${modelId}`,
+    nama_varian: namaModel,
+    komponen: [
+      {
+        tipe: 'model_baju',
+        ref_id: stokModelId,
+        nama: stokNamaModel,
+        jumlah: 1,
+        kelola_stok: true,
+      },
+    ],
+    aktif: true,
+  };
+}
+
+export function getVarianPenjualan(
+  model: Pick<ModelBaju, 'id' | 'nama_model' | 'varian_penjualan' | 'stok_model_id'>,
+): VarianPenjualan[] {
+  const addOns = (model.varian_penjualan ?? []).filter(
+    (variant) =>
+      variant.aktif !== false &&
+      variant.komponen.some((component) => component.tipe === 'aksesori'),
+  );
+  const stokModelId = model.stok_model_id ?? model.id;
+  return [
+    defaultVarianPenjualan(model.id, model.nama_model, stokModelId),
+    ...addOns,
+  ];
+}
+
+export function getAddOnPenjualan(
+  model: Pick<ModelBaju, 'varian_penjualan'>,
+): VarianPenjualan[] {
+  return (model.varian_penjualan ?? []).filter(
+    (variant) =>
+      variant.aktif !== false &&
+      variant.komponen.some((component) => component.tipe === 'aksesori'),
+  );
+}
 
 // ─── BATCH PRODUKSI ──────────────────────────────────────────────
 
@@ -213,12 +308,21 @@ export interface SumberCutting {
 
 export interface BatchProduksi {
   id: string;
+  /** Produk yang diproses. Batch lama tanpa field ini dianggap baju. */
+  jenis_produk?: 'baju' | 'hijab';
   model_id: string;
+  model_hijab_id?: string;
+  stok_hijab_id?: string;
   nama_model: string;
+  warna_id?: string;
   nama_warna?: string;
   kode_hex_warna?: string;
   kode_hex_list?: string;
   detail_ukuran: DetailUkuran[];
+  /** Target pcs untuk produk tanpa ukuran seperti hijab. */
+  jumlah_target?: number;
+  /** Snapshot HPP per pcs dari master produk saat batch dibuat. */
+  harga_produksi_per_pcs?: number;
   total_pcs: number;
   kain_digunakan: KainDigunakan[];
   pcs_saat_ini?: number;
@@ -345,11 +449,16 @@ export interface StokBarangJadi {
 
 export interface StokPotongan {
   id: string;
+  /** Jenis produk; data lama tanpa field ini dianggap stok potongan baju. */
+  jenis_produk?: 'baju' | 'hijab';
   model_id: string;
+  model_hijab_id?: string;
   nama_model: string;
+  warna_id?: string;
   nama_warna?: string;
   kode_hex_warna?: string;
-  ukuran: UkuranBaju;
+  /** Hijab tidak memiliki ukuran. */
+  ukuran?: UkuranBaju;
   stok_tersedia: number;
   total_masuk: number;
   total_terpakai: number;
@@ -410,7 +519,14 @@ export type StatusBarangKeluar = 'selesai' | 'pending';
 
 export interface BarangKeluarItem {
   model_id: string;
+  // Model yang stok fisiknya dikurangi. Biasanya sama dengan model_id,
+  // tetapi model paket dapat memakai stok model dasar.
+  stok_model_id?: string;
   nama_model: string;
+  varian_id?: string;
+  nama_varian?: string;
+  // Snapshot komponen varian supaya retur/pembatalan tetap memakai aturan saat transaksi dibuat.
+  komponen_varian?: KomponenVarianPenjualan[];
   nama_warna?: string;
   kode_hex_warna?: string;
   detail_keluar: DetailKeluar[];
@@ -458,6 +574,48 @@ export interface BarangKeluar {
 }
 
 export type BarangKeluarInput = Omit<BarangKeluar, 'id' | 'total_pcs' | 'dicatat_oleh' | 'tanggal_keluar'>;
+
+// ── STOK HIJAB / AKSESORI ────────────────────────────────────────────────────
+
+export interface StokHijab {
+  id: string;
+  model_hijab_id?: string;
+  nama_hijab: string;
+  warna_id?: string;
+  nama_warna?: string;
+  kode_hex_warna?: string;
+  satuan: 'pcs';
+  stok_tersedia: number;
+  total_masuk: number;
+  total_keluar: number;
+  stok_minimum?: number;
+  /** HPP untuk hasil produksi atau biaya perolehan untuk stok yang dibeli. */
+  harga_per_unit?: number;
+  catatan?: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export type StokHijabInput = Omit<
+  StokHijab,
+  'id' | 'satuan' | 'total_masuk' | 'total_keluar' | 'createdAt' | 'updatedAt'
+>;
+
+export type TipeRiwayatStokHijab = 'stok_awal' | 'restock' | 'hasil_produksi' | 'barang_keluar' | 'batal_keluar' | 'kurangi_manual';
+
+export interface RiwayatStokHijab {
+  id?: string;
+  batch_id?: string;
+  tipe: TipeRiwayatStokHijab;
+  jumlah: number;
+  stok_sebelum: number;
+  stok_sesudah: number;
+  catatan?: string;
+  tanggal_beli?: string;
+  supplier?: string;
+  harga_per_unit?: number;
+  timestamp?: Timestamp;
+}
 
 // KEUANGAN
 

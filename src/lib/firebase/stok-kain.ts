@@ -6,6 +6,7 @@ import {
   type Unsubscribe,
 } from 'firebase/firestore';
 import { db } from './config';
+import { getCursorPage, type FirestoreCursor, type CursorPage } from './pagination';
 import type { StokKain, StokKainInput, Warna, RiwayatStokKain } from '$lib/types';
 
 const COL = 'stok_kain';
@@ -45,6 +46,18 @@ export async function getStokKainList(): Promise<StokKain[]> {
   const q = query(collection(db, COL), orderBy('nama_kain'));
   const snap = await getDocs(q);
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as StokKain);
+}
+
+export async function getStokKainPage(
+  cursor: FirestoreCursor,
+  pageSize = 25,
+): Promise<CursorPage<StokKain>> {
+  return getCursorPage(
+    query(collection(db, COL), orderBy('nama_kain')),
+    cursor,
+    (d) => ({ id: d.id, ...d.data() }) as StokKain,
+    pageSize,
+  );
 }
 
 // Ambil satu stok kain by ID
@@ -247,6 +260,19 @@ export async function getRiwayatStokKain(kainId: string): Promise<RiwayatStokKai
   );
   const snap = await getDocs(q);
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as RiwayatStokKain);
+}
+
+export async function getRiwayatStokKainPage(
+  kainId: string,
+  cursor: FirestoreCursor,
+  pageSize = 10,
+): Promise<CursorPage<RiwayatStokKain>> {
+  return getCursorPage(
+    query(collection(db, COL, kainId, 'riwayat'), orderBy('timestamp', 'desc')),
+    cursor,
+    (d) => ({ id: d.id, ...d.data() }) as RiwayatStokKain,
+    pageSize,
+  );
 }
 
 // Hapus jenis kain dari inventaris

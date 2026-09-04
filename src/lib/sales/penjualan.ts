@@ -7,6 +7,8 @@ export type SalesItemRow = {
   buyer: string;
   model_id: string;
   nama_model: string;
+  varian_id?: string;
+  nama_varian?: string;
   nama_warna?: string;
   ukuran: string;
   status: 'keluar' | 'pending';
@@ -156,6 +158,8 @@ export function salesItemRows(data: BarangKeluar[], modelList: ModelBaju[]): Sal
           buyer: item.nama_reseller ?? row.nama_reseller ?? '-',
           model_id: item.model_id,
           nama_model: item.nama_model,
+          varian_id: item.varian_id,
+          nama_varian: item.nama_varian,
           nama_warna: item.nama_warna,
           ukuran: detail.ukuran,
           status: item.status,
@@ -190,7 +194,9 @@ export function salesListRows(data: BarangKeluar[], modelList: ModelBaju[]): Sal
       nilaiJual: detailRows.reduce((sum, item) => sum + item.nilai_jual, 0),
       hpp: detailRows.reduce((sum, item) => sum + item.hpp, 0),
       laba: detailRows.reduce((sum, item) => sum + item.laba, 0),
-      label: items.length > 1 ? `${items.length} barang` : `${first?.nama_model ?? row.nama_model}${first?.nama_warna ? ` - ${first.nama_warna}` : ''}`,
+      label: items.length > 1
+        ? `${items.length} barang`
+        : `${first?.nama_varian ?? first?.nama_model ?? row.nama_model}${first?.nama_warna ? ` - ${first.nama_warna}` : ''}`,
       original: row,
     };
   });

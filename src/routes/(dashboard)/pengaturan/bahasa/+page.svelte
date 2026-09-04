@@ -68,7 +68,7 @@
   });
 </script>
 
-<div class="mx-auto max-w-xl space-y-6">
+<div class="mx-auto w-full max-w-4xl space-y-6">
 
   <div>
     <h1 class="text-lg font-semibold text-gray-900">{ui.title}</h1>

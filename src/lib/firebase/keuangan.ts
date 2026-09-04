@@ -14,6 +14,7 @@ import {
   where,
 } from 'firebase/firestore';
 import { db } from './config';
+import { getCursorPage, type FirestoreCursor, type CursorPage } from './pagination';
 import type {
   AsetPerusahaan,
   AsetPerusahaanInput,
@@ -227,6 +228,28 @@ export async function getTransaksiKeuangan(
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as TransaksiKeuangan);
 }
 
+export async function getTransaksiKeuanganPage(
+  range: { start: Date; end: Date } | null,
+  cursor: FirestoreCursor,
+  pageSize = 25,
+): Promise<CursorPage<TransaksiKeuangan>> {
+  const baseQuery = range
+    ? query(
+        collection(db, COL),
+        where('tanggal', '>=', Timestamp.fromDate(range.start)),
+        where('tanggal', '<=', Timestamp.fromDate(range.end)),
+        orderBy('tanggal', 'desc'),
+      )
+    : query(collection(db, COL), orderBy('tanggal', 'desc'));
+
+  return getCursorPage(
+    baseQuery,
+    cursor,
+    (d) => ({ id: d.id, ...d.data() }) as TransaksiKeuangan,
+    pageSize,
+  );
+}
+
 export async function getSaldoAwalKeuangan(): Promise<SaldoAwalKeuangan | null> {
   const snap = await getDocs(query(collection(db, COL_SALDO_AWAL), orderBy('tanggal', 'desc'), limit(1)));
   if (snap.empty) return null;
@@ -399,4 +422,16 @@ export async function deleteAsetPerusahaan(id: string): Promise<void> {
 export async function getAsetPerusahaan(): Promise<AsetPerusahaan[]> {
   const snap = await getDocs(query(collection(db, COL_ASET), orderBy('tanggal_beli', 'desc')));
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as AsetPerusahaan);
+}
+
+export async function getAsetPerusahaanPage(
+  cursor: FirestoreCursor,
+  pageSize = 25,
+): Promise<CursorPage<AsetPerusahaan>> {
+  return getCursorPage(
+    query(collection(db, COL_ASET), orderBy('tanggal_beli', 'desc')),
+    cursor,
+    (d) => ({ id: d.id, ...d.data() }) as AsetPerusahaan,
+    pageSize,
+  );
 }

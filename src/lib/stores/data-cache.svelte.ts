@@ -19,7 +19,9 @@ import { getWarnaList } from '$lib/firebase/warna';
 import { getMasterKainList } from '$lib/firebase/master-kain';
 import { getKaryawanList } from '$lib/firebase/karyawan';
 import { getStokPotonganList } from '$lib/firebase/stok-potongan';
-import type { BatchProduksi, StokKain, StokBarangJadi, BarangKeluar, ModelBaju, Warna, MasterKain, UserProfile, StokPotongan } from '$lib/types';
+import { getStokHijabList } from '$lib/firebase/stok-hijab';
+import { getModelHijabList } from '$lib/firebase/model-hijab';
+import type { BatchProduksi, StokKain, StokBarangJadi, BarangKeluar, ModelBaju, ModelHijab, Warna, MasterKain, UserProfile, StokPotongan, StokHijab } from '$lib/types';
 
 // ── Generic cache factory ─────────────────────────────────────────────────────
 
@@ -105,6 +107,12 @@ export const karyawanCache = createCache<UserProfile[]>(getKaryawanList, 600);
 /** Stok potongan kain — stale setelah 5 menit */
 export const stokPotonganCache = createCache<StokPotongan[]>(getStokPotonganList, 300);
 
+/** Stok hijab/aksesori untuk pilihan komponen varian */
+export const stokHijabCache = createCache<StokHijab[]>(getStokHijabList, 300);
+
+/** Master model hijab â€” stale setelah 10 menit */
+export const modelHijabCache = createCache<ModelHijab[]>(() => getModelHijabList(false), 600);
+
 // ── Helper: invalidate semua sekaligus (misal setelah mutasi besar) ──────────
 
 export function invalidateAllCaches(): void {
@@ -117,4 +125,6 @@ export function invalidateAllCaches(): void {
   masterKainCache.invalidate();
   karyawanCache.invalidate();
   stokPotonganCache.invalidate();
+  stokHijabCache.invalidate();
+  modelHijabCache.invalidate();
 }

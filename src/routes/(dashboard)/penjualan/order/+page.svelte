@@ -2,7 +2,8 @@
   import { onMount } from "svelte";
   import { page } from "$app/stores";
   import { goto } from "$app/navigation";
-  import { getRiwayatBarangKeluarByPeriod, prosesPendingBarangKeluar, batalItemBarangKeluar } from "$lib/firebase/barang-jadi";
+  import { getRiwayatBarangKeluarPage, prosesPendingBarangKeluar, batalItemBarangKeluar } from "$lib/firebase/barang-jadi";
+  import type { FirestoreCursor } from "$lib/firebase/pagination";
   import { barangJadiCache, modelBajuCache } from "$lib/stores/data-cache.svelte";
   import { currentUser } from "$lib/stores/auth.store";
   import { getPeriodRange, type DateRange } from "$lib/period";
@@ -27,19 +28,22 @@
   let detailTarget = $state<BarangKeluar | null>(null);
   const pageSize = 50;
   let currentPage = $state(1);
+  let pageCache = $state<SalesListRow[][]>([]);
+  let pageCursors = $state<FirestoreCursor[]>([null]);
+  let pageHasNext = $state<boolean[]>([]);
+  let pageLoading = $state(false);
 
   let filtered = $derived(filterSalesLists(rows, search));
-  let totalPages = $derived(Math.max(1, Math.ceil(filtered.length / pageSize)));
-  let pageRows = $derived(filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize));
+  let pageRows = $derived(pageCache[currentPage - 1] ?? []);
   let totalNilai = $derived(filtered.reduce((sum, row) => sum + row.nilaiJual, 0));
   let totalPcs = $derived(filtered.reduce((sum, row) => sum + row.pcsKeluar, 0));
   let totalPending = $derived(filtered.reduce((sum, row) => sum + row.pcsPending, 0));
 
-  $effect(() => {
-    search;
-    dateRange;
-    currentPage = Math.min(currentPage, totalPages);
-  });
+  function setSearch(value: string) {
+    search = value;
+    currentPage = 1;
+    rows = pageCache[0] ?? rows;
+  }
 
   function escapeHtml(value: unknown): string {
     return String(value ?? "")
@@ -50,16 +54,39 @@
       .replaceAll("'", "&#039;");
   }
 
+  async function loadPage(pageNumber: number, cursor: FirestoreCursor) {
+    pageLoading = true;
+    try {
+      const result = await getRiwayatBarangKeluarPage(dateRange, cursor, pageSize);
+      const nextRows = salesListRows(result.items, modelList);
+      pageCache[pageNumber - 1] = nextRows;
+      pageCursors[pageNumber] = result.cursor;
+      pageHasNext[pageNumber - 1] = result.hasNext;
+      pageCache = [...pageCache];
+      pageCursors = [...pageCursors];
+      pageHasNext = [...pageHasNext];
+      currentPage = pageNumber;
+      rows = nextRows;
+    } finally {
+      pageLoading = false;
+    }
+  }
+
   async function load() {
     loading = true;
     errorMsg = null;
     try {
-      const [keluar, models] = await Promise.all([
-        getRiwayatBarangKeluarByPeriod(dateRange),
+      const [firstPage, models] = await Promise.all([
+        getRiwayatBarangKeluarPage(dateRange, null, pageSize),
         modelBajuCache.get(),
       ]);
       modelList = models;
-      rows = salesListRows(keluar, models);
+      const firstRows = salesListRows(firstPage.items, models);
+      pageCache = [firstRows];
+      pageCursors = [null, firstPage.cursor];
+      pageHasNext = [firstPage.hasNext];
+      currentPage = 1;
+      rows = firstRows;
       const openId = $page.url.searchParams.get("open");
       const target = openId ? rows.find((row) => row.id === openId) : undefined;
       if (target) openDetail(target);
@@ -68,6 +95,17 @@
     } finally {
       loading = false;
     }
+  }
+
+  async function nextPage() {
+    if (pageLoading || !pageHasNext[currentPage - 1]) return;
+    await loadPage(currentPage + 1, pageCursors[currentPage] ?? null);
+  }
+
+  function previousPage() {
+    if (currentPage <= 1 || pageLoading) return;
+    currentPage -= 1;
+    rows = pageCache[currentPage - 1] ?? rows;
   }
 
   function openDetail(row: SalesListRow) {
@@ -205,7 +243,7 @@
 
   <section class="rounded-lg border bg-white shadow-sm">
     <div class="flex flex-col gap-3 border-b p-4 md:flex-row md:items-center md:justify-between">
-      <Input bind:value={search} placeholder="Cari order, buyer, tujuan..." class="md:max-w-md" />
+      <Input value={search} oninput={(event) => setSearch((event.currentTarget as HTMLInputElement).value)} placeholder="Cari order, buyer, tujuan..." class="md:max-w-md" />
       <Badge variant="secondary">{filtered.length} list</Badge>
     </div>
     <div class="overflow-x-auto">
@@ -243,11 +281,11 @@
       </Table.Root>
       {#if filtered.length > 0}
         <div class="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 text-sm text-gray-500">
-          <span>Menampilkan {Math.min((currentPage - 1) * pageSize + 1, filtered.length)}-{Math.min(currentPage * pageSize, filtered.length)} dari {filtered.length} list</span>
+          <span>Menampilkan {filtered.length} list pada halaman {currentPage}</span>
           <div class="flex items-center gap-2">
-            <button class="inline-flex h-8 items-center gap-1 rounded-md border px-2.5 text-xs font-medium hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40" aria-label="Halaman sebelumnya" onclick={() => (currentPage -= 1)} disabled={currentPage <= 1}><ChevronLeftIcon class="h-4 w-4" /> Sebelumnya</button>
-            <span class="min-w-20 text-center text-xs font-medium text-gray-700">Halaman {currentPage} / {totalPages}</span>
-            <button class="inline-flex h-8 items-center gap-1 rounded-md border px-2.5 text-xs font-medium hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40" aria-label="Halaman berikutnya" onclick={() => (currentPage += 1)} disabled={currentPage >= totalPages}>Berikutnya <ChevronRightIcon class="h-4 w-4" /></button>
+            <button class="inline-flex h-8 items-center gap-1 rounded-md border px-2.5 text-xs font-medium hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40" aria-label="Halaman sebelumnya" onclick={previousPage} disabled={currentPage <= 1 || pageLoading}><ChevronLeftIcon class="h-4 w-4" /> Sebelumnya</button>
+            <span class="min-w-20 text-center text-xs font-medium text-gray-700">Halaman {currentPage}{pageLoading ? "..." : ""}</span>
+            <button class="inline-flex h-8 items-center gap-1 rounded-md border px-2.5 text-xs font-medium hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40" aria-label="Halaman berikutnya" onclick={nextPage} disabled={!pageHasNext[currentPage - 1] || pageLoading}>Berikutnya <ChevronRightIcon class="h-4 w-4" /></button>
           </div>
         </div>
       {/if}

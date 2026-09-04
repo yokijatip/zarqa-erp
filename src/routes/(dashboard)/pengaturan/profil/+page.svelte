@@ -328,7 +328,7 @@
   </div>
 {/if}
 
-<div class="mx-auto max-w-xl space-y-6">
+<div class="mx-auto w-full max-w-4xl space-y-6">
 
   <!-- ── Informasi Profil ──────────────────────────────────────────── -->
   <div class="rounded-xl border border-gray-100 bg-gray-50/50 p-5">

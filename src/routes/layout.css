@@ -277,6 +277,18 @@ html.dark .bg-gray-100 {
 html.dark .bg-gray-200 {
   background-color: oklch(0.35 0.035 265) !important;
 }
+
+html.dark [class*="bg-gray-50/"] {
+  background-color: oklch(0.22 0.035 265 / 82%) !important;
+}
+
+html.dark [class*="bg-gray-100/"] {
+  background-color: oklch(0.27 0.035 265 / 82%) !important;
+}
+
+html.dark [class*="bg-white/"] {
+  background-color: oklch(0.19 0.035 265 / 78%) !important;
+}
 html.dark .text-gray-950,
 html.dark .text-gray-900,
 html.dark .text-gray-800,
@@ -311,4 +323,176 @@ html.dark [style*="background:"] {
   box-shadow:
     0 0 0 1px oklch(1 0 0 / 45%),
     inset 0 0 0 1px oklch(0 0 0 / 18%);
+}
+
+/* Legacy utility classes still appear on older screens. Keep their hover,
+ * surface, form, and table states readable after switching to dark mode. */
+html.dark {
+  color-scheme: dark;
+}
+
+html.dark body,
+html.dark #svelte {
+  background-color: var(--background);
+  color: var(--foreground);
+}
+
+html.dark .bg-gray-800 {
+  background-color: oklch(0.17 0.035 265) !important;
+}
+
+html.dark .bg-gray-900 {
+  background-color: oklch(0.1 0.03 265) !important;
+}
+
+html.dark .text-black {
+  color: var(--foreground) !important;
+}
+
+html.dark .border-white,
+html.dark .border-white\/10,
+html.dark .border-white\/20 {
+  border-color: var(--border) !important;
+}
+
+/* Tailwind hover classes are generated after the base utility. Attribute
+ * matching gives all legacy rows/cards one consistent dark hover surface. */
+html.dark [class*="hover:bg-white"]:hover,
+html.dark [class*="hover:bg-gray-50"]:hover,
+html.dark [class*="hover:bg-gray-100"]:hover,
+html.dark [class*="hover:bg-gray-200"]:hover {
+  background-color: var(--accent) !important;
+  color: var(--accent-foreground) !important;
+}
+
+html.dark [class*="hover:text-gray-900"]:hover,
+html.dark [class*="hover:text-gray-800"]:hover,
+html.dark [class*="hover:text-gray-700"]:hover {
+  color: var(--foreground) !important;
+}
+
+html.dark [class*="hover:border-gray"]:hover {
+  border-color: oklch(0.55 0.04 257) !important;
+}
+
+html.dark [class*="focus:ring-gray"],
+html.dark [class*="focus:ring-blue"],
+html.dark [class*="focus:ring-teal"],
+html.dark [class*="focus:ring-green"] {
+  --tw-ring-color: oklch(0.55 0.12 245 / 45%) !important;
+}
+
+html.dark input[type="date"],
+html.dark input[type="time"],
+html.dark input[type="number"] {
+  color-scheme: dark;
+}
+
+html.dark input:disabled,
+html.dark textarea:disabled,
+html.dark select:disabled {
+  background-color: oklch(0.18 0.03 265) !important;
+  color: var(--muted-foreground) !important;
+}
+
+html.dark table thead,
+html.dark [role="table"] [role="row"]:has([role="columnheader"]) {
+  background-color: oklch(0.17 0.035 265) !important;
+}
+
+html.dark table tbody tr:hover,
+html.dark [role="table"] [role="row"]:hover {
+  background-color: var(--accent) !important;
+}
+
+html.dark ::selection {
+  background-color: oklch(0.5 0.16 245 / 55%);
+  color: white;
+}
+
+html.dark ::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+html.dark ::-webkit-scrollbar-track {
+  background: var(--background);
+}
+
+html.dark ::-webkit-scrollbar-thumb {
+  background: oklch(0.36 0.035 265);
+  border: 2px solid var(--background);
+  border-radius: 999px;
+}
+
+html.dark ::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.48 0.04 265);
+}
+
+/* Compact mode changes spacing as well as root font size, so dense screens
+ * become genuinely denser instead of only shrinking text. */
+[data-density="compact"] main {
+  gap: 0.75rem !important;
+  padding: 1rem !important;
+}
+
+[data-density="compact"] .p-8 {
+  padding: 1.25rem !important;
+}
+
+[data-density="compact"] .p-6 {
+  padding: 1rem !important;
+}
+
+[data-density="compact"] .p-5 {
+  padding: 0.875rem !important;
+}
+
+[data-density="compact"] .p-4 {
+  padding: 0.75rem !important;
+}
+
+[data-density="compact"] .px-6 {
+  padding-inline: 1rem !important;
+}
+
+[data-density="compact"] .px-5 {
+  padding-inline: 0.875rem !important;
+}
+
+[data-density="compact"] .py-6 {
+  padding-block: 1rem !important;
+}
+
+[data-density="compact"] .py-5 {
+  padding-block: 0.875rem !important;
+}
+
+[data-density="compact"] .py-4 {
+  padding-block: 0.625rem !important;
+}
+
+[data-density="compact"] .gap-6 {
+  gap: 1rem !important;
+}
+
+[data-density="compact"] .gap-5 {
+  gap: 0.875rem !important;
+}
+
+[data-density="compact"] .gap-4 {
+  gap: 0.75rem !important;
+}
+
+[data-density="compact"] [class~="space-y-6"] > :not([hidden]) ~ :not([hidden]) {
+  margin-top: 1rem !important;
+}
+
+[data-density="compact"] [class~="space-y-5"] > :not([hidden]) ~ :not([hidden]) {
+  margin-top: 0.875rem !important;
+}
+
+[data-density="compact"] table th,
+[data-density="compact"] table td {
+  padding-block: 0.625rem !important;
 }

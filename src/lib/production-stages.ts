@@ -42,8 +42,10 @@ export const PRODUCTION_STAGE_CONFIG: Record<ProductionStageKey, ProductionStage
     workingLabel: "Siap / Sedang Cutting",
     readyStatuses: ["PENDING_KAIN"],
     activeStatuses: ["PENDING_KAIN", "PENDING_CUTTING", "CUTTING_IN_PROGRESS", "CUTTING_DONE"],
-    // Hanya tampilkan CUTTING_DONE dari batch cutting original (bukan dari_potongan/jahit)
-    extraFilter: (batch) => batch.status !== "CUTTING_DONE" || !batch.dari_potongan,
+    // Hanya tampilkan CUTTING_DONE dari batch cutting original (bukan batch Jahit
+    // yang dibuat dari stok potongan). Berlaku untuk baju dan hijab.
+    extraFilter: (batch) =>
+      batch.status !== "CUTTING_DONE" || !batch.dari_potongan,
     doneStatuses: ["CUTTING_DONE"],
     doneLabel: "Hasil Cutting",
     detailHint: "Buka detail batch untuk mulai cutting dan input hasil potongan.",
@@ -63,8 +65,10 @@ export const PRODUCTION_STAGE_CONFIG: Record<ProductionStageKey, ProductionStage
     readyStatuses: ["CUTTING_DONE"],
     activeStatuses: ["CUTTING_DONE", "JAHIT_IN_PROGRESS"],
     // Hanya tampilkan batch yang dibuat dari stok potongan (dari_potongan=true),
-    // bukan batch cutting original yang kebetulan status-nya CUTTING_DONE
-    extraFilter: (batch) => batch.status !== "CUTTING_DONE" || !!batch.dari_potongan,
+    // bukan batch cutting original yang kebetulan status-nya CUTTING_DONE.
+    // Hijab mengikuti aturan yang sama, hanya tanpa detail ukuran.
+    extraFilter: (batch) =>
+      batch.status !== "CUTTING_DONE" || !!batch.dari_potongan,
     detailHint: "Pilih batch atau cek stok cutting yang tersedia sebelum proses jahit dimulai.",
     accentClass: "bg-blue-500",
     accentSoftClass: "bg-blue-50",

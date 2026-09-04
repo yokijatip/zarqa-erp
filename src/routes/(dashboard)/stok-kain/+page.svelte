@@ -10,10 +10,12 @@
     updateStokKain,
     kurangiStokManual,
     deleteStokKain,
-    getRiwayatStokKain,
+    getRiwayatStokKainPage,
+    getStokKainPage,
   } from "$lib/firebase/stok-kain";
+  import type { FirestoreCursor } from "$lib/firebase/pagination";
   import { getBatchListByDateRange } from "$lib/firebase/batch-produksi";
-  import { stokKainCache, warnaCache, masterKainCache } from "$lib/stores/data-cache.svelte";
+  import { warnaCache, masterKainCache } from "$lib/stores/data-cache.svelte";
   import type { StokKain, Warna, MasterKain, BatchProduksi, RiwayatStokKain } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
@@ -37,6 +39,12 @@
   let sortBy = $state<"nama" | "tersedia_asc" | "tersedia_desc">(
     "tersedia_asc",
   );
+  const PAGE_SIZE = 25;
+  let currentPage = $state(1);
+  let pageCursors = $state<FirestoreCursor[]>([null]);
+  let pageHasNext = $state<boolean[]>([]);
+  let pageCache = $state<StokKain[][]>([]);
+  let pageLoading = $state(false);
 
   // Dialog state
   let openTambah = $state(false);
@@ -56,6 +64,12 @@
   let riwayatKain = $state<StokKain | null>(null);
   let riwayatList = $state<RiwayatStokKain[]>([]);
   let riwayatLoading = $state(false);
+  let riwayatPageLoading = $state(false);
+  let riwayatPage = $state(1);
+  let riwayatHasNext = $state(false);
+  let riwayatCursor = $state<FirestoreCursor>(null);
+  let riwayatPageCache = $state<RiwayatStokKain[][]>([]);
+  let riwayatCursors = $state<FirestoreCursor[]>([null]);
 
   async function bukaRiwayat(kain: StokKain) {
     riwayatKain = kain;
@@ -63,7 +77,13 @@
     openRiwayat = true;
     riwayatLoading = true;
     try {
-      riwayatList = await getRiwayatStokKain(kain.id);
+      const firstPage = await getRiwayatStokKainPage(kain.id, null, 10);
+      riwayatList = firstPage.items;
+      riwayatPage = 1;
+      riwayatCursor = firstPage.cursor;
+      riwayatHasNext = firstPage.hasNext;
+      riwayatPageCache = [firstPage.items];
+      riwayatCursors = [null, firstPage.cursor];
     } catch {
       riwayatList = [];
     } finally {
@@ -393,16 +413,90 @@
     loading = true;
     errorMsg = null;
     try {
-      [stokList, warnaList, masterKainList] = await Promise.all([
-        stokKainCache.get(force),
+      const [firstPage, warna, masterKain] = await Promise.all([
+        getStokKainPage(null, PAGE_SIZE),
         warnaCache.get(force),
         masterKainCache.get(force),
       ]);
+      stokList = firstPage.items;
+      pageCache = [firstPage.items];
+      pageCursors = [null, firstPage.cursor];
+      pageHasNext = [firstPage.hasNext];
+      currentPage = 1;
+      warnaList = warna;
+      masterKainList = masterKain;
     } catch {
       showError("Gagal memuat data. Periksa koneksi Firebase.");
     } finally {
       loading = false;
     }
+  }
+
+  async function nextRiwayatPage() {
+    if (!riwayatKain || riwayatPageLoading || !riwayatHasNext) return;
+    riwayatPageLoading = true;
+    try {
+      const result = await getRiwayatStokKainPage(
+        riwayatKain.id,
+        riwayatCursors[riwayatPage] ?? riwayatCursor,
+        10,
+      );
+      riwayatList = result.items;
+      riwayatPageCache[riwayatPage] = result.items;
+      riwayatPageCache = [...riwayatPageCache];
+      riwayatCursors[riwayatPage + 1] = result.cursor;
+      riwayatCursors = [...riwayatCursors];
+      riwayatCursor = result.cursor;
+      riwayatHasNext = result.hasNext;
+      riwayatPage += 1;
+    } finally {
+      riwayatPageLoading = false;
+    }
+  }
+
+  function previousRiwayatPage() {
+    if (riwayatPage <= 1 || riwayatPageLoading) return;
+    riwayatPage -= 1;
+    riwayatList = riwayatPageCache[riwayatPage - 1] ?? riwayatList;
+    riwayatHasNext = true;
+  }
+
+  async function nextPage() {
+    if (pageLoading || !pageHasNext[currentPage - 1]) return;
+    pageLoading = true;
+    try {
+      const result = await getStokKainPage(pageCursors[currentPage] ?? null, PAGE_SIZE);
+      pageCache[currentPage] = result.items;
+      pageCursors[currentPage + 1] = result.cursor;
+      pageHasNext[currentPage] = result.hasNext;
+      pageCache = [...pageCache];
+      pageCursors = [...pageCursors];
+      pageHasNext = [...pageHasNext];
+      currentPage += 1;
+      stokList = result.items;
+    } catch (e) {
+      showError(e instanceof Error ? e.message : "Gagal memuat halaman stok kain berikutnya.");
+    } finally {
+      pageLoading = false;
+    }
+  }
+
+  function previousPage() {
+    if (currentPage <= 1 || pageLoading) return;
+    currentPage -= 1;
+    stokList = pageCache[currentPage - 1] ?? stokList;
+  }
+
+  function setSearch(value: string) {
+    searchQuery = value;
+    currentPage = 1;
+    stokList = pageCache[0] ?? stokList;
+  }
+
+  function setSort(value: "nama" | "tersedia_asc" | "tersedia_desc") {
+    sortBy = value;
+    currentPage = 1;
+    stokList = pageCache[0] ?? stokList;
   }
 
   function getSelectedWarna(warnaId: string) {
@@ -949,7 +1043,8 @@
     <input
       type="text"
       placeholder="Cari nama kain..."
-      bind:value={searchQuery}
+      value={searchQuery}
+      oninput={(event) => setSearch((event.currentTarget as HTMLInputElement).value)}
       class="w-full rounded-lg border border-gray-200 bg-white py-2 pl-9 pr-4 text-sm text-gray-700 placeholder:text-gray-400 focus:outline-none"
     />
   </div>
@@ -960,7 +1055,7 @@
       <Button
         size="sm"
         variant={sortBy === val ? "default" : "outline"}
-        onclick={() => (sortBy = val)}
+        onclick={() => setSort(val)}
       >
         {lbl}
       </Button>
@@ -1030,7 +1125,7 @@
         <p class="text-sm font-medium text-gray-500">
           Kain "{searchQuery}" tidak ditemukan
         </p>
-        <Button variant="link" size="sm" onclick={() => (searchQuery = "")}>
+        <Button variant="link" size="sm" onclick={() => setSearch("")}>
           Hapus filter
         </Button>
       {:else}
@@ -1203,8 +1298,15 @@
       class="flex items-center justify-between border-t border-gray-100 bg-gray-50 px-5 py-3"
     >
       <p class="text-xs text-gray-400">
-        Menampilkan {groupedList.length} jenis kain
+        Menampilkan {groupedList.length} jenis kain pada halaman {currentPage}
       </p>
+      {#if currentPage > 1 || pageHasNext[currentPage - 1]}
+        <div class="flex items-center gap-2">
+          <Button variant="outline" size="sm" disabled={currentPage === 1 || pageLoading} onclick={previousPage}>Sebelumnya</Button>
+          <span class="text-xs font-medium text-gray-700">Halaman {currentPage}{pageLoading ? "..." : ""}</span>
+          <Button variant="outline" size="sm" disabled={pageLoading || !pageHasNext[currentPage - 1]} onclick={nextPage}>Berikutnya</Button>
+        </div>
+      {/if}
       <div class="flex flex-wrap gap-3 text-xs text-gray-400">
         {#if totalYard > 0}
           <span
@@ -1970,7 +2072,7 @@
         <Dialog.Description>
           {riwayatKain.nama_kain}{riwayatKain.nama_warna
             ? ` · ${riwayatKain.nama_warna}`
-            : ""} — 50 entri terakhir
+            : ""} — halaman {riwayatPage}
         </Dialog.Description>
       {/if}
     </Dialog.Header>
@@ -2152,6 +2254,14 @@
             </div>
           {/each}
         </div>
+      </div>
+    {/if}
+
+    {#if !riwayatLoading && riwayatList.length > 0 && (riwayatPage > 1 || riwayatHasNext)}
+      <div class="mt-4 flex items-center justify-end gap-2 border-t border-gray-100 pt-3">
+        <Button variant="outline" size="sm" disabled={riwayatPage === 1 || riwayatPageLoading} onclick={previousRiwayatPage}>Sebelumnya</Button>
+        <span class="text-xs text-gray-500">Halaman {riwayatPage}</span>
+        <Button variant="outline" size="sm" disabled={!riwayatHasNext || riwayatPageLoading} onclick={nextRiwayatPage}>{riwayatPageLoading ? "Memuat..." : "Berikutnya"}</Button>
       </div>
     {/if}
 

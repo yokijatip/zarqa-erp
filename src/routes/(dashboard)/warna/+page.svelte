@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { addWarna, updateWarna, deleteWarna } from "$lib/firebase/warna";
-  import { warnaCache } from "$lib/stores/data-cache.svelte";
+  import { addWarna, updateWarna, deleteWarna, getWarnaPage } from "$lib/firebase/warna";
+  import type { FirestoreCursor } from "$lib/firebase/pagination";
   import type { Warna } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
   import * as Table from "$lib/components/ui/table";
@@ -17,6 +17,12 @@
   let errorMsg = $state<string | null>(null);
   let successMsg = $state<string | null>(null);
   let searchQuery = $state("");
+  const PAGE_SIZE = 25;
+  let currentPage = $state(1);
+  let pageCursors = $state<FirestoreCursor[]>([null]);
+  let pageHasNext = $state<boolean[]>([]);
+  let pageCache = $state<Warna[][]>([]);
+  let pageLoading = $state(false);
 
   // Dialog state
   let openTambah = $state(false);
@@ -59,12 +65,50 @@
     loading = true;
     errorMsg = null;
     try {
-      warnaList = await warnaCache.get(force);
+      void force;
+      const firstPage = await getWarnaPage(null, PAGE_SIZE);
+      warnaList = firstPage.items;
+      pageCache = [firstPage.items];
+      pageCursors = [null, firstPage.cursor];
+      pageHasNext = [firstPage.hasNext];
+      currentPage = 1;
     } catch {
       showError("Gagal memuat data warna. Periksa koneksi Firebase.");
     } finally {
       loading = false;
     }
+  }
+
+  async function nextPage() {
+    if (pageLoading || !pageHasNext[currentPage - 1]) return;
+    pageLoading = true;
+    try {
+      const result = await getWarnaPage(pageCursors[currentPage] ?? null, PAGE_SIZE);
+      pageCache[currentPage] = result.items;
+      pageCursors[currentPage + 1] = result.cursor;
+      pageHasNext[currentPage] = result.hasNext;
+      pageCache = [...pageCache];
+      pageCursors = [...pageCursors];
+      pageHasNext = [...pageHasNext];
+      currentPage += 1;
+      warnaList = result.items;
+    } catch (e) {
+      showError(e instanceof Error ? e.message : "Gagal memuat halaman warna berikutnya.");
+    } finally {
+      pageLoading = false;
+    }
+  }
+
+  function previousPage() {
+    if (currentPage <= 1 || pageLoading) return;
+    currentPage -= 1;
+    warnaList = pageCache[currentPage - 1] ?? warnaList;
+  }
+
+  function setSearch(value: string) {
+    searchQuery = value;
+    currentPage = 1;
+    warnaList = pageCache[0] ?? warnaList;
   }
 
   // ── Dialog helpers ────────────────────────────────────────────────
@@ -231,7 +275,8 @@
     <input
       type="text"
       placeholder="Cari nama warna..."
-      bind:value={searchQuery}
+      value={searchQuery}
+      oninput={(event) => setSearch((event.currentTarget as HTMLInputElement).value)}
       class="w-full rounded-lg border border-gray-200 bg-white py-2 pl-9 pr-4 text-sm text-gray-700 placeholder:text-gray-400 focus:outline-none"
     />
   </div>
@@ -375,8 +420,15 @@
 
     <div class="flex items-center justify-between border-t border-gray-100 bg-gray-50 px-5 py-3">
       <p class="text-xs text-gray-400">
-        Menampilkan {filteredList.length} dari {warnaList.length} warna
+        Menampilkan {filteredList.length} warna pada halaman {currentPage}
       </p>
+      {#if currentPage > 1 || pageHasNext[currentPage - 1]}
+        <div class="flex items-center gap-2">
+          <Button variant="outline" size="sm" disabled={currentPage === 1 || pageLoading} onclick={previousPage}>Sebelumnya</Button>
+          <span class="text-xs font-medium text-gray-700">Halaman {currentPage}{pageLoading ? "..." : ""}</span>
+          <Button variant="outline" size="sm" disabled={pageLoading || !pageHasNext[currentPage - 1]} onclick={nextPage}>Berikutnya</Button>
+        </div>
+      {/if}
     </div>
   {/if}
 </div>

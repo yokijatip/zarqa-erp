@@ -5,6 +5,7 @@ import {
   query, orderBy, where,
 } from 'firebase/firestore';
 import { db } from './config';
+import { getCursorPage, type FirestoreCursor, type CursorPage } from './pagination';
 import type { Warna, WarnaInput } from '$lib/types';
 
 const COL = 'warna';
@@ -13,6 +14,18 @@ export async function getWarnaList(): Promise<Warna[]> {
   const q = query(collection(db, COL), orderBy('nama_warna', 'asc'));
   const snap = await getDocs(q);
   return snap.docs.map((d) => ({ id: d.id, ...d.data() } as Warna));
+}
+
+export async function getWarnaPage(
+  cursor: FirestoreCursor,
+  pageSize = 25,
+): Promise<CursorPage<Warna>> {
+  return getCursorPage(
+    query(collection(db, COL), orderBy('nama_warna', 'asc')),
+    cursor,
+    (d) => ({ id: d.id, ...d.data() }) as Warna,
+    pageSize,
+  );
 }
 
 export async function getWarnaById(id: string): Promise<Warna | null> {

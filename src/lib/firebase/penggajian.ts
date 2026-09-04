@@ -7,10 +7,11 @@
 //
 // Breakdown model per karyawan dikelompokkan per model dengan detail warna, ukuran, dan tanggal
 
-import { collectionGroup, getDocs, getDoc, doc, collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collectionGroup, getDocs, getDoc, doc, collection, addDoc, serverTimestamp, query, where, orderBy, Timestamp } from 'firebase/firestore';
 import { db } from './config';
 import { consumeSumberCuttingLots } from './batch-produksi';
 import { getKaryawanList } from './karyawan';
+import { getCursorPage, type FirestoreCursor, type CursorPage } from './pagination';
 import { canonicalUkuran } from '$lib/types';
 import type {
   RiwayatProses,
@@ -71,7 +72,17 @@ function dedupeSteamFinalizationEvents(events: RiwayatEvent[]): RiwayatEvent[] {
 
 // Ambil semua event riwayat_proses yang relevan untuk penggajian
 async function getRiwayatEvents(range: { start: Date; end: Date } | null): Promise<RiwayatEvent[]> {
-  const snap = await getDocs(collectionGroup(db, 'riwayat_proses'));
+  const base = collectionGroup(db, 'riwayat_proses');
+  const snap = await getDocs(
+    range
+      ? query(
+          base,
+          where('timestamp', '>=', Timestamp.fromDate(range.start)),
+          where('timestamp', '<=', Timestamp.fromDate(range.end)),
+          orderBy('timestamp', 'desc'),
+        )
+      : base,
+  );
   const events: RiwayatEvent[] = [];
 
   snap.docs.forEach((d) => {
@@ -487,5 +498,28 @@ export async function getPembayaranGajiPeriode(
   });
 
   return result;
+}
+
+/** Ambil riwayat pembayaran satu karyawan per halaman. */
+export async function getPembayaranGajiKaryawanPage(
+  uid: string,
+  range: { start: Date; end: Date } | null,
+  cursor: FirestoreCursor,
+  pageSize = 10,
+): Promise<CursorPage<PembayaranGajiRecord>> {
+  const page = await getCursorPage(
+    query(collection(db, 'pembayaran_gaji'), where('karyawan_uid', '==', uid)),
+    cursor,
+    (docSnap) => ({ id: docSnap.id, ...docSnap.data() }) as PembayaranGajiRecord,
+    pageSize,
+  );
+  const items = range
+    ? page.items.filter((item) => {
+        const start = item.periode_start ? new Date(item.periode_start) : null;
+        const end = item.periode_end ? new Date(item.periode_end) : null;
+        return !start || !end || !(end < range.start || start > range.end);
+      })
+    : page.items;
+  return { ...page, items };
 }
 

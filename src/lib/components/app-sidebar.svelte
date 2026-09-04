@@ -46,6 +46,8 @@
       isActive: true,
       items: [
         { title: "Stok Kain", url: "/stok-kain" },
+        { title: "Model Hijab", url: "/model-hijab" },
+        { title: "Stok Hijab", url: "/stok-hijab" },
         { title: "Model Baju", url: "/model-baju" },
         { title: "Stok Potongan", url: "/stok-potongan" },
         { title: "Barang Jadi", url: "/barang-jadi" },

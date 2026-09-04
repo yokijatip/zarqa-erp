@@ -134,7 +134,9 @@
           isFinal: false,
         };
       case "CUTTING_DONE":
-        // Hanya batch dari_potongan yang bisa dilanjut ke jahit
+        // Batch baju dari stok potongan dan batch hijab original sama-sama
+        // diteruskan ke Jahit. Batch cutting baju original tetap masuk stok
+        // potongan terlebih dahulu.
         if (!b.dari_potongan) return null;
         return {
           label: "Mulai Jahit",
@@ -164,7 +166,7 @@
       case "STEAM_IN_PROGRESS":
         // Langsung ke COMPLETED, skip STEAM_DONE
         return {
-          label: "Selesaikan Steam & Kirim ke Barang Jadi",
+          label: b.jenis_produk === "hijab" ? "Selesaikan Steam & Kirim ke Stok Hijab" : "Selesaikan Steam & Kirim ke Barang Jadi",
           nextStatus: "COMPLETED",
           needsWorker: false,
           needsPcs: true,
@@ -173,7 +175,7 @@
       case "STEAM_DONE":
         // Recovery: batch stuck di STEAM_DONE
         return {
-          label: "Selesaikan & Kirim ke Barang Jadi",
+          label: b.jenis_produk === "hijab" ? "Selesaikan & Kirim ke Stok Hijab" : "Selesaikan & Kirim ke Barang Jadi",
           nextStatus: "COMPLETED",
           needsWorker: false,
           needsPcs: false,
@@ -212,6 +214,8 @@
   // Per-ukuran PCS aktual yang berhasil di tahap ini.
   let actionUkuranBerhasil = $state<number[]>([]);
   let actionUkuranReject = $state<number[]>([]);
+  let actionJumlahHijab = $state(0);
+  let actionRejectHijab = $state(0);
 
   let canAction = $derived(
     !!$userRole &&
@@ -285,18 +289,22 @@
   // ── Edit kuantitas dialog ─────────────────────────────────────────
   let editOpen = $state(false);
   let editUkuranJumlah = $state<number[]>([]);
+  let editJumlahHijab = $state(0);
   let editAlasan = $state("");
   let editSaving = $state(false);
   let editError = $state<string | null>(null);
 
   let editTotal = $derived(
-    editUkuranJumlah.reduce((s, n) => s + (Number(n) || 0), 0),
+    batch?.jenis_produk === "hijab"
+      ? Math.max(0, Number(editJumlahHijab) || 0)
+      : editUkuranJumlah.reduce((s, n) => s + (Number(n) || 0), 0),
   );
   let editFormValid = $derived(editTotal > 0);
 
   function openEditDialog() {
     if (!batch) return;
     editUkuranJumlah = batch.detail_ukuran.map((du) => du.jumlah_pcs);
+    editJumlahHijab = batch.jenis_produk === "hijab" ? batch.jumlah_target ?? batch.total_pcs : 0;
     editAlasan = "";
     editError = null;
     editOpen = true;
@@ -321,6 +329,7 @@
         uid,
         nama,
         editAlasan.trim() || undefined,
+        batch.jenis_produk === "hijab" ? editTotal : undefined,
       );
       batchCache.invalidate();
       editOpen = false;
@@ -515,10 +524,14 @@
 
   // Totals derived dari per-ukuran
   let actionTotalBerhasil = $derived(
-    actionUkuranBerhasil.reduce((s, n) => s + (Number(n) || 0), 0),
+    batch?.jenis_produk === "hijab"
+      ? Math.max(0, Number(actionJumlahHijab) || 0)
+      : actionUkuranBerhasil.reduce((s, n) => s + (Number(n) || 0), 0),
   );
   let actionTotalReject = $derived(
-    actionUkuranReject.reduce((s, n) => s + (Number(n) || 0), 0),
+    batch?.jenis_produk === "hijab"
+      ? Math.max(0, Number(actionRejectHijab) || 0)
+      : actionUkuranReject.reduce((s, n) => s + (Number(n) || 0), 0),
   );
   let actionTotalSubmittedBefore = $derived(
     Array.from(actionSubmittedBySize.values()).reduce((s, n) => s + n, 0),
@@ -527,7 +540,9 @@
     Array.from(actionRejectedBySize.values()).reduce((s, n) => s + n, 0),
   );
   let actionTotalRemaining = $derived(
-    actionRemainingBySize.reduce((s, n) => s + n, 0),
+    batch?.jenis_produk === "hijab"
+      ? (batch.pcs_saat_ini ?? batch.total_pcs)
+      : actionRemainingBySize.reduce((s, n) => s + n, 0),
   );
   let actionMaxPcs = $derived(
     batch ? (batch.pcs_saat_ini ?? batch.total_pcs) : 0,
@@ -549,7 +564,7 @@
   // sisanya tetap dikerjakan). Cutting selalu dituntaskan sekali jalan dengan pcs
   // aktual yang didapat — tidak ada mekanisme lanjutan di backend untuk cutting.
   let actionCanPartial = $derived(
-    !currentAction?.isFinal && batch?.status === "JAHIT_IN_PROGRESS",
+    !currentAction?.isFinal && batch?.status === "JAHIT_IN_PROGRESS" && batch?.jenis_produk !== "hijab",
   );
 
   let actionFormValid = $derived.by(() => {
@@ -557,6 +572,13 @@
     if (currentAction.needsWorker && !actionWorkerUid && !currentAssignedWorker)
       return false;
     if (currentAction.needsPcs) {
+      if (batch?.jenis_produk === "hijab") {
+        if (actionTotalBerhasil + actionTotalReject <= 0) return false;
+        if (actionTotalBerhasil + actionTotalReject > actionTotalRemaining) return false;
+        if (actionTotalBerhasil < 0 || actionTotalReject < 0) return false;
+        if ((currentAction.isFinal || batch?.status === "JAHIT_IN_PROGRESS") && actionTotalBerhasil + actionTotalReject !== actionTotalRemaining) return false;
+        return true;
+      }
       if (currentAction.isFinal && batch?.status === "STEAM_IN_PROGRESS") {
         // Steam: harus full completion
         if (actionTotalBerhasil + actionTotalReject > actionTotalRemaining)
@@ -652,6 +674,8 @@
       (_, i) => actionRemainingBySize[i] ?? 0,
     );
     actionUkuranReject = batch.detail_ukuran.map(() => 0);
+    actionJumlahHijab = batch.jenis_produk === "hijab" ? actionRemainingBySize.reduce((s, n) => s + n, 0) || (batch.pcs_saat_ini ?? batch.total_pcs) : 0;
+    actionRejectHijab = 0;
     actionError = null;
     actionOpen = true;
   }
@@ -701,7 +725,9 @@
         .filter((du) => du.jumlah_pcs > 0);
 
       const newDetailUkuran = currentAction.needsPcs
-        ? batch.detail_ukuran
+        ? batch.jenis_produk === "hijab"
+          ? undefined
+          : batch.detail_ukuran
             .map((du, i) => ({
               ukuran: du.ukuran,
               jumlah_pcs:
@@ -1001,6 +1027,9 @@
     <div>
       <div class="flex items-center gap-2">
         <h1 class="text-xl font-semibold text-gray-900">{batch.nama_model}</h1>
+        <span class="rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-semibold text-gray-600">
+          {batch.jenis_produk === "hijab" ? "Hijab" : "Baju"}
+        </span>
         {#if batch.kode_hex_warna}
           <span
             class="inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-2.5 py-0.5 text-xs font-medium text-gray-700"
@@ -1030,7 +1059,7 @@
           <ClockIcon class="h-3 w-3" />
           {hari} hari berjalan
         </span>
-        {#if batch.dari_potongan}
+        {#if batch.dari_potongan && batch.jenis_produk !== "hijab"}
           <span
             class="rounded-full bg-teal-50 px-2 py-0.5 text-[10px] font-semibold text-teal-700"
             >dari potongan</span
@@ -1195,7 +1224,8 @@
         </div>
       </div>
 
-      <!-- Ukuran -->
+      <!-- Ukuran hanya relevan untuk baju; hijab cukup menampilkan total pcs. -->
+      {#if batch.jenis_produk !== "hijab"}
       <div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
         <p
           class="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-400"
@@ -1214,6 +1244,16 @@
           {/each}
         </div>
       </div>
+      {:else}
+      <div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
+        <p class="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-400">Produk Hijab</p>
+        <div class="flex items-center justify-between rounded-lg border border-gray-100 bg-gray-50 px-4 py-3">
+          <span class="text-sm text-gray-500">Jumlah produksi</span>
+          <span class="text-lg font-bold text-gray-900">{(batch.pcs_saat_ini ?? batch.jumlah_target ?? batch.total_pcs).toLocaleString("id-ID")} pcs</span>
+        </div>
+        <p class="mt-2 text-xs text-gray-400">Produk hijab tidak menggunakan ukuran baju.</p>
+      </div>
+      {/if}
 
       <!-- Penugasan -->
       <div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
@@ -1420,6 +1460,7 @@
         </Dialog.Description>
       </Dialog.Header>
       <div class="space-y-4 py-1">
+        {#if batch.jenis_produk !== "hijab"}
         <div class="overflow-hidden rounded-lg border border-gray-200">
           <table class="w-full text-sm">
             <thead class="bg-gray-50">
@@ -1464,6 +1505,14 @@
             </tfoot>
           </table>
         </div>
+        {:else}
+          <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
+            <label class="block text-sm font-medium text-gray-700" for="edit-jumlah-hijab">Jumlah pcs target</label>
+            <Input id="edit-jumlah-hijab" type="number" min="1" class="mt-2" bind:value={editJumlahHijab} />
+            <p class="mt-1 text-xs text-gray-400">Tidak ada pembagian ukuran untuk batch hijab.</p>
+            <p class="mt-2 text-sm font-semibold text-gray-700">Total: {editTotal} pcs</p>
+          </div>
+        {/if}
         <div>
           <label class="mb-1 block text-sm font-medium text-gray-700"
             >Alasan <span class="text-xs font-normal text-gray-400"
@@ -1651,6 +1700,27 @@
         {/if}
 
         {#if currentAction.needsPcs}
+          {#if batch.jenis_produk === "hijab"}
+            <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
+              <div class="flex items-center justify-between text-sm">
+                <span class="font-medium text-gray-700">Sisa pekerjaan hijab</span>
+                <span class="font-semibold text-gray-900">{actionTotalRemaining} pcs</span>
+              </div>
+              <div class="mt-3 grid grid-cols-2 gap-3">
+                <div>
+                  <label class="block text-xs font-medium text-gray-600" for="action-jumlah-hijab">Berhasil</label>
+                  <Input id="action-jumlah-hijab" type="number" min="0" max={actionTotalRemaining} class="mt-1" bind:value={actionJumlahHijab} />
+                </div>
+                {#if currentAction.isFinal}
+                  <div>
+                    <label class="block text-xs font-medium text-gray-600" for="action-reject-hijab">Reject</label>
+                    <Input id="action-reject-hijab" type="number" min="0" max={actionTotalRemaining} class="mt-1 text-red-600" bind:value={actionRejectHijab} />
+                  </div>
+                {/if}
+              </div>
+              <p class="mt-2 text-xs text-gray-400">Hijab tidak memakai ukuran. Total berhasil + reject harus menghabiskan sisa pekerjaan.</p>
+            </div>
+          {:else}
           <!-- Tabel per-ukuran -->
           <div class="overflow-hidden rounded-lg border border-gray-200">
             <table class="w-full text-sm">
@@ -1765,6 +1835,7 @@
               </tfoot>
             </table>
           </div>
+          {/if}
           {#if batch?.status === "STEAM_IN_PROGRESS" && actionTotalBerhasil + actionTotalReject > actionTotalRemaining}
             <p class="text-xs text-red-500">
               Total berhasil + reject melebihi sisa pekerjaan ({actionTotalRemaining}
@@ -1773,7 +1844,7 @@
           {/if}
           {#if batch?.status === "STEAM_IN_PROGRESS"}
             <p class="text-xs text-emerald-600">
-              Batch akan langsung diselesaikan dan masuk ke stok barang jadi.
+              Batch akan langsung diselesaikan dan masuk ke {batch?.jenis_produk === "hijab" ? "stok hijab" : "stok barang jadi"}.
             </p>
           {:else if currentAction?.needsPcs && !actionCanPartial}
             <p class="text-xs text-emerald-600">
@@ -1810,7 +1881,9 @@
             Menyimpan...
           {:else}
             {currentAction.isFinal
-              ? "Selesaikan & Kirim ke Barang Jadi"
+              ? batch.jenis_produk === "hijab"
+                ? "Selesaikan & Kirim ke Stok Hijab"
+                : "Selesaikan & Kirim ke Barang Jadi"
               : currentAction.label}
           {/if}
         </Button>
