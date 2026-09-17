@@ -463,7 +463,8 @@
 
   async function loadKainList() {
     try {
-      const kain = await stokKainCache.get();
+      // Stok kain dapat berubah dari halaman gudang pada sesi yang sama; selalu ambil saldo terbaru.
+      const kain = await stokKainCache.get(true);
       stokKainList = kain.map((k) => ({
         id: k.id,
         nama_kain: k.nama_kain,

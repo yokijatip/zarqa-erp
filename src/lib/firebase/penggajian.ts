@@ -113,7 +113,12 @@ async function getRiwayatEvents(range: { start: Date; end: Date } | null): Promi
       uid,
       nama: data.updated_by_nama,
       pcsBerhasil: data.pcs_berhasil ?? 0,
-      detailUkuran: Array.isArray(rawDetailUkuran) ? rawDetailUkuran : [],
+      detailUkuran: Array.isArray(rawDetailUkuran)
+        ? rawDetailUkuran.map((item) => ({
+            ...item,
+            ukuran: canonicalUkuran(String(item.ukuran ?? '')),
+          }))
+        : [],
       timestamp,
     });
   });
@@ -132,7 +137,21 @@ async function getBatchMap(batchIds: string[]): Promise<Map<string, BatchProduks
   await Promise.all(
     uniqueIds.map(async (id) => {
       const snap = await getDoc(doc(db, 'batch_produksi', id));
-      if (snap.exists()) map.set(id, { id: snap.id, ...snap.data() } as BatchProduksi);
+      if (snap.exists()) {
+        const data = snap.data() as BatchProduksi;
+        map.set(id, {
+          ...data,
+          id: snap.id,
+          detail_ukuran: (data.detail_ukuran ?? []).map((item) => ({
+            ...item,
+            ukuran: canonicalUkuran(String(item.ukuran ?? '')),
+          })),
+          sumber_cutting: (data.sumber_cutting ?? []).map((lot) => ({
+            ...lot,
+            ...(lot.ukuran ? { ukuran: canonicalUkuran(lot.ukuran) } : {}),
+          })),
+        });
+      }
     })
   );
   return map;

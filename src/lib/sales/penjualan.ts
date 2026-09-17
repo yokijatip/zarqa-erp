@@ -1,4 +1,43 @@
-import { canonicalUkuran, type BarangKeluar, type BarangKeluarItem, type ModelBaju, type UkuranBaju } from '$lib/types';
+import {
+  canonicalUkuran,
+  type BarangKeluar,
+  type BarangKeluarItem,
+  type ModeHargaVarian,
+  type ModelBaju,
+  type UkuranBaju,
+  type VarianPenjualan,
+} from '$lib/types';
+
+export type JenisHargaVarian = 'jual' | 'produksi';
+
+export function modeHargaVarian(
+  variant: VarianPenjualan | undefined,
+  jenis: JenisHargaVarian,
+): ModeHargaVarian {
+  if (!variant) return 'induk_plus_addon';
+  const explicit = jenis === 'jual' ? variant.harga_jual_mode : variant.harga_produksi_mode;
+  if (explicit === 'custom' || explicit === 'induk_plus_addon') return explicit;
+
+  // Data lama memakai harga tunggal sebagai harga custom total per ukuran.
+  const legacy = jenis === 'jual' ? variant.harga_jual : variant.harga_produksi;
+  const priceMap = jenis === 'jual' ? variant.harga_jual_per_ukuran : variant.harga_produksi_per_ukuran;
+  return legacy != null && legacy > 0 || Object.values(priceMap ?? {}).some((value) => value != null && value > 0)
+    ? 'custom'
+    : 'induk_plus_addon';
+}
+
+export function hargaCustomVarianUntukUkuran(
+  variant: VarianPenjualan | undefined,
+  jenis: JenisHargaVarian,
+  ukuran: string,
+): number | undefined {
+  if (!variant || modeHargaVarian(variant, jenis) !== 'custom') return undefined;
+  const priceMap = jenis === 'jual' ? variant.harga_jual_per_ukuran : variant.harga_produksi_per_ukuran;
+  const bySize = priceMap?.[canonicalUkuran(ukuran)];
+  if (bySize != null && bySize > 0) return bySize;
+  const legacy = jenis === 'jual' ? variant.harga_jual : variant.harga_produksi;
+  return legacy != null && legacy > 0 ? legacy : undefined;
+}
 
 export type SalesItemRow = {
   listId: string;
@@ -127,6 +166,12 @@ function effectivePrice(snapshot: number | undefined, fallback: number): number 
 }
 
 export function salesItemValue(item: BarangKeluarItem, modelList: ModelBaju[]) {
+  if (item.jenis_produk === 'hijab') {
+    if (item.status === 'pending') return { nilaiJual: 0, hpp: 0, laba: 0 };
+    const nilaiJual = item.total_pcs * (item.harga_jual_per_pcs ?? 0);
+    const hpp = item.total_pcs * (item.harga_produksi_per_pcs ?? 0);
+    return { nilaiJual, hpp, laba: nilaiJual - hpp };
+  }
   const model = findModel(modelList, item.model_id, item.nama_model);
   const harga = modelPrice(modelList, item.model_id, item.nama_model);
   if (item.status === 'pending') return { nilaiJual: 0, hpp: 0, laba: 0 };
@@ -144,6 +189,32 @@ export function salesItemValue(item: BarangKeluarItem, modelList: ModelBaju[]) {
 export function salesItemRows(data: BarangKeluar[], modelList: ModelBaju[]): SalesItemRow[] {
   return data.flatMap((row) =>
     listItems(row).flatMap((item) => {
+      if (item.jenis_produk === 'hijab') {
+        const isPending = item.status === 'pending';
+        const hargaJual = item.harga_jual_per_pcs ?? 0;
+        const hargaProduksi = item.harga_produksi_per_pcs ?? 0;
+        const nilaiJual = isPending ? 0 : item.total_pcs * hargaJual;
+        const hpp = isPending ? 0 : item.total_pcs * hargaProduksi;
+        return [{
+          listId: row.id,
+          tanggal: row.tanggal_keluar,
+          tujuan: item.tujuan ?? row.tujuan,
+          buyer: item.nama_reseller ?? row.nama_reseller ?? '-',
+          model_id: item.model_id,
+          nama_model: item.nama_model,
+          varian_id: item.varian_id,
+          nama_varian: item.nama_varian,
+          nama_warna: item.nama_warna,
+          ukuran: 'ALL SIZE',
+          status: item.status,
+          pcs: item.total_pcs,
+          harga_jual: hargaJual,
+          harga_produksi: hargaProduksi,
+          nilai_jual: nilaiJual,
+          hpp,
+          laba: nilaiJual - hpp,
+        } satisfies SalesItemRow];
+      }
       const model = findModel(modelList, item.model_id, item.nama_model);
       return item.detail_keluar.map((detail) => {
         const isPending = item.status === 'pending';

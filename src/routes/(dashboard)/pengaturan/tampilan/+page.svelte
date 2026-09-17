@@ -25,7 +25,21 @@
     { value: 'light',  label: 'Terang',  desc: 'Latar putih' },
     { value: 'dark',   label: 'Gelap',   desc: 'Latar gelap' },
     { value: 'system', label: 'Sistem',  desc: 'Ikuti perangkat' },
+    { value: 'midnight', label: 'Midnight', desc: 'Gelap netral' },
+    { value: 'ocean', label: 'Ocean', desc: 'Biru laut' },
+    { value: 'forest', label: 'Forest', desc: 'Hijau tenang' },
+    { value: 'amoled', label: 'AMOLED', desc: 'Hitam pekat' },
   ];
+
+  const temaPreview: Record<Tema, string> = {
+    light: 'theme-preview-light',
+    dark: 'theme-preview-dark',
+    system: 'theme-preview-system',
+    midnight: 'theme-preview-midnight',
+    ocean: 'theme-preview-ocean',
+    forest: 'theme-preview-forest',
+    amoled: 'theme-preview-amoled',
+  };
 
   const densitasOptions: { value: Densitas; label: string; desc: string }[] = [
     { value: 'default', label: 'Default', desc: 'Jarak & font normal' },
@@ -43,10 +57,11 @@
   <!-- ── Tema ─────────────────────────────────────────────────────── -->
   <div class="rounded-xl border border-gray-100 bg-white p-5">
     <h2 class="mb-3 text-sm font-semibold text-gray-800">Tema Warna</h2>
-    <div class="grid grid-cols-3 gap-2">
+    <div class="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
       {#each temaOptions as opt}
         <button
           type="button"
+          aria-pressed={tema === opt.value}
           onclick={() => (tema = opt.value)}
           class={`rounded-xl border-2 p-3 text-left transition-colors ${
             tema === opt.value
@@ -54,12 +69,7 @@
               : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300'
           }`}
         >
-          <!-- Mini preview -->
-          <div class={`mb-2 h-8 w-full rounded-md border ${
-            opt.value === 'light'  ? 'bg-white border-gray-200' :
-            opt.value === 'dark'   ? 'bg-gray-900 border-gray-700' :
-            'bg-gradient-to-r from-white to-gray-900 border-gray-300'
-          }`}></div>
+          <div class={`theme-preview mb-2 h-8 w-full rounded-md border ${temaPreview[opt.value]}`}></div>
           <p class="text-sm font-medium">{opt.label}</p>
           <p class={`text-[11px] ${tema === opt.value ? 'text-gray-300' : 'text-gray-400'}`}>
             {opt.desc}

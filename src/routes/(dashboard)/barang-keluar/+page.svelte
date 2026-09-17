@@ -9,13 +9,15 @@
     prosesPendingBarangKeluar,
   } from "$lib/firebase/barang-jadi";
   import type { FirestoreCursor } from "$lib/firebase/pagination";
-  import { barangJadiCache, modelBajuCache } from "$lib/stores/data-cache.svelte";
+  import { barangJadiCache, modelBajuCache, modelHijabCache, stokHijabCache } from "$lib/stores/data-cache.svelte";
   import { currentUser, userRole } from "$lib/stores/auth.store";
   import {
     UKURAN_ORDER,
     TUJUAN_PENGIRIMAN_OPTIONS,
     type StokBarangJadi,
     type ModelBaju,
+    type ModelHijab,
+    type StokHijab,
     type BarangKeluar,
     type BarangKeluarItem,
     type UkuranBaju,
@@ -43,6 +45,7 @@
   import BarangKeluarDetailDialog from "$lib/components/barang-keluar-detail-dialog.svelte";
   import {
     type ImportBarangKeluarItem,
+    BARANG_KELUAR_IMPORT_DRAFT_KEY,
     parseBarangKeluarText,
     splitImportItemsByStock,
   } from "$lib/import/barang-keluar";
@@ -54,6 +57,8 @@
   // ── State ──────────────────────────────────────────────────────────
   let stokList = $state<StokBarangJadi[]>([]);
   let modelList = $state<ModelBaju[]>([]);
+  let modelHijabList = $state<ModelHijab[]>([]);
+  let stokHijabList = $state<StokHijab[]>([]);
   let riwayat = $state<BarangKeluar[]>([]);
   let loading = $state(true);
   let saving = $state(false);
@@ -68,11 +73,13 @@
   let importParsing = $state(false);
   let importSaving = $state(false);
   let importError = $state<string | null>(null);
+  let importErrorOpen = $state(false);
   let importFileName = $state("");
   let importItems = $state<ImportBarangKeluarItem[]>([]);
   let importTujuan = $state("");
   let importNamaReseller = $state("");
   let importKeterangan = $state("");
+  let importBatalPcs = $state(0);
 
   // Cancel dialog
   let batalTarget = $state<BarangKeluar | null>(null);
@@ -91,6 +98,7 @@
       nama: $currentUser.name || $currentUser.email || $currentUser.uid,
     });
     barangJadiCache.invalidate();
+    stokHijabCache.invalidate();
     await load(true);
     detailTarget = riwayat.find((item) => item.id === detailTarget?.id) ?? detailTarget;
     showSuccess(
@@ -107,6 +115,7 @@
       nama: $currentUser.name || $currentUser.email || $currentUser.uid,
     });
     barangJadiCache.invalidate();
+    stokHijabCache.invalidate();
     await load(true);
     detailTarget = result.deleted
       ? null
@@ -134,6 +143,7 @@
         nama: $currentUser.name || $currentUser.email || $currentUser.uid,
       });
       barangJadiCache.invalidate();
+      stokHijabCache.invalidate();
       await load(true);
       batalOpen = false;
       showSuccess(
@@ -414,10 +424,7 @@
           sum +
           listItems(r)
             .filter((item) => item.status !== "pending")
-            .reduce((s, item) => s + item.detail_keluar.reduce(
-              (detailSum, detail) => detailSum + detail.jumlah_pcs * (detail.harga_jual ?? hargaJualUntukUkuran(modelList.find((model) => model.id === item.model_id), detail.ukuran)),
-              0,
-            ), 0),
+            .reduce((s, item) => s + itemNilaiJual(item), 0),
         0,
       );
       const totalNilaiProduksiPdf = riwayatPeriod.reduce(
@@ -425,7 +432,7 @@
           sum +
           listItems(r)
             .filter((item) => item.status !== "pending")
-            .reduce((s, item) => s + item.total_pcs * hargaModel(item.model_id).produksi, 0),
+            .reduce((s, item) => s + itemNilaiProduksi(item), 0),
         0,
       );
       doc.text(`Total Pengiriman: ${totalPengiriman}`, marginX, 41);
@@ -510,14 +517,8 @@
           )
           .flatMap((r) => listItems(r).map((item) => {
             const harga = hargaModel(item.model_id);
-            const totalJual = item.status === "pending" ? 0 : item.detail_keluar.reduce(
-              (sum, detail) => sum + detail.jumlah_pcs * (detail.harga_jual && detail.harga_jual > 0 ? detail.harga_jual : hargaJualUntukUkuran(modelList.find((model) => model.id === item.model_id), detail.ukuran)),
-              0,
-            );
-            const totalProduksi = item.status === "pending" ? 0 : item.detail_keluar.reduce(
-              (sum, detail) => sum + detail.jumlah_pcs * (detail.harga_produksi && detail.harga_produksi > 0 ? detail.harga_produksi : hargaProduksiUntukUkuran(modelList.find((model) => model.id === item.model_id), detail.ukuran)),
-              0,
-            );
+            const totalJual = itemNilaiJual(item);
+            const totalProduksi = itemNilaiProduksi(item);
             return [
                formatDate(r.tanggal_keluar),
                r.tujuan,
@@ -527,8 +528,12 @@
                itemSummary(item),
               item.status === "pending" ? "Pending" : "Keluar",
               String(item.total_pcs),
-              harga.jual > 0 ? formatRupiah(harga.jual) : "-",
-              harga.produksi > 0 ? formatRupiah(harga.produksi) : "-",
+              item.jenis_produk === "hijab"
+                ? (item.harga_jual_per_pcs ?? 0) > 0 ? formatRupiah(item.harga_jual_per_pcs ?? 0) : "-"
+                : harga.jual > 0 ? formatRupiah(harga.jual) : "-",
+              item.jenis_produk === "hijab"
+                ? (item.harga_produksi_per_pcs ?? 0) > 0 ? formatRupiah(item.harga_produksi_per_pcs ?? 0) : "-"
+                : harga.produksi > 0 ? formatRupiah(harga.produksi) : "-",
               formatRupiah(totalJual),
               formatRupiah(totalProduksi),
               formatRupiah(totalJual - totalProduksi),
@@ -663,9 +668,34 @@
   }
 
   function itemSummary(item: BarangKeluarItem): string {
+    if (item.jenis_produk === "hijab") return `ALL SIZE: ${item.total_pcs}`;
     return item.detail_keluar
       .map((d) => `${d.ukuran}: ${d.jumlah_pcs}`)
       .join(", ");
+  }
+
+  function itemNilaiJual(item: BarangKeluarItem): number {
+    if (item.status === "pending") return 0;
+    if (item.jenis_produk === "hijab") return item.total_pcs * (item.harga_jual_per_pcs ?? 0);
+    const model = modelList.find((entry) => entry.id === item.model_id);
+    return item.detail_keluar.reduce(
+      (sum, detail) => sum + detail.jumlah_pcs * (detail.harga_jual && detail.harga_jual > 0
+        ? detail.harga_jual
+        : hargaJualUntukUkuran(model, detail.ukuran)),
+      0,
+    );
+  }
+
+  function itemNilaiProduksi(item: BarangKeluarItem): number {
+    if (item.status === "pending") return 0;
+    if (item.jenis_produk === "hijab") return item.total_pcs * (item.harga_produksi_per_pcs ?? 0);
+    const model = modelList.find((entry) => entry.id === item.model_id);
+    return item.detail_keluar.reduce(
+      (sum, detail) => sum + detail.jumlah_pcs * (detail.harga_produksi && detail.harga_produksi > 0
+        ? detail.harga_produksi
+        : hargaProduksiUntukUkuran(model, detail.ukuran)),
+      0,
+    );
   }
 
   function hargaModel(modelId: string) {
@@ -753,13 +783,17 @@
     loading = true;
     errorMsg = null;
     try {
-      const [stok, models, firstPage] = await Promise.all([
+      const [stok, models, hijabModels, hijabStock, firstPage] = await Promise.all([
         barangJadiCache.get(force),
         modelBajuCache.get(force),
+        modelHijabCache.get(force),
+        stokHijabCache.get(force),
         getRiwayatBarangKeluarPage(dateRange, null, PAGE_SIZE),
       ]);
       stokList = stok;
       modelList = models;
+      modelHijabList = hijabModels;
+      stokHijabList = hijabStock;
       riwayat = firstPage.items;
       pageCache = [firstPage.items];
       pageCursors = [null, firstPage.cursor];
@@ -889,6 +923,7 @@
         },
         $currentUser.uid,
       );
+      stokHijabCache.invalidate();
       await load(true);
       openCatat = false;
       showSuccess(
@@ -908,25 +943,36 @@
     for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
       const page = await pdf.getPage(pageNumber);
       const content = await page.getTextContent();
-      const rows = new Map<number, { x: number; text: string }[]>();
-      for (const item of content.items as any[]) {
-        const text = String(item.str ?? "").trim();
-        if (!text) continue;
-        const y = Math.round(item.transform?.[5] ?? 0);
-        const x = Number(item.transform?.[4] ?? 0);
-        rows.set(y, [...(rows.get(y) ?? []), { x, text }]);
-      }
-      pages.push(
-        [...rows.entries()]
-          .sort((a, b) => b[0] - a[0])
-          .map(([, row]) =>
-            row
-              .sort((a, b) => a.x - b.x)
-              .map((item) => item.text)
-              .join(" "),
-          )
-          .join("\n"),
-      );
+      const textItems = (content.items as any[])
+        .map((item) => ({
+          text: String(item.str ?? "").trim(),
+          x: Number(item.transform?.[4] ?? 0),
+          y: Math.round(item.transform?.[5] ?? 0),
+        }))
+        .filter((item) => item.text);
+      const rowAnchors = textItems
+        .filter((item) => item.x < 60 && /^\d+$/.test(item.text))
+        .map((item) => ({ number: Number(item.text), y: item.y }))
+        .filter((item) => item.number > 0 && item.number < 10000);
+      const rows = rowAnchors
+        .sort((a, b) => b.y - a.y)
+        .map((anchor) => {
+          const columns: { x: number; items: typeof textItems }[] = [];
+          for (const item of textItems
+            .filter((entry) => Math.abs(entry.y - anchor.y) <= 12)
+            .sort((a, b) => a.x - b.x)) {
+            const column = columns[columns.length - 1];
+            if (column && Math.abs(column.x - item.x) <= 8) {
+              column.items.push(item);
+            } else {
+              columns.push({ x: item.x, items: [item] });
+            }
+          }
+          return columns
+            .flatMap((column) => column.items.sort((a, b) => b.y - a.y).map((item) => item.text))
+            .join(" ");
+        });
+      pages.push(rows.join("\n"));
     }
     return pages.join("\n");
   }
@@ -939,16 +985,26 @@
 
     importParsing = true;
     importError = null;
+    importErrorOpen = false;
     try {
       const text =
         file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")
           ? await extractPdfText(file)
           : await file.text();
-      const parsed = parseBarangKeluarText(text, modelList, stokList);
+      const parsed = parseBarangKeluarText(
+        text,
+        modelList,
+        stokList,
+        modelHijabList,
+        stokHijabList,
+      );
       if (parsed.items.length === 0) {
-        throw new Error("Tidak ada baris barang yang cocok dengan master model, warna, dan ukuran.");
+        const detail = parsed.unmatched_lines.length > 0
+          ? ` ${parsed.unmatched_lines.length} baris barang belum cocok dengan master model.`
+          : "";
+        throw new Error(`Tidak ada baris barang yang cocok dengan master model, warna, dan ukuran.${detail}`);
       }
-      const items = splitImportItemsByStock(parsed.items, stokList);
+      const items = splitImportItemsByStock(parsed.items, stokList, stokHijabList);
       if (items.length === 0) {
         throw new Error("List terbaca, tapi tidak ada jumlah pcs yang valid.");
       }
@@ -957,10 +1013,23 @@
       importItems = items;
       importTujuan = parsed.tujuan ?? "";
       importNamaReseller = parsed.nama_reseller ?? "";
-      importKeterangan = `Import dari ${file.name}`;
-      importOpen = true;
+      importBatalPcs = parsed.batal_pcs;
+      importKeterangan = `Import dari ${file.name}${parsed.batal_pcs > 0 ? ` · ${parsed.batal_pcs} pcs batal dari file (tidak mengurangi stok)` : ""}`;
+      sessionStorage.setItem(
+        BARANG_KELUAR_IMPORT_DRAFT_KEY,
+        JSON.stringify({
+          fileName: file.name,
+          items,
+          tujuan: importTujuan,
+          namaReseller: importNamaReseller,
+          keterangan: importKeterangan,
+          unmatchedLines: parsed.unmatched_lines,
+        }),
+      );
+      await goto("/barang-keluar/catat?import=1");
     } catch (e: any) {
-      showError(e?.message ?? "Gagal membaca file import.");
+      importError = e?.message ?? "Gagal membaca file import.";
+      importErrorOpen = true;
     } finally {
       importParsing = false;
     }
@@ -1003,6 +1072,7 @@
         );
       }
       barangJadiCache.invalidate();
+      stokHijabCache.invalidate();
       await load(true);
       importOpen = false;
       showSuccess(
@@ -1459,6 +1529,41 @@
 </div>
 
 <!-- ── Dialog: Catat Barang Keluar ───────────────────────────────── -->
+<Dialog.Root bind:open={importErrorOpen}>
+  <Dialog.Content class="max-w-xl">
+    <Dialog.Header>
+      <Dialog.Title>Import belum dapat diproses</Dialog.Title>
+      <Dialog.Description>
+        Tidak ada stok yang diubah. Perbaiki data master atau nama model pada file, lalu import ulang.
+      </Dialog.Description>
+    </Dialog.Header>
+
+    <div class="space-y-3">
+      {#if importFileName}
+        <p class="text-xs text-gray-500">File: <span class="font-medium text-gray-700">{importFileName}</span></p>
+      {/if}
+      <div class="max-h-[42vh] overflow-y-auto rounded-lg border border-red-200 bg-red-50 px-3 py-2">
+        <p class="whitespace-pre-wrap break-words text-sm leading-6 text-red-800">{importError}</p>
+      </div>
+      <p class="text-xs text-gray-500">
+        Nama model harus sama dengan master. Untuk hijab, gunakan ukuran <span class="font-medium text-gray-700">ALL SIZE</span> dan pastikan stok hijabnya sudah dibuat.
+      </p>
+    </div>
+
+    <Dialog.Footer>
+      <Button
+        variant="outline"
+        onclick={() => {
+          importErrorOpen = false;
+          importError = null;
+        }}
+      >
+        Tutup
+      </Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
+
 <Dialog.Root bind:open={importOpen}>
   <Dialog.Content class="max-w-2xl">
     <Dialog.Header>
@@ -1472,6 +1577,7 @@
       <div class="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2">
         <p class="text-sm font-medium text-blue-900">{importFileName}</p>
         <p class="mt-0.5 text-xs text-blue-700">
+          {#if importBatalPcs > 0}<span>· {importBatalPcs} pcs batal (diabaikan) · </span>{/if}
           {totalImportKeluarPcs} pcs keluar · {totalImportPendingPcs} pcs pending
           · {[...new Set(importItems.map((item) => item.tujuan_import ?? importTujuan).filter(Boolean))].length} tujuan
         </p>

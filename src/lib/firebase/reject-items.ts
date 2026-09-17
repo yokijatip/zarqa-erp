@@ -8,10 +8,44 @@ import {
 import { db } from './config';
 import type {
   RejectItem, RiwayatResolusiReject, AksiResolusiReject,
-  DetailUkuran, StatusBatch, RejectAttribusi, BatchProduksi,
+  DetailUkuran, StatusBatch, RejectAttribusi, BatchProduksi, SumberProduksi,
 } from '$lib/types';
+import { canonicalUkuran, ukuranAliases } from '$lib/types';
 
 const COL_REJECT = 'reject_items';
+const COL_JADI = 'stok_barang_jadi';
+const COL_RIWAYAT_JADI = 'riwayat_barang_jadi';
+
+function warnaDocKey(namaWarna: string): string {
+  return namaWarna.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+}
+
+function buildBarangJadiDocId(modelId: string, ukuran: string, namaWarna?: string): string {
+  if (!namaWarna) return `${modelId}__${ukuran}`;
+  return `${modelId}__${ukuran}__${warnaDocKey(namaWarna)}`;
+}
+
+function appendSumberProduksiLot(existing: SumberProduksi[], lot: SumberProduksi): SumberProduksi[] {
+  const list = [...existing];
+  const last = list[list.length - 1];
+  if (last?.batch_id === lot.batch_id) {
+    list[list.length - 1] = {
+      ...last,
+      jumlah_pcs: (last.jumlah_pcs ?? 0) + lot.jumlah_pcs,
+    };
+    return list;
+  }
+  list.push(lot);
+  return list;
+}
+
+function normalizeRejectItem(id: string, value: Record<string, unknown>): RejectItem {
+  return {
+    ...value,
+    id,
+    ukuran: canonicalUkuran(String(value.ukuran ?? '')),
+  } as RejectItem;
+}
 
 function sortRejectItems(items: RejectItem[]): RejectItem[] {
   return items.sort((a, b) => a.ukuran.localeCompare(b.ukuran));
@@ -62,7 +96,7 @@ export function createRejectItemsInTransaction(
       nama_model: namaModel,
       ...(namaWarna ? { nama_warna: namaWarna } : {}),
       ...(kodeHexWarna ? { kode_hex_warna: kodeHexWarna } : {}),
-      ukuran: item.ukuran,
+      ukuran: canonicalUkuran(item.ukuran),
       jumlah: item.jumlah_pcs,
       jumlah_diperbaiki: 0,
       jumlah_gagal: 0,
@@ -83,7 +117,7 @@ export function createRejectItemsInTransaction(
 export async function getRejectItemsByBatch(batchId: string): Promise<RejectItem[]> {
   const q = query(collection(db, COL_REJECT), where('batch_id', '==', batchId));
   const snap = await getDocs(q);
-  const results = snap.docs.map((d) => ({ id: d.id, ...d.data() }) as RejectItem);
+  const results = snap.docs.map((d) => normalizeRejectItem(d.id, d.data()));
   if (results.length > 0) return sortRejectItems(results);
 
   // Kompatibilitas untuk reject yang sempat dibuat mobile tanpa document id batch.
@@ -100,7 +134,7 @@ export async function getRejectItemsByBatch(batchId: string): Promise<RejectItem
   const windowEnd = batchUpdatedAt ? batchUpdatedAt + 6 * 60 * 60 * 1000 : null;
 
   const fallback = brokenSnap.docs
-    .map((d) => ({ id: d.id, ...d.data() }) as RejectItem)
+    .map((d) => normalizeRejectItem(d.id, d.data()))
     .filter((item) => {
       if (item.status !== 'pending') return false;
       if (item.model_id !== batch.model_id) return false;
@@ -120,7 +154,7 @@ export async function getRejectItemsByBatch(batchId: string): Promise<RejectItem
 export async function getRejectItemsPending(): Promise<RejectItem[]> {
   const q = query(collection(db, COL_REJECT), where('status', '==', 'pending'), orderBy('createdAt', 'desc'));
   const snap = await getDocs(q);
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as RejectItem);
+  return snap.docs.map((d) => normalizeRejectItem(d.id, d.data()));
 }
 
 export async function getRiwayatResolusiReject(rejectItemId: string): Promise<RiwayatResolusiReject[]> {
@@ -149,10 +183,36 @@ export async function resolveRejectItem(
   const rejectRef = doc(db, COL_REJECT, rejectItemId);
   const resolusiRef = doc(collection(db, COL_REJECT, rejectItemId, 'riwayat_resolusi'));
 
+  // Query hanya dipakai untuk menemukan pool stok lama (termasuk alias ukuran).
+  // Dokumen terpilih tetap dibaca ulang melalui transaction.get di bawah.
+  let stokRef: ReturnType<typeof doc> | null = null;
+  if (aksi === 'diperbaiki') {
+    const initialRejectSnap = await getDoc(rejectRef);
+    if (!initialRejectSnap.exists()) throw new Error('Reject item tidak ditemukan');
+    const initialReject = normalizeRejectItem(initialRejectSnap.id, initialRejectSnap.data());
+    const ukuran = canonicalUkuran(initialReject.ukuran);
+    const stokQuery = initialReject.nama_warna
+      ? query(
+          collection(db, COL_JADI),
+          where('model_id', '==', initialReject.model_id),
+          where('ukuran', 'in', ukuranAliases(ukuran)),
+          where('nama_warna', '==', initialReject.nama_warna),
+        )
+      : query(
+          collection(db, COL_JADI),
+          where('model_id', '==', initialReject.model_id),
+          where('ukuran', 'in', ukuranAliases(ukuran)),
+        );
+    const stokQuerySnap = await getDocs(stokQuery);
+    stokRef = stokQuerySnap.empty
+      ? doc(db, COL_JADI, buildBarangJadiDocId(initialReject.model_id, ukuran, initialReject.nama_warna))
+      : stokQuerySnap.docs[0].ref;
+  }
+
   await runTransaction(db, async (transaction) => {
     const rejectSnap = await transaction.get(rejectRef);
     if (!rejectSnap.exists()) throw new Error('Reject item tidak ditemukan');
-    const reject = { id: rejectSnap.id, ...rejectSnap.data() } as RejectItem;
+    const reject = normalizeRejectItem(rejectSnap.id, rejectSnap.data());
     const resolvedBatchId = reject.batch_id || meta.batchId || '';
     const sourceBatchRef = resolvedBatchId ? doc(db, 'batch_produksi', resolvedBatchId) : null;
     const sourceBatchSnap = sourceBatchRef ? await transaction.get(sourceBatchRef) : null;
@@ -178,12 +238,12 @@ export async function resolveRejectItem(
     if (!reject.batch_id && meta.batchId) {
       rejectUpdate.batch_id = meta.batchId;
     }
-    const reworkBatchRef = aksi === 'diperbaiki'
-      ? doc(collection(db, 'batch_produksi'))
-      : null;
-    if (reworkBatchRef) {
-      rejectUpdate.rework_batch_id = reworkBatchRef.id;
-    }
+
+    // Reject yang sudah diperbaiki adalah output siap jual. Dokumen stok
+    // sudah dipilih sebelum transaksi dan dibaca ulang secara atomik di sini.
+    const stokSnap = stokRef ? await transaction.get(stokRef) : null;
+    const ukuran = canonicalUkuran(reject.ukuran);
+
     transaction.update(rejectRef, rejectUpdate);
 
     transaction.set(resolusiRef, {
@@ -195,42 +255,63 @@ export async function resolveRejectItem(
       timestamp: serverTimestamp(),
     });
 
-    if (reworkBatchRef) {
-      const detailUkuran = [{ ukuran: reject.ukuran, jumlah_pcs: jumlah }];
-      transaction.set(reworkBatchRef, {
+    if (aksi !== 'diperbaiki' || !stokRef || !stokSnap) return;
+
+    const stokData = stokSnap.exists() ? stokSnap.data() as Record<string, unknown> : null;
+    const stokSebelum = Number(stokData?.stok_tersedia ?? 0);
+    const stokSesudah = stokSebelum + jumlah;
+    const sumberProduksi: SumberProduksi | null = resolvedBatchId
+      ? {
+          batch_id: resolvedBatchId,
+          jumlah_pcs: jumlah,
+          ...(sourceBatch?.penugasan ? { penugasan: sourceBatch.penugasan } : {}),
+        }
+      : null;
+    const sumberProduksiLama = Array.isArray(stokData?.sumber_produksi)
+      ? stokData.sumber_produksi as SumberProduksi[]
+      : [];
+
+    if (!stokSnap.exists()) {
+      transaction.set(stokRef, {
         model_id: reject.model_id,
         nama_model: reject.nama_model,
         ...(reject.nama_warna ? { nama_warna: reject.nama_warna } : {}),
         ...(reject.kode_hex_warna ? { kode_hex_warna: reject.kode_hex_warna } : {}),
-        detail_ukuran: detailUkuran,
-        total_pcs: jumlah,
-        pcs_saat_ini: jumlah,
-        kain_digunakan: [],
-        status: 'JAHIT_DONE' as StatusBatch,
-        dari_potongan: true,
-        dari_reject: true,
-        ...(resolvedBatchId ? { sumber_batch_id: resolvedBatchId } : {}),
-        sumber_reject_id: rejectItemId,
-        ...(sourceBatch?.sumber_cutting?.length ? { sumber_cutting: sourceBatch.sumber_cutting } : {}),
-        ...(sourceBatch?.penugasan ? { penugasan: sourceBatch.penugasan } : {}),
-        dibuat_oleh: meta.uid,
-        catatan_admin: meta.catatan ?? 'Reject diperbaiki, masuk ulang steam',
-        createdAt: serverTimestamp(),
+        ukuran,
+        stok_tersedia: jumlah,
+        total_masuk: jumlah,
+        total_keluar: 0,
+        ...(sumberProduksi ? { sumber_produksi: [sumberProduksi] } : {}),
         updatedAt: serverTimestamp(),
       });
-
-      transaction.set(doc(collection(db, 'batch_produksi', reworkBatchRef.id, 'riwayat_proses')), {
-        tipe: 'status_update',
-        status_dari: 'JAHIT_DONE' as StatusBatch,
-        status_ke: 'JAHIT_DONE' as StatusBatch,
-        updated_by_uid: meta.uid,
-        updated_by_nama: meta.nama,
-        pcs_berhasil: jumlah,
-        pcs_reject: 0,
-        detail_ukuran: detailUkuran,
-        catatan: meta.catatan ?? 'Reject diperbaiki, masuk ulang steam',
-        timestamp: serverTimestamp(),
+    } else {
+      transaction.update(stokRef, {
+        stok_tersedia: stokSesudah,
+        total_masuk: Number(stokData?.total_masuk ?? 0) + jumlah,
+        ...(sumberProduksi
+          ? { sumber_produksi: appendSumberProduksiLot(sumberProduksiLama, sumberProduksi) }
+          : {}),
+        ...(reject.nama_warna ? { nama_warna: reject.nama_warna } : {}),
+        ...(reject.kode_hex_warna ? { kode_hex_warna: reject.kode_hex_warna } : {}),
+        updatedAt: serverTimestamp(),
       });
     }
+
+    transaction.set(doc(collection(db, COL_RIWAYAT_JADI)), {
+      model_id: reject.model_id,
+      nama_model: reject.nama_model,
+      ...(reject.nama_warna ? { nama_warna: reject.nama_warna } : {}),
+      ...(reject.kode_hex_warna ? { kode_hex_warna: reject.kode_hex_warna } : {}),
+      ukuran,
+      tipe: 'reject_diperbaiki',
+      jumlah,
+      stok_sebelum: stokSebelum,
+      stok_sesudah: stokSesudah,
+      catatan: meta.catatan ?? `Reject diperbaiki dari proses ${reject.asal_proses}`,
+      ...(resolvedBatchId ? { batch_id: resolvedBatchId } : {}),
+      dicatat_oleh_uid: meta.uid,
+      dicatat_oleh_nama: meta.nama,
+      timestamp: serverTimestamp(),
+    });
   });
 }

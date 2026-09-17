@@ -52,6 +52,9 @@
   }
 
   function totalItemJual(item: BarangKeluarItem): number {
+    if (item.jenis_produk === "hijab") {
+      return item.total_pcs * (item.harga_jual_per_pcs ?? 0);
+    }
     return item.detail_keluar.reduce((sum, detail) => sum + detail.jumlah_pcs * priceForDetail(item, detail.ukuran), 0);
   }
 
@@ -97,16 +100,22 @@
     const printItems = listItems(riwayat);
     const rows = printItems
       .map((item, index) => {
-        const detail = item.detail_keluar
-          .map((d) => `${escapeHtml(d.ukuran)}: ${d.jumlah_pcs} pcs`)
-          .join("<br />");
+        const detail = item.jenis_produk === "hijab"
+          ? `ALL SIZE: ${item.total_pcs} pcs`
+          : item.detail_keluar
+              .map((d) => `${escapeHtml(d.ukuran)}: ${d.jumlah_pcs} pcs`)
+              .join("<br />");
         const harga = hargaModel(item.model_id);
         const model = modelList.find((entry) => entry.id === item.model_id);
-        const totalJual = item.status === "pending" ? 0 : item.detail_keluar.reduce(
-          (sum, d) => sum + d.jumlah_pcs * (d.harga_jual ?? hargaJualUntukUkuran(model, d.ukuran)),
-          0,
-        );
-        const totalProduksi = item.status === "pending" ? 0 : item.total_pcs * harga.produksi;
+        const totalJual = item.status === "pending" ? 0 : item.jenis_produk === "hijab"
+          ? item.total_pcs * (item.harga_jual_per_pcs ?? 0)
+          : item.detail_keluar.reduce(
+              (sum, d) => sum + d.jumlah_pcs * (d.harga_jual ?? hargaJualUntukUkuran(model, d.ukuran)),
+              0,
+            );
+        const totalProduksi = item.status === "pending" ? 0 : item.jenis_produk === "hijab"
+          ? item.total_pcs * (item.harga_produksi_per_pcs ?? 0)
+          : item.total_pcs * harga.produksi;
         return `
           <tr>
             <td>${index + 1}</td>
@@ -115,7 +124,7 @@
             <td class="right">${item.total_pcs} pcs</td>
             <td>${item.status === "pending" ? "Pending" : "Keluar"}</td>
             <td class="right">${totalJual > 0 ? escapeHtml(formatRupiah(totalJual / item.total_pcs)) : "-"}</td>
-            <td class="right">${harga.produksi > 0 ? escapeHtml(formatRupiah(harga.produksi)) : "-"}</td>
+            <td class="right">${(item.jenis_produk === "hijab" ? item.harga_produksi_per_pcs : harga.produksi) ? escapeHtml(formatRupiah(item.jenis_produk === "hijab" ? item.harga_produksi_per_pcs ?? 0 : harga.produksi)) : "-"}</td>
             <td class="right">${escapeHtml(formatRupiah(totalJual))}</td>
             <td class="right">${escapeHtml(formatRupiah(totalProduksi))}</td>
             <td class="right">${escapeHtml(formatRupiah(totalJual - totalProduksi))}</td>
@@ -131,13 +140,17 @@
       .reduce((sum, item) => sum + item.total_pcs, 0);
     const totalJual = printItems
       .filter((item) => item.status !== "pending")
-      .reduce((sum, item) => sum + item.detail_keluar.reduce(
-        (detailSum, detail) => detailSum + detail.jumlah_pcs * (detail.harga_jual ?? hargaJualUntukUkuran(modelList.find((model) => model.id === item.model_id), detail.ukuran)),
-        0,
-      ), 0);
+      .reduce((sum, item) => sum + (item.jenis_produk === "hijab"
+        ? item.total_pcs * (item.harga_jual_per_pcs ?? 0)
+        : item.detail_keluar.reduce(
+            (detailSum, detail) => detailSum + detail.jumlah_pcs * (detail.harga_jual ?? hargaJualUntukUkuran(modelList.find((model) => model.id === item.model_id), detail.ukuran)),
+            0,
+          )), 0);
     const totalProduksi = printItems
       .filter((item) => item.status !== "pending")
-      .reduce((sum, item) => sum + item.total_pcs * hargaModel(item.model_id).produksi, 0);
+      .reduce((sum, item) => sum + (item.jenis_produk === "hijab"
+        ? item.total_pcs * (item.harga_produksi_per_pcs ?? 0)
+        : item.total_pcs * hargaModel(item.model_id).produksi), 0);
     const html = `
       <!doctype html>
       <html>
@@ -345,9 +358,13 @@
                       <p class="mt-0.5 text-xs text-gray-400">Model stok: {item.nama_model}</p>
                     {/if}
                     <div class="mt-1 space-y-0.5 text-xs text-gray-500">
-                      {#each item.detail_keluar as detail}
-                        <p>{detail.ukuran}: {detail.jumlah_pcs} pcs x {formatRupiah(priceForDetail(item, detail.ukuran))}</p>
-                      {/each}
+                      {#if item.jenis_produk === "hijab"}
+                        <p>ALL SIZE: {item.total_pcs} pcs x {formatRupiah(item.harga_jual_per_pcs ?? 0)}</p>
+                      {:else}
+                        {#each item.detail_keluar as detail}
+                          <p>{detail.ukuran}: {detail.jumlah_pcs} pcs x {formatRupiah(priceForDetail(item, detail.ukuran))}</p>
+                        {/each}
+                      {/if}
                     </div>
                   </div>
                   <span

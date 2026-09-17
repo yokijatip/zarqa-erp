@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getBatchPage } from '$lib/firebase/batch-produksi';
+  import { batchCache } from '$lib/stores/data-cache.svelte';
   import { getPerformaPerDivisi, type PerformaKaryawan, type DivisiKey } from '$lib/firebase/performa';
   import { STATUS_LABEL, type BatchProduksi, type StatusBatch } from '$lib/types';
   import ActivityIcon from '@lucide/svelte/icons/activity';
@@ -8,12 +8,9 @@
   import ZapIcon from '@lucide/svelte/icons/zap';
   import UsersIcon from '@lucide/svelte/icons/users';
   import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
-  import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
-  import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
   import TrendingUpIcon from '@lucide/svelte/icons/trending-up';
   import PeriodSelector from '$lib/components/period-selector.svelte';
   import { getPeriodRange, type DateRange } from '$lib/period';
-  import type { FirestoreCursor } from '$lib/firebase/pagination';
 
   type StageGroup = { label: string; statuses: StatusBatch[]; color: string; icon: typeof ActivityIcon; card: string; title: string; value: string; iconColor: string };
   const STAGE_GROUPS: StageGroup[] = [
@@ -21,7 +18,6 @@
     { label: 'Jahit', statuses: ['JAHIT_IN_PROGRESS', 'JAHIT_DONE'], color: 'blue', icon: ShirtIcon, card: 'border-blue-100 bg-blue-50', title: 'text-blue-700', value: 'text-blue-800', iconColor: 'text-blue-500' },
     { label: 'Steam', statuses: ['STEAM_IN_PROGRESS', 'STEAM_DONE'], color: 'violet', icon: ZapIcon, card: 'border-violet-100 bg-violet-50', title: 'text-violet-700', value: 'text-violet-800', iconColor: 'text-violet-500' },
   ];
-  const PAGE_SIZE = 12;
   const ACTIVE_STATUSES: StatusBatch[] = STAGE_GROUPS.flatMap((group) => group.statuses);
   const DIVISI: DivisiKey[] = ['Cutting', 'Jahit', 'Steam'];
   const STATUS_STYLE: Record<StatusBatch, string> = {
@@ -39,11 +35,6 @@
   let allBatches = $state<BatchProduksi[]>([]);
   let loading = $state(true);
   let loadingPerforma = $state(true);
-  let pages = $state<Record<string, number>>({});
-  let pageRows = $state<Record<string, BatchProduksi[][]>>({});
-  let pageCursors = $state<Record<string, FirestoreCursor[]>>({});
-  let pageHasNext = $state<Record<string, boolean[]>>({});
-  let pageLoading = $state<string | null>(null);
   let activeDivisi = $state<DivisiKey>('Cutting');
   let performa = $state<Record<DivisiKey, PerformaKaryawan[]>>({ Cutting: [], Jahit: [], Steam: [], Keluar: [] });
 
@@ -103,47 +94,6 @@
   function groupBatches(group: StageGroup): BatchProduksi[] {
     return filtered.filter((batch) => group.statuses.includes(batch.status));
   }
-  function pageFor(key: string): number { return pages[key] ?? 1; }
-  function visible(group: StageGroup): BatchProduksi[] {
-    return groupBatches(group);
-  }
-  function rebuildLoadedRows() {
-    const loadedRows = STAGE_GROUPS.flatMap((group) =>
-      pageRows[group.label]?.[(pages[group.label] ?? 1) - 1] ?? [],
-    );
-    batches = loadedRows;
-    allBatches = loadedRows;
-  }
-  async function setPage(group: StageGroup, page: number) {
-    const current = pageFor(group.label);
-    if (page <= 0 || page === current || pageLoading) return;
-    if (page < current) {
-      if (!pageRows[group.label]?.[page - 1]) return;
-      pages = { ...pages, [group.label]: page };
-      rebuildLoadedRows();
-      return;
-    }
-    if (!(pageHasNext[group.label]?.[current - 1] ?? false)) return;
-    pageLoading = group.label;
-    try {
-      const result = await getBatchPage(
-        group.statuses,
-        pageCursors[group.label]?.[current] ?? null,
-        PAGE_SIZE,
-        dateRange,
-      );
-      const nextRows = [...(pageRows[group.label] ?? []), result.items];
-      const nextCursors = [...(pageCursors[group.label] ?? [null]), result.cursor];
-      const nextHasNext = [...(pageHasNext[group.label] ?? []), result.hasNext];
-      pageRows = { ...pageRows, [group.label]: nextRows };
-      pageCursors = { ...pageCursors, [group.label]: nextCursors };
-      pageHasNext = { ...pageHasNext, [group.label]: nextHasNext };
-      pages = { ...pages, [group.label]: page };
-      rebuildLoadedRows();
-    } finally {
-      pageLoading = null;
-    }
-  }
   function pcs(list: BatchProduksi[]): number { return list.reduce((sum, batch) => sum + (batch.pcs_saat_ini ?? batch.total_pcs), 0); }
   function ageInDays(value: any): number {
     if (!value) return 0;
@@ -168,15 +118,8 @@
   async function refresh() {
     loading = true;
     try {
-      const results = await Promise.all(STAGE_GROUPS.map((group) => getBatchPage(group.statuses, null, PAGE_SIZE, dateRange)));
-      const rows = Object.fromEntries(STAGE_GROUPS.map((group, index) => [group.label, [results[index].items]]));
-      const cursors = Object.fromEntries(STAGE_GROUPS.map((group, index) => [group.label, [null, results[index].cursor]]));
-      const hasNext = Object.fromEntries(STAGE_GROUPS.map((group, index) => [group.label, [results[index].hasNext]]));
-      pageRows = rows;
-      pageCursors = cursors;
-      pageHasNext = hasNext;
-      pages = Object.fromEntries(STAGE_GROUPS.map((group) => [group.label, 1]));
-      batches = results.flatMap((result) => result.items);
+      const all = await batchCache.get(true);
+      batches = all.filter((batch) => ACTIVE_STATUSES.includes(batch.status));
       allBatches = batches;
     } finally {
       loading = false;
@@ -186,7 +129,6 @@
 
   $effect(() => {
     dari; sampai;
-    pages = {};
     refresh();
   });
 </script>
@@ -241,5 +183,5 @@
 </section>
 
 <div class="space-y-5">
-  {#if loading}<div class="rounded-xl border border-gray-100 bg-white p-10 text-center text-sm text-gray-400">Memuat pipeline produksi...</div>{:else if filtered.length === 0}<div class="rounded-xl border border-gray-100 bg-white p-10 text-center text-sm text-gray-400">Tidak ada batch aktif pada rentang tanggal ini.</div>{:else}{#each STAGE_GROUPS as group}{@const list = groupBatches(group)}{#if list.length > 0}{@const current = pageFor(group.label)}{@const hasNext = pageHasNext[group.label]?.[current - 1] ?? false}<section class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm"><div class="flex items-center justify-between border-b border-gray-100 bg-gray-50 px-5 py-3"><div class="flex items-center gap-2"><svelte:component this={group.icon} class="h-4 w-4 text-gray-500" /><h2 class="text-sm font-semibold text-gray-800">Divisi {group.label}</h2></div><div class="flex items-center gap-2 text-xs text-gray-500"><span>{pcs(list).toLocaleString('id-ID')} pcs</span><span class="rounded-full bg-white px-2 py-0.5 font-semibold">{list.length} batch</span></div></div><div class="grid grid-cols-1 gap-3 p-5 sm:grid-cols-2 lg:grid-cols-3">{#each visible(group) as batch}<a href="/monitor-produksi/{batch.id}" class="rounded-xl border border-gray-100 bg-gray-50 p-4 transition hover:border-gray-300 hover:bg-white hover:shadow-sm"><div class="flex items-start justify-between gap-2"><p class="truncate text-sm font-semibold text-gray-800">{batch.nama_model}</p><span class="shrink-0 text-[10px] text-gray-400">{ageInDays(batch.createdAt)} hari</span></div><p class="mt-2 flex items-center gap-1.5 text-xs text-gray-600">{#if batch.kode_hex_warna}<span class="h-2.5 w-2.5 rounded-full ring-1 ring-black/10" style="background:{batch.kode_hex_warna}"></span>{/if}{batch.nama_warna || 'Tanpa warna'}</p><span class="mt-2 inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold {STATUS_STYLE[batch.status]}">{STATUS_DISPLAY[batch.status]}</span>{#if worker(batch, group)}<p class="mt-2 flex items-center gap-1 text-[11px] text-gray-500"><UsersIcon class="h-3 w-3" />{worker(batch, group)}</p>{/if}<div class="mt-3 flex items-end justify-between gap-2 border-t border-gray-100 pt-3"><span class="text-xs font-semibold text-gray-700">{(batch.pcs_saat_ini ?? batch.total_pcs).toLocaleString('id-ID')} pcs</span><span class="text-right text-[10px] text-gray-400">{batch.detail_ukuran.map((item) => `${item.ukuran}:${item.jumlah_pcs}`).join(' · ')}</span></div><p class="mt-2 text-[10px] text-gray-400">{formatDate(batch.createdAt)}</p></a>{/each}</div>{#if current > 1 || hasNext}<div class="flex items-center justify-between border-t border-gray-100 px-5 py-3 text-xs text-gray-500"><span>Halaman {current}</span><div class="flex gap-2"><button aria-label="Halaman sebelumnya" disabled={current <= 1 || pageLoading === group.label} onclick={() => setPage(group, current - 1)} class="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-1 hover:bg-gray-50 disabled:opacity-40"><ChevronLeftIcon class="h-3.5 w-3.5" /> Sebelumnya</button><button aria-label="Halaman berikutnya" disabled={!hasNext || pageLoading === group.label} onclick={() => setPage(group, current + 1)} class="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-1 hover:bg-gray-50 disabled:opacity-40">{pageLoading === group.label ? 'Memuat...' : 'Berikutnya'} <ChevronRightIcon class="h-3.5 w-3.5" /></button></div></div>{/if}</section>{/if}{/each}{/if}
+  {#if loading}<div class="rounded-xl border border-gray-100 bg-white p-10 text-center text-sm text-gray-400">Memuat pipeline produksi...</div>{:else if filtered.length === 0}<div class="rounded-xl border border-gray-100 bg-white p-10 text-center text-sm text-gray-400">Tidak ada batch aktif pada rentang tanggal ini.</div>{:else}{#each STAGE_GROUPS as group}{@const list = groupBatches(group)}{#if list.length > 0}<section class="overflow-hidden rounded-xl border border-gray-100 bg-white shadow-sm"><div class="flex items-center justify-between border-b border-gray-100 bg-gray-50 px-5 py-3"><div class="flex items-center gap-2"><svelte:component this={group.icon} class="h-4 w-4 text-gray-500" /><h2 class="text-sm font-semibold text-gray-800">Divisi {group.label}</h2></div><div class="flex items-center gap-2 text-xs text-gray-500"><span>{pcs(list).toLocaleString('id-ID')} pcs</span><span class="rounded-full bg-white px-2 py-0.5 font-semibold">{list.length} batch</span></div></div><div class="grid grid-cols-1 gap-3 p-5 sm:grid-cols-2 lg:grid-cols-3">{#each list as batch}<a href="/monitor-produksi/{batch.id}" class="rounded-xl border border-gray-100 bg-gray-50 p-4 transition hover:border-gray-300 hover:bg-white hover:shadow-sm"><div class="flex items-start justify-between gap-2"><p class="truncate text-sm font-semibold text-gray-800">{batch.nama_model}</p><span class="shrink-0 text-[10px] text-gray-400">{ageInDays(batch.createdAt)} hari</span></div><p class="mt-2 flex items-center gap-1.5 text-xs text-gray-600">{#if batch.kode_hex_warna}<span class="h-2.5 w-2.5 rounded-full ring-1 ring-black/10" style="background:{batch.kode_hex_warna}"></span>{/if}{batch.nama_warna || 'Tanpa warna'}</p><span class="mt-2 inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold {STATUS_STYLE[batch.status]}">{STATUS_DISPLAY[batch.status]}</span>{#if worker(batch, group)}<p class="mt-2 flex items-center gap-1 text-[11px] text-gray-500"><UsersIcon class="h-3 w-3" />{worker(batch, group)}</p>{/if}<div class="mt-3 flex items-end justify-between gap-2 border-t border-gray-100 pt-3"><span class="text-xs font-semibold text-gray-700">{(batch.pcs_saat_ini ?? batch.total_pcs).toLocaleString('id-ID')} pcs</span><span class="text-right text-[10px] text-gray-400">{batch.detail_ukuran.map((item) => `${item.ukuran}:${item.jumlah_pcs}`).join(' · ')}</span></div><p class="mt-2 text-[10px] text-gray-400">{formatDate(batch.createdAt)}</p></a>{/each}</div></section>{/if}{/each}{/if}
 </div>

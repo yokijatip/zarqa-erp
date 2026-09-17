@@ -14,9 +14,31 @@ function warnaDocKey(namaWarna: string): string {
   return namaWarna.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
 }
 
+function ukuranDocKey(ukuran: string): string {
+  // Firestore document IDs cannot contain '/'; this covers S/M and L/XL.
+  return ukuran.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+}
+
 function buildStokPotonganDocId(modelId: string, ukuran: string, namaWarna?: string): string {
-  if (!namaWarna) return `${modelId}__${ukuran}`;
-  return `${modelId}__${ukuran}__${warnaDocKey(namaWarna)}`;
+  const ukuranKey = ukuranDocKey(ukuran);
+  if (!namaWarna) return `${modelId}__${ukuranKey}`;
+  return `${modelId}__${ukuranKey}__${warnaDocKey(namaWarna)}`;
+}
+
+function normalizeStokPotonganRow(row: StokPotongan): StokPotongan {
+  const isHijab = row.jenis_produk === 'hijab' || !!row.model_hijab_id || !row.ukuran;
+  return {
+    ...row,
+    ...(isHijab ? { jenis_produk: 'hijab' as const, ukuran: undefined } : { ukuran: canonicalUkuran(String(row.ukuran)) }),
+    ...(row.sumber_cutting
+      ? {
+          sumber_cutting: row.sumber_cutting.map((lot) => ({
+            ...lot,
+            ...(lot.ukuran ? { ukuran: canonicalUkuran(lot.ukuran) } : {}),
+          })),
+        }
+      : {}),
+  };
 }
 
 // Ambil semua stok potongan
@@ -33,7 +55,7 @@ export async function getStokPotonganPage(
   return getCursorPage(
     query(collection(db, COL), orderBy('nama_model')),
     cursor,
-    (d) => ({ id: d.id, ...d.data() }) as StokPotongan,
+    (d) => normalizeStokPotonganRow({ id: d.id, ...d.data() } as StokPotongan),
     pageSize,
   );
 }
@@ -41,21 +63,19 @@ export async function getStokPotonganPage(
 function mergeLegacySizes(rows: StokPotongan[]): StokPotongan[] {
   const merged = new Map<string, StokPotongan>();
   for (const row of rows) {
-    const isHijab = row.jenis_produk === 'hijab' || !!row.model_hijab_id || !row.ukuran;
-    const ukuran = !isHijab && row.ukuran ? canonicalUkuran(row.ukuran) : undefined;
+    const normalizedRow = normalizeStokPotonganRow(row);
+    const isHijab = normalizedRow.jenis_produk === 'hijab' || !!normalizedRow.model_hijab_id || !normalizedRow.ukuran;
+    const ukuran = normalizedRow.ukuran;
     const key = `${isHijab ? 'hijab' : 'baju'}|${row.model_hijab_id ?? row.model_id}|${row.nama_warna ?? ''}|${ukuran ?? ''}`;
     const current = merged.get(key);
     if (!current) {
-      merged.set(key, {
-        ...row,
-        ...(isHijab ? { jenis_produk: 'hijab' as const, ukuran: undefined } : { ukuran }),
-      });
+      merged.set(key, normalizedRow);
       continue;
     }
-    current.stok_tersedia += row.stok_tersedia;
-    current.total_masuk += row.total_masuk;
-    current.total_terpakai += row.total_terpakai;
-    current.sumber_cutting = [...(current.sumber_cutting ?? []), ...(row.sumber_cutting ?? [])];
+    current.stok_tersedia += normalizedRow.stok_tersedia;
+    current.total_masuk += normalizedRow.total_masuk;
+    current.total_terpakai += normalizedRow.total_terpakai;
+    current.sumber_cutting = [...(current.sumber_cutting ?? []), ...(normalizedRow.sumber_cutting ?? [])];
   }
   return [...merged.values()];
 }
@@ -75,12 +95,13 @@ export async function tambahStokPotongan(
   warna?: { nama_warna?: string; kode_hex_warna?: string }
 ): Promise<void> {
   for (const item of detailDisimpan) {
+    const ukuran = canonicalUkuran(item.ukuran);
     const q = warna?.nama_warna
-      ? query(collection(db, COL), where('model_id', '==', modelId), where('ukuran', 'in', ukuranAliases(item.ukuran)), where('nama_warna', '==', warna.nama_warna))
-      : query(collection(db, COL), where('model_id', '==', modelId), where('ukuran', 'in', ukuranAliases(item.ukuran)));
+      ? query(collection(db, COL), where('model_id', '==', modelId), where('ukuran', 'in', ukuranAliases(ukuran)), where('nama_warna', '==', warna.nama_warna))
+      : query(collection(db, COL), where('model_id', '==', modelId), where('ukuran', 'in', ukuranAliases(ukuran)));
     const snap = await getDocs(q);
     const ref = snap.empty
-      ? doc(db, COL, buildStokPotonganDocId(modelId, item.ukuran, warna?.nama_warna))
+      ? doc(db, COL, buildStokPotonganDocId(modelId, ukuran, warna?.nama_warna))
       : snap.docs[0].ref;
 
     await runTransaction(db, async (transaction) => {
@@ -91,7 +112,7 @@ export async function tambahStokPotongan(
           nama_model: namaModel,
           ...(warna?.nama_warna ? { nama_warna: warna.nama_warna } : {}),
           ...(warna?.kode_hex_warna ? { kode_hex_warna: warna.kode_hex_warna } : {}),
-          ukuran: item.ukuran,
+          ukuran,
           stok_tersedia: item.jumlah_pcs,
           total_masuk: item.jumlah_pcs,
           total_terpakai: 0,

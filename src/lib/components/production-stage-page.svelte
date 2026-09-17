@@ -11,9 +11,7 @@
     sinkronStokPotonganBatch,
     updateStatusBatch,
     completeBatchProduksi,
-    getBatchPage,
   } from "$lib/firebase/batch-produksi";
-  import type { FirestoreCursor } from "$lib/firebase/pagination";
   import {
     STATUS_LABEL,
     type BatchProduksi,
@@ -34,8 +32,6 @@
   import LoaderIcon from "@lucide/svelte/icons/loader";
   import PackageIcon from "@lucide/svelte/icons/package";
   import CheckCircleIcon from "@lucide/svelte/icons/check-circle";
-  import ChevronLeftIcon from "@lucide/svelte/icons/chevron-left";
-  import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
 
   let { config }: { config: ProductionStageConfig } = $props();
 
@@ -59,21 +55,12 @@
   let stockLoading = $state(false);
   let errorMsg = $state<string | null>(null);
   let searchQuery = $state("");
-  const PAGE_SIZE = 10;
-  let currentPage = $state(1);
-  let pageCursors = $state<FirestoreCursor[]>([null]);
-  let pageHasNext = $state<boolean[]>([]);
-  let pageRows = $state<BatchProduksi[][]>([]);
-  let pageLoading = $state(false);
 
   // Quick-action dialog (steam inline popup)
   let quickOpen = $state(false);
   let quickBatch = $state<BatchProduksi | null>(null);
   let quickWorkerUid = $state("");
   let quickUkuranReject = $state<number[]>([]);
-  let quickUkuranBerhasil = $derived(
-    quickBatch?.detail_ukuran.map((du) => du.jumlah_pcs) ?? [],
-  );
   let quickSaving = $state(false);
   let quickError = $state<string | null>(null);
 
@@ -99,7 +86,11 @@
   let quickTotalBerhasil = $derived(
     quickBatch?.jenis_produk === "hijab"
       ? Math.max(0, quickMaxPcs - quickTotalReject)
-      : quickUkuranBerhasil.reduce((s, n) => s + n, 0),
+      : quickBatch?.detail_ukuran.reduce(
+          (sum, detail, index) =>
+            sum + Math.max(0, detail.jumlah_pcs - (Number(quickUkuranReject[index]) || 0)),
+          0,
+        ) ?? 0,
   );
   let quickFormValid = $derived.by(() => {
     if (!quickNextStatus) return false;
@@ -140,9 +131,9 @@
       const pcsReject = quickNeedsPcs ? quickTotalReject : 0;
       const newDetailUkuran = quickNeedsPcs && quickBatch.jenis_produk !== "hijab"
         ? quickBatch.detail_ukuran
-            .map((du) => ({
+            .map((du, index) => ({
               ukuran: du.ukuran,
-              jumlah_pcs: du.jumlah_pcs,
+              jumlah_pcs: Math.max(0, du.jumlah_pcs - (Number(quickUkuranReject[index]) || 0)),
             }))
             .filter((du) => du.jumlah_pcs > 0)
         : undefined;
@@ -220,47 +211,11 @@
     return list;
   });
 
-  let totalPages = $derived(Math.max(1, pageHasNext[currentPage - 1] ? currentPage + 1 : currentPage));
   let visibleBatches = $derived(filteredBatches);
 
   function setSearchQuery(value: string) {
     searchQuery = value;
-    currentPage = 1;
-    batchList = pageRows[0] ?? batchList;
   }
-
-  async function setPage(page: number) {
-    const target = Math.max(1, page);
-    if (target === currentPage || pageLoading) return;
-    if (target < currentPage) {
-      currentPage = target;
-      batchList = pageRows[target - 1] ?? [];
-      return;
-    }
-    if (!pageHasNext[currentPage - 1]) return;
-
-    pageLoading = true;
-    try {
-      const result = await getBatchPage(config.activeStatuses, pageCursors[currentPage - 1] ?? null, PAGE_SIZE);
-      pageRows[target - 1] = result.items;
-      pageCursors[target] = result.cursor;
-      pageHasNext[target - 1] = result.hasNext;
-      pageRows = [...pageRows];
-      pageCursors = [...pageCursors];
-      pageHasNext = [...pageHasNext];
-      currentPage = target;
-      batchList = result.items;
-    } catch {
-      errorMsg = "Gagal memuat halaman batch berikutnya.";
-    } finally {
-      pageLoading = false;
-    }
-  }
-
-  $effect(() => {
-    filteredBatches.length;
-    if (currentPage > totalPages) currentPage = totalPages;
-  });
 
   let readyCount = $derived(
     filteredBatches.filter((batch) =>
@@ -328,16 +283,9 @@
   async function load(force = false) {
     loading = true;
     errorMsg = null;
-    currentPage = 1;
-    pageCursors = [null];
-    pageHasNext = [];
-    pageRows = [];
     try {
-      const result = await getBatchPage(config.activeStatuses, null, PAGE_SIZE);
-      batchList = result.items;
-      pageRows = [result.items];
-      pageCursors = [null, result.cursor];
-      pageHasNext = [result.hasNext];
+      const batches = await batchCache.get(force);
+      batchList = batches.filter((batch) => config.activeStatuses.includes(batch.status));
     } catch {
       errorMsg = "Gagal memuat batch produksi.";
     } finally {
@@ -398,8 +346,8 @@
   // Otomatis sync semua batch CUTTING_DONE yang belum masuk stok_potongan
   async function autoSyncPending() {
     if (config.key !== "cutting") return;
-    const pending = (await getBatchPage(["CUTTING_DONE"], null, 50)).items.filter(
-      (b) => !b.dari_potongan && !b.stok_potongan_synced,
+    const pending = (await batchCache.get(true)).filter(
+      (b) => b.status === "CUTTING_DONE" && !b.dari_potongan && !b.stok_potongan_synced,
     );
     if (pending.length === 0) return;
     let synced = false;
@@ -735,33 +683,8 @@
             {/each}
           </Table.Body>
         </Table.Root>
-        <div class="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 px-5 py-3 text-xs text-gray-500">
-          <span>
-            Menampilkan {filteredBatches.length} batch pada halaman {currentPage}
-          </span>
-          {#if totalPages > 1 || currentPage > 1}
-            <div class="flex items-center gap-2">
-              <button
-                type="button"
-                aria-label="Halaman sebelumnya"
-                disabled={currentPage === 1}
-                onclick={() => setPage(currentPage - 1)}
-                class="inline-flex h-8 w-8 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                <ChevronLeftIcon class="h-4 w-4" />
-              </button>
-              <span class="min-w-20 text-center font-medium text-gray-700">Halaman {currentPage}{pageLoading ? "..." : ""}</span>
-              <button
-                type="button"
-                aria-label="Halaman berikutnya"
-                disabled={pageLoading || !pageHasNext[currentPage - 1]}
-                onclick={() => setPage(currentPage + 1)}
-                class="inline-flex h-8 w-8 items-center justify-center rounded-md border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                <ChevronRightIcon class="h-4 w-4" />
-              </button>
-            </div>
-          {/if}
+        <div class="border-t border-gray-100 px-5 py-3 text-xs text-gray-500">
+          Menampilkan {filteredBatches.length} batch
         </div>
       {/if}
     </div>
@@ -872,7 +795,7 @@
                 <tbody>
                   {#each quickBatch.detail_ukuran as du, i}
                     {@const reject = Number(quickUkuranReject[i]) || 0}
-                    {@const berhasil = quickUkuranBerhasil[i] ?? 0}
+                    {@const berhasil = Math.max(0, du.jumlah_pcs - reject)}
                     {@const overLimit = reject > du.jumlah_pcs}
                     <tr class="border-t border-gray-100">
                       <td class="px-3 py-2 font-semibold text-gray-700"

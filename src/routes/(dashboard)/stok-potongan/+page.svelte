@@ -1,9 +1,9 @@
 <script lang="ts">
   import { afterNavigate } from "$app/navigation";
+  import { onMount } from "svelte";
   import { stokPotonganCache, batchCache } from "$lib/stores/data-cache.svelte";
-  import { sinkronStokPotonganBatch, getBatchPage } from "$lib/firebase/batch-produksi";
-  import { hapusStokPotongan, koreksiStokPotongan, getStokPotonganPage } from "$lib/firebase/stok-potongan";
-  import type { FirestoreCursor } from "$lib/firebase/pagination";
+  import { sinkronStokPotonganBatch } from "$lib/firebase/batch-produksi";
+  import { hapusStokPotongan, koreksiStokPotongan } from "$lib/firebase/stok-potongan";
   import type { StokPotongan, UkuranBaju } from "$lib/types";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -15,7 +15,7 @@
   import PencilIcon from "@lucide/svelte/icons/pencil";
   import Trash2Icon from "@lucide/svelte/icons/trash-2";
 
-  const URUTAN_UKURAN: UkuranBaju[] = ['XS', 'M/S', 'L/XL', 'XXL'];
+  const URUTAN_UKURAN: UkuranBaju[] = ['XS', 'S/M', 'L/XL', 'XXL'];
 
   // ── State ──────────────────────────────────────────────────────────
   let stokList = $state<StokPotongan[]>([]);
@@ -23,12 +23,6 @@
   let errorMsg = $state<string | null>(null);
   let searchQuery = $state("");
   let refreshInProgress = false;
-  const PAGE_SIZE = 25;
-  let currentPage = $state(1);
-  let pageCursors = $state<FirestoreCursor[]>([null]);
-  let pageHasNext = $state<boolean[]>([]);
-  let pageCache = $state<StokPotongan[][]>([]);
-  let pageLoading = $state(false);
 
   // ── Group per model+warna ─────────────────────────────────────────
   type ModelGroup = {
@@ -106,13 +100,7 @@
     loading = true;
     errorMsg = null;
     try {
-      void force;
-      const firstPage = await getStokPotonganPage(null, PAGE_SIZE);
-      stokList = firstPage.items;
-      pageCache = [firstPage.items];
-      pageCursors = [null, firstPage.cursor];
-      pageHasNext = [firstPage.hasNext];
-      currentPage = 1;
+      stokList = await stokPotonganCache.get(force);
     } catch {
       errorMsg = "Gagal memuat data stok potongan.";
     } finally {
@@ -120,42 +108,15 @@
     }
   }
 
-  async function nextPage() {
-    if (pageLoading || !pageHasNext[currentPage - 1]) return;
-    pageLoading = true;
-    try {
-      const result = await getStokPotonganPage(pageCursors[currentPage] ?? null, PAGE_SIZE);
-      pageCache[currentPage] = result.items;
-      pageCursors[currentPage + 1] = result.cursor;
-      pageHasNext[currentPage] = result.hasNext;
-      pageCache = [...pageCache];
-      pageCursors = [...pageCursors];
-      pageHasNext = [...pageHasNext];
-      currentPage += 1;
-      stokList = result.items;
-    } catch (e) {
-      errorMsg = e instanceof Error ? e.message : "Gagal memuat halaman berikutnya.";
-    } finally {
-      pageLoading = false;
-    }
-  }
-
-  function previousPage() {
-    if (currentPage <= 1 || pageLoading) return;
-    currentPage -= 1;
-    stokList = pageCache[currentPage - 1] ?? stokList;
-  }
-
   function setSearch(value: string) {
     searchQuery = value;
-    currentPage = 1;
-    stokList = pageCache[0] ?? stokList;
   }
 
   async function autoSyncPending() {
     try {
-      const batches = await getBatchPage(['CUTTING_DONE'], null, 50);
-      const pending = batches.items.filter(
+      const pending = (await batchCache.get(true)).filter(
+        (batch) => batch.status === 'CUTTING_DONE'
+      ).filter(
         (b) => !b.dari_potongan && !b.stok_potongan_synced
       );
       if (pending.length === 0) return;
@@ -178,7 +139,7 @@
     }
   }
 
-  afterNavigate(async () => {
+  async function refreshPage() {
     if (refreshInProgress) return;
     refreshInProgress = true;
     try {
@@ -187,7 +148,11 @@
     } finally {
       refreshInProgress = false;
     }
-  });
+  }
+
+  // Auth guard can delay component mount until after the initial navigation.
+  onMount(() => { void refreshPage(); });
+  afterNavigate(() => { void refreshPage(); });
 
   function stokColor(stok: number) {
     if (stok === 0) return 'bg-red-100 text-red-600 border-red-200';
@@ -421,13 +386,6 @@
       <p class="text-xs text-gray-400">
         {filteredGroups.length} model · {stokList.length} jenis ukuran total · <span class="text-blue-500">Klik ukuran untuk koreksi stok</span>
       </p>
-      {#if currentPage > 1 || pageHasNext[currentPage - 1]}
-        <div class="mt-3 flex items-center gap-2">
-          <Button variant="outline" size="sm" disabled={currentPage === 1 || pageLoading} onclick={previousPage}>Sebelumnya</Button>
-          <span class="text-xs font-medium text-gray-700">Halaman {currentPage}{pageLoading ? "..." : ""}</span>
-          <Button variant="outline" size="sm" disabled={pageLoading || !pageHasNext[currentPage - 1]} onclick={nextPage}>Berikutnya</Button>
-        </div>
-      {/if}
     </div>
   </div>
 {/if}

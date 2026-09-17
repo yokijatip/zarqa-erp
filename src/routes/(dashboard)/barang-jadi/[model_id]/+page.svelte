@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { page } from "$app/stores";
-  import { goto } from "$app/navigation";
+  import { afterNavigate, goto } from "$app/navigation";
   import {
     getStokByModel,
     tambahStokBarangJadi,
@@ -9,9 +9,12 @@
     setStokManual,
     getRiwayatKeluarByModelPage,
     getRiwayatBarangJadiByModelPage,
+    getRiwayatBarangJadiByModelPeriod,
+    getRiwayatBarangKeluarByPeriod,
   } from "$lib/firebase/barang-jadi";
   import type { FirestoreCursor } from "$lib/firebase/pagination";
   import { getRiwayatBatch, getBatchById } from "$lib/firebase/batch-produksi";
+  import { getModelBajuById } from "$lib/firebase/model-baju";
   import { currentUser } from "$lib/stores/auth.store";
   import {
     UKURAN_ORDER,
@@ -21,9 +24,12 @@
     type BarangKeluarItem,
     type RiwayatBarangJadi,
     type SumberCutting,
+    type ModelBaju,
   } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
+  import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
   import * as Select from "$lib/components/ui/select/index.js";
+  import { Chart, registerables } from "chart.js";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import RejectResolveDialog from "$lib/components/reject-resolve-dialog.svelte";
@@ -31,14 +37,20 @@
   import PackageCheckIcon from "@lucide/svelte/icons/package-check";
   import PackagePlusIcon from "@lucide/svelte/icons/package-plus";
   import PackageMinusIcon from "@lucide/svelte/icons/package-minus";
-  import RulerIcon from "@lucide/svelte/icons/ruler";
+  import PaletteIcon from "@lucide/svelte/icons/palette";
+  import PencilIcon from "@lucide/svelte/icons/pencil";
   import ChevronDownIcon from "@lucide/svelte/icons/chevron-down";
+  import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
+
+  Chart.register(...registerables);
 
   const KRITIS_THRESHOLD = 5;
   const LOW_THRESHOLD = 15;
 
   // ── State ─────────────────────────────────────────────────────────
   let stokList = $state<StokBarangJadi[]>([]);
+  let masterModel = $state<ModelBaju | null>(null);
+  let stockSourceModel = $state<ModelBaju | null>(null);
   let riwayatKeluar = $state<BarangKeluar[]>([]);
   let riwayatMasuk = $state<RiwayatBarangJadi[]>([]);
 
@@ -47,6 +59,14 @@
   let filterMasukSampai = $state("");
   let filterKeluarDari = $state("");
   let filterKeluarSampai = $state("");
+  let statistikDari = $state("");
+  let statistikSampai = $state("");
+  let statistikDariAktif = $state("");
+  let statistikSampaiAktif = $state("");
+  let statistikMasuk = $state<RiwayatBarangJadi[]>([]);
+  let statistikKeluar = $state<BarangKeluar[]>([]);
+  let statistikLoading = $state(false);
+  let statistikRequestId = 0;
   const HISTORY_PAGE_SIZE = 50;
   let masukPage = $state(1);
   let keluarPage = $state(1);
@@ -103,6 +123,12 @@
         map.set(key, { nama_warna: item.nama_warna, kode_hex_warna: item.kode_hex_warna });
       }
     }
+    for (const color of masterModel?.warna_tersedia ?? []) {
+      const key = color.nama_warna ?? '';
+      if (!map.has(key)) {
+        map.set(key, { nama_warna: color.nama_warna, kode_hex_warna: color.kode_hex });
+      }
+    }
     return [...map.entries()].map(([key, val]) => ({ key, ...val }));
   });
 
@@ -152,7 +178,11 @@
 
   let sorted = $derived(filteredItems);
 
-  let namaModel = $derived(stokList[0]?.nama_model ?? "");
+  let namaModel = $derived(masterModel?.nama_model ?? stokList[0]?.nama_model ?? "");
+  let isSharedStock = $derived(Boolean(masterModel?.stok_model_id && masterModel.stok_model_id !== masterModel.id));
+  let stockSourceName = $derived(
+    stockSourceModel?.nama_model ?? (masterModel?.stok_model_id ? "model sumber" : masterModel?.nama_model ?? ""),
+  );
   let activeColorEntry = $derived.by(() => {
     if (selectedColor) {
       return allColors.find((c) => c.key === selectedColor) ?? allColors[0] ?? null;
@@ -165,6 +195,265 @@
   let totalMasuk = $derived(filteredItems.reduce((s, i) => s + i.total_masuk, 0));
   let totalKeluar = $derived(filteredItems.reduce((s, i) => s + i.total_keluar, 0));
   let jumlahKritis = $derived(filteredItems.filter((i) => getStatus(i) === "kritis").length);
+
+  type ColorStat = {
+    key: string;
+    label: string;
+    hex: string | undefined;
+    tersedia: number;
+    totalMasuk: number;
+    totalKeluar: number;
+  };
+
+  let colorStats = $derived.by((): ColorStat[] => {
+    const map = new Map<string, ColorStat>();
+
+    for (const color of allColors) {
+      const key = color.key || "tanpa-warna";
+      map.set(key, {
+        key,
+        label: color.nama_warna || "Tanpa warna",
+        hex: color.kode_hex_warna,
+        tersedia: 0,
+        totalMasuk: 0,
+        totalKeluar: 0,
+      });
+    }
+
+    for (const item of stokList) {
+      const key = item.nama_warna || "tanpa-warna";
+      const current = map.get(key) ?? {
+        key,
+        label: item.nama_warna || "Tanpa warna",
+        hex: item.kode_hex_warna,
+        tersedia: 0,
+        totalMasuk: 0,
+        totalKeluar: 0,
+      };
+      current.tersedia += item.stok_tersedia;
+      current.totalMasuk += item.total_masuk;
+      current.totalKeluar += item.total_keluar;
+      if (!current.hex) current.hex = item.kode_hex_warna;
+      map.set(key, current);
+    }
+
+    return [...map.values()]
+      .filter((item) => item.tersedia > 0 || item.totalMasuk > 0 || item.totalKeluar > 0)
+      .sort((a, b) => b.totalKeluar - a.totalKeluar || b.tersedia - a.tersedia);
+  });
+
+  type SizeStat = {
+    ukuran: string;
+    tersedia: number;
+    totalMasuk: number;
+    totalKeluar: number;
+  };
+
+  let sizeStatsModel = $derived.by((): SizeStat[] => {
+    const map = new Map<string, SizeStat>();
+    for (const ukuran of stockSourceModel?.ukuran_tersedia ?? masterModel?.ukuran_tersedia ?? []) {
+      map.set(ukuran, { ukuran, tersedia: 0, totalMasuk: 0, totalKeluar: 0 });
+    }
+    for (const item of stokList) {
+      const current = map.get(item.ukuran) ?? {
+        ukuran: item.ukuran,
+        tersedia: 0,
+        totalMasuk: 0,
+        totalKeluar: 0,
+      };
+      current.tersedia += item.stok_tersedia;
+      current.totalMasuk += item.total_masuk;
+      current.totalKeluar += item.total_keluar;
+      map.set(item.ukuran, current);
+    }
+    return [...map.values()].sort(
+      (a, b) => UKURAN_ORDER.indexOf(a.ukuran as UkuranBaju) - UKURAN_ORDER.indexOf(b.ukuran as UkuranBaju),
+    );
+  });
+
+  function historyMovement(r: RiwayatBarangJadi): "masuk" | "keluar" | null {
+    if (r.tipe.startsWith("masuk_") || r.tipe === "batal_keluar" || r.tipe === "reject_diperbaiki") {
+      return "masuk";
+    }
+    if (r.tipe === "kurangi_manual" || (r.tipe === "set_manual" && r.stok_sesudah < r.stok_sebelum)) {
+      return "keluar";
+    }
+    if (r.tipe === "set_manual" && r.stok_sesudah > r.stok_sebelum) return "masuk";
+    return null;
+  }
+
+  function statsItemsForModel(record: BarangKeluar, modelId: string): BarangKeluarItem[] {
+    if (record.items && record.items.length > 0) {
+      return record.items.filter((item) => item.model_id === modelId || item.stok_model_id === modelId);
+    }
+    if (record.model_id !== modelId) return [];
+    return [{
+      model_id: record.model_id,
+      nama_model: record.nama_model,
+      ...(record.nama_warna ? { nama_warna: record.nama_warna } : {}),
+      ...(record.kode_hex_warna ? { kode_hex_warna: record.kode_hex_warna } : {}),
+      detail_keluar: record.detail_keluar,
+      total_pcs: record.total_pcs,
+      status: record.status === "pending" ? "pending" : "keluar",
+    }];
+  }
+
+  let statistikAktif = $derived(Boolean(statistikDariAktif || statistikSampaiAktif));
+  let chartColorStats = $derived.by((): ColorStat[] => {
+    if (!statistikAktif) return colorStats;
+    const map = new Map<string, ColorStat>();
+    for (const color of allColors) {
+      const key = color.key || "tanpa-warna";
+      map.set(key, {
+        key,
+        label: color.nama_warna || "Tanpa warna",
+        hex: color.kode_hex_warna,
+        tersedia: 0,
+        totalMasuk: 0,
+        totalKeluar: 0,
+      });
+    }
+    const modelId = $page.params.model_id!;
+    for (const record of statistikKeluar) {
+      for (const item of statsItemsForModel(record, modelId)) {
+        if (item.status !== "keluar") continue;
+        const key = item.nama_warna || "tanpa-warna";
+        const current = map.get(key);
+        if (current) current.totalKeluar += item.total_pcs;
+      }
+    }
+    return [...map.values()]
+      .filter((item) => item.totalKeluar > 0)
+      .sort((a, b) => b.totalKeluar - a.totalKeluar);
+  });
+
+  let chartSizeStats = $derived.by((): SizeStat[] => {
+    if (!statistikAktif) return sizeStatsModel;
+    const map = new Map(sizeStatsModel.map((item) => [item.ukuran, { ...item, totalMasuk: 0, totalKeluar: 0 }]));
+    for (const record of statistikMasuk) {
+      const movement = historyMovement(record);
+      if (!movement) continue;
+      const current = map.get(record.ukuran) ?? {
+        ukuran: record.ukuran,
+        tersedia: 0,
+        totalMasuk: 0,
+        totalKeluar: 0,
+      };
+      current[movement === "masuk" ? "totalMasuk" : "totalKeluar"] += record.jumlah;
+      map.set(record.ukuran, current);
+    }
+    const modelId = $page.params.model_id!;
+    for (const record of statistikKeluar) {
+      for (const item of statsItemsForModel(record, modelId)) {
+        if (item.status !== "keluar") continue;
+        for (const detail of item.detail_keluar) {
+          const current = map.get(detail.ukuran) ?? {
+            ukuran: detail.ukuran,
+            tersedia: 0,
+            totalMasuk: 0,
+            totalKeluar: 0,
+          };
+          current.totalKeluar += detail.jumlah_pcs;
+          map.set(detail.ukuran, current);
+        }
+      }
+    }
+    return [...map.values()].sort(
+      (a, b) => UKURAN_ORDER.indexOf(a.ukuran as UkuranBaju) - UKURAN_ORDER.indexOf(b.ukuran as UkuranBaju),
+    );
+  });
+
+  let totalWarnaKeluar = $derived(chartColorStats.reduce((sum, item) => sum + item.totalKeluar, 0));
+  let colorChartCanvas = $state<HTMLCanvasElement | null>(null);
+  let sizeChartCanvas = $state<HTMLCanvasElement | null>(null);
+
+  const CHART_TEXT = "#94a3b8";
+  const CHART_GRID = "rgba(148, 163, 184, 0.16)";
+  const CHART_COLORS = ["#16a34a", "#2563eb", "#f59e0b", "#dc2626", "#7c3aed", "#0891b2", "#db2777", "#64748b"];
+
+  function chartColor(hex: string | undefined, index: number): string {
+    return hex || CHART_COLORS[index % CHART_COLORS.length];
+  }
+
+  $effect(() => {
+    const canvas = colorChartCanvas;
+    const data = chartColorStats;
+    if (!canvas || data.length === 0 || totalWarnaKeluar <= 0) return;
+
+    const chart = new Chart(canvas, {
+      type: "doughnut",
+      data: {
+        labels: data.map((item) => item.label),
+        datasets: [
+          {
+            data: data.map((item) => item.totalKeluar),
+            backgroundColor: data.map((item, index) => chartColor(item.hex, index)),
+            borderColor: "#0f172a",
+            borderWidth: 3,
+            hoverOffset: 8,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: "62%",
+        plugins: {
+          legend: {
+            position: "bottom",
+            labels: { color: CHART_TEXT, boxWidth: 12, padding: 14 },
+          },
+          tooltip: {
+            callbacks: {
+              label: (context) => {
+                const value = Number(context.raw ?? 0);
+                const percentage = totalWarnaKeluar > 0 ? Math.round((value / totalWarnaKeluar) * 100) : 0;
+                return ` ${context.label}: ${value.toLocaleString("id-ID")} pcs (${percentage}%)`;
+              },
+            },
+          },
+        },
+      },
+    });
+
+    return () => chart.destroy();
+  });
+
+  $effect(() => {
+    const canvas = sizeChartCanvas;
+    const data = chartSizeStats;
+    if (!canvas || data.length === 0) return;
+
+    const chart = new Chart(canvas, {
+      type: "bar",
+      data: {
+        labels: data.map((item) => item.ukuran),
+        datasets: [
+          { label: "Tersedia", data: data.map((item) => item.tersedia), backgroundColor: "#14b8a6", borderRadius: 5 },
+          { label: "Total masuk", data: data.map((item) => item.totalMasuk), backgroundColor: "#3b82f6", borderRadius: 5 },
+          { label: "Total keluar", data: data.map((item) => item.totalKeluar), backgroundColor: "#f59e0b", borderRadius: 5 },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: "bottom", labels: { color: CHART_TEXT, boxWidth: 12, padding: 14 } },
+          tooltip: {
+            callbacks: {
+              label: (context) => ` ${context.dataset.label}: ${Number(context.raw ?? 0).toLocaleString("id-ID")} pcs`,
+            },
+          },
+        },
+        scales: {
+          x: { ticks: { color: CHART_TEXT }, grid: { display: false } },
+          y: { beginAtZero: true, ticks: { color: CHART_TEXT }, grid: { color: CHART_GRID } },
+        },
+      },
+    });
+
+    return () => chart.destroy();
+  });
 
   function getStatus(
     item: StokBarangJadi,
@@ -262,6 +551,11 @@
     kurangi: "Kurangi stok karena loss, kerusakan, atau koreksi.",
     edit: "Set stok ke nilai absolut untuk koreksi fisik.",
   };
+  const dialogTitle = $derived(
+    dialogMode === "restock" && fSumberMasuk === "stok_awal"
+      ? "Tambah Stok Awal"
+      : DIALOG_TITLE[dialogMode],
+  );
 
   function formatDate(ts: any): string {
     if (!ts) return "—";
@@ -315,13 +609,26 @@
     loading = true;
     try {
       const modelId = $page.params.model_id!;
-      const [stokResult, keluarResult, masukResult] = await Promise.allSettled([
-        getStokByModel(modelId),
+      let loadedModel: ModelBaju | null = null;
+      try {
+        loadedModel = await getModelBajuById(modelId);
+      } catch (reason) {
+        console.error("getModelBajuById failed:", reason);
+      }
+      masterModel = loadedModel;
+      const stockSourceId = loadedModel?.stok_model_id ?? modelId;
+      const [stokResult, keluarResult, masukResult, sourceModelResult] = await Promise.allSettled([
+        getStokByModel(stockSourceId),
         getRiwayatKeluarByModelPage(modelId, null, HISTORY_PAGE_SIZE),
-        getRiwayatBarangJadiByModelPage(modelId, null, HISTORY_PAGE_SIZE),
+        getRiwayatBarangJadiByModelPage(stockSourceId, null, HISTORY_PAGE_SIZE),
+        stockSourceId === modelId ? Promise.resolve(loadedModel) : getModelBajuById(stockSourceId),
       ]);
 
-      stokList = stokResult.status === "fulfilled" ? stokResult.value : [];
+      stockSourceModel = sourceModelResult.status === "fulfilled" ? sourceModelResult.value : null;
+      const stokNyata = stokResult.status === "fulfilled" ? stokResult.value : [];
+      stokList = masterModel
+        ? tambahBarisStokMaster(masterModel, stokNyata, stockSourceModel ?? masterModel)
+        : stokNyata;
       riwayatKeluar =
         keluarResult.status === "fulfilled" ? keluarResult.value.items : [];
       riwayatMasuk =
@@ -353,11 +660,107 @@
           "getRiwayatBarangJadiByModel failed:",
           masukResult.reason,
         );
-        showError("Gagal memuat riwayat masuk (cek index Firestore).");
+        showError("Gagal memuat riwayat stok (cek index Firestore).");
       }
     } finally {
       loading = false;
     }
+  }
+
+  function buildStatistikRange(): { start: Date; end: Date } | null | undefined {
+    if (!statistikDari && !statistikSampai) return null;
+    const start = statistikDari
+      ? new Date(`${statistikDari}T00:00:00`)
+      : new Date(0);
+    const end = statistikSampai
+      ? new Date(`${statistikSampai}T23:59:59.999`)
+      : new Date();
+    if (start.getTime() > end.getTime()) {
+      showError("Tanggal mulai tidak boleh melewati tanggal akhir.");
+      return undefined;
+    }
+    return { start, end };
+  }
+
+  async function terapkanFilterStatistik() {
+    const range = buildStatistikRange();
+    if (range === undefined) return;
+
+    statistikDariAktif = statistikDari;
+    statistikSampaiAktif = statistikSampai;
+    const requestId = ++statistikRequestId;
+    if (!range) {
+      statistikMasuk = [];
+      statistikKeluar = [];
+      return;
+    }
+
+    statistikLoading = true;
+    try {
+      const modelId = $page.params.model_id!;
+      const stockSourceId = masterModel?.stok_model_id ?? modelId;
+      const [masuk, keluar] = await Promise.all([
+        getRiwayatBarangJadiByModelPeriod(stockSourceId, range),
+        getRiwayatBarangKeluarByPeriod(range),
+      ]);
+      if (requestId !== statistikRequestId) return;
+      statistikMasuk = masuk;
+      statistikKeluar = keluar;
+    } catch (e: any) {
+      if (requestId !== statistikRequestId) return;
+      statistikMasuk = [];
+      statistikKeluar = [];
+      showError(e?.message ?? "Gagal memuat statistik pada periode tersebut.");
+    } finally {
+      if (requestId === statistikRequestId) statistikLoading = false;
+    }
+  }
+
+  function resetFilterStatistik() {
+    statistikDari = "";
+    statistikSampai = "";
+    statistikDariAktif = "";
+    statistikSampaiAktif = "";
+    statistikMasuk = [];
+    statistikKeluar = [];
+    statistikRequestId += 1;
+    statistikLoading = false;
+  }
+
+  function isVirtualStockRow(item: StokBarangJadi): boolean {
+    return item.id.endsWith("__zero");
+  }
+
+  function tambahBarisStokMaster(
+    model: ModelBaju,
+    stokNyata: StokBarangJadi[],
+    physicalModel: ModelBaju = model,
+  ): StokBarangJadi[] {
+    const rows = [...stokNyata];
+    const existing = new Set(rows.map((item) => `${item.nama_warna ?? ""}|${item.ukuran}`));
+    const colors = physicalModel.warna_tersedia?.length
+      ? physicalModel.warna_tersedia
+      : [{ nama_warna: "", kode_hex: "" }];
+
+    for (const color of colors) {
+      for (const ukuran of physicalModel.ukuran_tersedia ?? []) {
+        const key = `${color.nama_warna ?? ""}|${ukuran}`;
+        if (existing.has(key)) continue;
+        rows.push({
+          id: `${physicalModel.id}__${ukuran}__${color.nama_warna || "tanpa-warna"}__zero`,
+          model_id: physicalModel.id,
+          nama_model: physicalModel.nama_model,
+          ...(color.nama_warna ? { nama_warna: color.nama_warna } : {}),
+          ...(color.kode_hex ? { kode_hex_warna: color.kode_hex } : {}),
+          ukuran,
+          stok_tersedia: 0,
+          total_masuk: 0,
+          total_keluar: 0,
+        });
+        existing.add(key);
+      }
+    }
+    return rows;
   }
 
   async function nextHistoryPage(kind: "masuk" | "keluar") {
@@ -365,8 +768,9 @@
     historyPageLoading = true;
     try {
       const modelId = $page.params.model_id!;
+      const stockSourceId = masterModel?.stok_model_id ?? modelId;
       if (kind === "masuk" && masukHasNext) {
-        const result = await getRiwayatBarangJadiByModelPage(modelId, masukCursors[masukPage] ?? masukCursor, HISTORY_PAGE_SIZE);
+        const result = await getRiwayatBarangJadiByModelPage(stockSourceId, masukCursors[masukPage] ?? masukCursor, HISTORY_PAGE_SIZE);
         riwayatMasuk = result.items;
         masukPageCache[masukPage] = result.items;
         masukPageCache = [...masukPageCache];
@@ -557,21 +961,23 @@
   let riwayatMasukTampil = $derived(riwayatMasukGrouped);
 
   $effect(() => {
-    riwayatMasukGrouped.length;
     filterMasukDari;
     filterMasukSampai;
     selectedColor;
-    masukPage = 1;
-    riwayatMasuk = masukPageCache[0] ?? riwayatMasuk;
+    untrack(() => {
+      masukPage = 1;
+      riwayatMasuk = masukPageCache[0] ?? riwayatMasuk;
+    });
   });
 
   $effect(() => {
-    riwayatKeluarTerfilter.length;
     filterKeluarDari;
     filterKeluarSampai;
     selectedColor;
-    keluarPage = 1;
-    riwayatKeluar = keluarPageCache[0] ?? riwayatKeluar;
+    untrack(() => {
+      keluarPage = 1;
+      riwayatKeluar = keluarPageCache[0] ?? riwayatKeluar;
+    });
   });
 
   // Prefetch nama tukang cutting untuk tiap batch begitu muncul di list,
@@ -768,6 +1174,15 @@
     openDialog = true;
   }
 
+  function bukaTambahStokAwal(item: StokBarangJadi) {
+    if (!selectedColor) {
+      showError("Pilih warna terlebih dahulu untuk menambah stok awal.");
+      return;
+    }
+    bukaDialog("restock", item);
+    fSumberMasuk = "stok_awal";
+  }
+
   async function submitDialog() {
     if (!selectedItem || fJumlah < 0 || saving) return;
     saving = true;
@@ -831,10 +1246,16 @@
     if (dialogMode === "restock") return fJumlah > 0;
     if (dialogMode === "kurangi")
       return fJumlah > 0 && fJumlah <= selectedItem.stok_tersedia;
-    return fJumlah >= 0;
+    return fJumlah >= 0 && fJumlah !== selectedItem.stok_tersedia;
   });
 
-  onMount(load);
+  onMount(() => {
+    void load();
+  });
+
+  afterNavigate(({ from }) => {
+    if (from) void load();
+  });
 </script>
 
 <!-- ── Toasts ────────────────────────────────────────────────────── -->
@@ -997,6 +1418,20 @@
   {/if}
 </div>
 
+{#if !loading && isSharedStock && masterModel?.stok_model_id}
+  <div class="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm dark:border-blue-400/20 dark:bg-blue-400/10">
+    <div class="min-w-0">
+      <p class="font-semibold text-blue-800 dark:text-blue-100">Model penjualan dengan stok bersama</p>
+      <p class="mt-0.5 text-xs text-blue-700 dark:text-blue-200/80">
+        Stok fisik model ini mengikuti <span class="font-semibold">{stockSourceName}</span>. Perubahan stok di sini berlaku ke sumber tersebut.
+      </p>
+    </div>
+    <a href="/barang-jadi/{masterModel.stok_model_id}" class="shrink-0 rounded-lg border border-blue-200 bg-white px-3 py-1.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-100 dark:border-blue-300/20 dark:bg-slate-950 dark:text-blue-200 dark:hover:bg-blue-400/10">
+      Buka stok sumber
+    </a>
+  </div>
+{/if}
+
 {#if loading}
   <div class="space-y-4">
     <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -1042,10 +1477,10 @@
   <!-- ── Summary Stats ──────────────────────────────────────────────── -->
   <div class="mb-5 grid grid-cols-2 gap-4 lg:grid-cols-4">
     <StatCard
-      title="Stok Tersedia"
+      title={isSharedStock ? "Stok Sumber" : "Stok Tersedia"}
       value={totalTersedia.toLocaleString("id-ID")}
       icon={PackageCheckIcon}
-      footerSubtext="pcs siap kirim"
+      footerSubtext={isSharedStock ? `mengikuti ${stockSourceName}` : "pcs siap kirim"}
       class="border-teal-100 bg-teal-50"
       valueClass="text-teal-700"
     />
@@ -1062,10 +1497,10 @@
       footerSubtext="pcs sudah dikirim"
     />
     <StatCard
-      title="Jumlah Ukuran"
-      value={stokList.length}
-      icon={RulerIcon}
-      footerSubtext="ukuran terdaftar"
+      title="Warna Terdaftar"
+      value={allColors.length}
+      icon={PaletteIcon}
+      footerSubtext="warna pada model"
     />
   </div>
 
@@ -1079,6 +1514,9 @@
         {/if}
         <span class="text-sm font-semibold text-gray-800">{selectedColor ? namaWarna : "Semua warna"}</span>
         <span class="text-sm font-bold text-gray-800">{totalTersedia} pcs</span>
+        {#if isSharedStock}
+          <span class="text-xs text-blue-600">dari {stockSourceName}</span>
+        {/if}
 
         {#if jumlahKritis > 0}
           <span class="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-600">
@@ -1092,7 +1530,7 @@
         {#each filteredItems as item}
           {@const status = getStatus(item)}
           {@const st = STATUS_STYLE[status]}
-          <div class="flex flex-col items-center px-3 py-4 text-center {item !== filteredItems[filteredItems.length - 1] ? 'border-r border-gray-100' : ''}">
+          <div class="flex min-h-[112px] flex-col items-center px-3 py-3 text-center {item !== filteredItems[filteredItems.length - 1] ? 'border-r border-gray-100' : ''}">
             <!-- Ukuran badge -->
             <div class="mb-2 flex items-center gap-1">
               <span class="flex h-7 w-7 items-center justify-center rounded-full {st.ukuran} text-xs font-bold">
@@ -1113,7 +1551,7 @@
 
             <!-- Date -->
             {#if item.updatedAt}
-              <p class="mt-2 text-[10px] text-gray-300">
+              <p class="mt-1.5 text-[10px] text-gray-300">
                 {formatDate(item.updatedAt)}
               </p>
             {/if}
@@ -1185,25 +1623,43 @@
 
         <!-- Actions -->
         {#if selectedColor}
-        <div class="flex shrink-0 gap-1">
-          <button
-            onclick={() => bukaDialog("restock", item)}
-            class="rounded-lg border border-gray-200 px-2.5 py-1.5 text-[11px] font-semibold text-teal-600 hover:bg-teal-50 transition"
-          >
-            + Restock
-          </button>
-          <button
-            onclick={() => bukaDialog("kurangi", item)}
-            class="rounded-lg border border-gray-200 px-2.5 py-1.5 text-[11px] font-semibold text-red-500 hover:bg-red-50 transition"
-          >
-            − Kurangi
-          </button>
-          <button
-            onclick={() => bukaDialog("edit", item)}
-            class="rounded-lg border border-gray-200 px-2.5 py-1.5 text-[11px] font-semibold text-gray-500 hover:bg-gray-50 transition"
-          >
-            ✎ Set
-          </button>
+        <div class="flex shrink-0">
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger>
+              <button
+                type="button"
+                aria-label={`Menu stok ukuran ${item.ukuran}`}
+                title="Menu stok"
+                class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-gray-200 text-gray-500 transition hover:bg-gray-50 hover:text-gray-800 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-slate-100"
+              >
+                <MoreHorizontalIcon class="h-4 w-4" />
+              </button>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Content align="end" class="w-52">
+              <DropdownMenu.Item onclick={() => bukaTambahStokAwal(item)}>
+                <PackagePlusIcon class="mr-2 h-4 w-4" />
+                Tambah Stok Awal
+              </DropdownMenu.Item>
+              <DropdownMenu.Item onclick={() => bukaDialog("restock", item)}>
+                <PackagePlusIcon class="mr-2 h-4 w-4 text-teal-600" />
+                Restock
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                disabled={isVirtualStockRow(item)}
+                onclick={() => bukaDialog("kurangi", item)}
+              >
+                <PackageMinusIcon class="mr-2 h-4 w-4 text-red-500" />
+                Kurangi Stok
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                disabled={isVirtualStockRow(item)}
+                onclick={() => bukaDialog("edit", item)}
+              >
+                <PencilIcon class="mr-2 h-4 w-4" />
+                Set Stok
+              </DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Root>
         </div>
         {:else}
           <p class="w-36 shrink-0 text-right text-[11px] text-gray-400">
@@ -1214,6 +1670,71 @@
     {/each}
   </div>
   <!-- ── Riwayat Masuk ────────────────────────────────────────────── -->
+  {#if stokList.length > 0}
+    <!-- Statistik stok model memakai seluruh total stok yang sudah tersimpan. -->
+    <section class="mt-6">
+      <div class="mb-3 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 class="text-sm font-semibold text-gray-800 dark:text-slate-100">Statistik Stok</h2>
+          <p class="mt-1 text-xs text-gray-400">Grafik mencakup semua warna dan ukuran model ini.</p>
+        </div>
+        <div class="flex flex-wrap items-center justify-end gap-2 text-xs">
+          <span class="text-gray-400">Dari</span>
+          <input
+            id="statistik-stok-dari"
+            type="date"
+            bind:value={statistikDari}
+            class="rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-xs text-gray-700 outline-none focus:border-teal-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+          />
+          <span class="text-gray-400">Sampai</span>
+          <input
+            id="statistik-stok-sampai"
+            type="date"
+            bind:value={statistikSampai}
+            class="rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-xs text-gray-700 outline-none focus:border-teal-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+          />
+          <Button size="sm" variant="outline" disabled={statistikLoading} onclick={() => void terapkanFilterStatistik()}>
+            {statistikLoading ? "Memuat..." : "Tampilkan"}
+          </Button>
+          {#if statistikDariAktif || statistikSampaiAktif}
+            <Button size="sm" variant="ghost" disabled={statistikLoading} onclick={resetFilterStatistik}>Reset</Button>
+          {/if}
+        </div>
+      </div>
+
+      <div class="grid gap-5 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,0.85fr)]">
+        <div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div class="mb-4 flex items-start justify-between gap-3">
+            <div>
+              <h3 class="text-sm font-semibold text-gray-800 dark:text-slate-100">Pergerakan per Ukuran</h3>
+              <p class="mt-1 text-xs text-gray-400">Perbandingan semua ukuran, masuk, dan keluar.</p>
+            </div>
+            <span class="shrink-0 rounded-full bg-gray-100 px-2 py-1 text-[10px] text-gray-500 dark:bg-slate-800 dark:text-slate-400">Semua warna</span>
+          </div>
+          <div class="h-72">
+            <canvas bind:this={sizeChartCanvas} aria-label="Grafik pergerakan stok per ukuran"></canvas>
+          </div>
+        </div>
+
+        <div class="rounded-xl border border-gray-100 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div class="mb-4">
+            <h3 class="text-sm font-semibold text-gray-800 dark:text-slate-100">Distribusi Warna Keluar</h3>
+            <p class="mt-1 text-xs text-gray-400">Seluruh warna model ini, terlepas dari filter warna di atas.</p>
+          </div>
+          {#if totalWarnaKeluar > 0}
+            <div class="h-72">
+              <canvas bind:this={colorChartCanvas} aria-label="Grafik distribusi warna yang keluar"></canvas>
+            </div>
+          {:else}
+            <div class="flex h-72 items-center justify-center rounded-lg bg-gray-50 px-5 text-center text-xs text-gray-400 dark:bg-slate-800/60">
+              Belum ada data barang keluar untuk distribusi warna.
+            </div>
+          {/if}
+        </div>
+      </div>
+    </section>
+  {/if}
+
   <div class="mt-6">
     <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
       <h2 class="text-sm font-semibold text-gray-700">Riwayat Masuk</h2>
@@ -1622,7 +2143,7 @@
 <Dialog.Root bind:open={openDialog}>
   <Dialog.Content class="max-w-sm">
     <Dialog.Header>
-      <Dialog.Title>{selectedItem ? DIALOG_TITLE[dialogMode] : ""}</Dialog.Title
+      <Dialog.Title>{selectedItem ? dialogTitle : ""}</Dialog.Title
       >
       <Dialog.Description>
         {selectedItem ? DIALOG_DESC[dialogMode] : ""}

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { afterNavigate } from "$app/navigation";
+  import { onMount } from "svelte";
   import { currentUser } from "$lib/stores/auth.store";
   import {
     addMasterKain,
@@ -11,11 +12,10 @@
     kurangiStokManual,
     deleteStokKain,
     getRiwayatStokKainPage,
-    getStokKainPage,
   } from "$lib/firebase/stok-kain";
   import type { FirestoreCursor } from "$lib/firebase/pagination";
   import { getBatchListByDateRange } from "$lib/firebase/batch-produksi";
-  import { warnaCache, masterKainCache } from "$lib/stores/data-cache.svelte";
+  import { stokKainCache, warnaCache, masterKainCache } from "$lib/stores/data-cache.svelte";
   import type { StokKain, Warna, MasterKain, BatchProduksi, RiwayatStokKain } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
   import { Button } from "$lib/components/ui/button";
@@ -39,12 +39,7 @@
   let sortBy = $state<"nama" | "tersedia_asc" | "tersedia_desc">(
     "tersedia_asc",
   );
-  const PAGE_SIZE = 25;
-  let currentPage = $state(1);
-  let pageCursors = $state<FirestoreCursor[]>([null]);
-  let pageHasNext = $state<boolean[]>([]);
-  let pageCache = $state<StokKain[][]>([]);
-  let pageLoading = $state(false);
+  let refreshInProgress = false;
 
   // Dialog state
   let openTambah = $state(false);
@@ -413,16 +408,12 @@
     loading = true;
     errorMsg = null;
     try {
-      const [firstPage, warna, masterKain] = await Promise.all([
-        getStokKainPage(null, PAGE_SIZE),
+      const [stok, warna, masterKain] = await Promise.all([
+        stokKainCache.get(force),
         warnaCache.get(force),
         masterKainCache.get(force),
       ]);
-      stokList = firstPage.items;
-      pageCache = [firstPage.items];
-      pageCursors = [null, firstPage.cursor];
-      pageHasNext = [firstPage.hasNext];
-      currentPage = 1;
+      stokList = stok;
       warnaList = warna;
       masterKainList = masterKain;
     } catch {
@@ -461,42 +452,12 @@
     riwayatHasNext = true;
   }
 
-  async function nextPage() {
-    if (pageLoading || !pageHasNext[currentPage - 1]) return;
-    pageLoading = true;
-    try {
-      const result = await getStokKainPage(pageCursors[currentPage] ?? null, PAGE_SIZE);
-      pageCache[currentPage] = result.items;
-      pageCursors[currentPage + 1] = result.cursor;
-      pageHasNext[currentPage] = result.hasNext;
-      pageCache = [...pageCache];
-      pageCursors = [...pageCursors];
-      pageHasNext = [...pageHasNext];
-      currentPage += 1;
-      stokList = result.items;
-    } catch (e) {
-      showError(e instanceof Error ? e.message : "Gagal memuat halaman stok kain berikutnya.");
-    } finally {
-      pageLoading = false;
-    }
-  }
-
-  function previousPage() {
-    if (currentPage <= 1 || pageLoading) return;
-    currentPage -= 1;
-    stokList = pageCache[currentPage - 1] ?? stokList;
-  }
-
   function setSearch(value: string) {
     searchQuery = value;
-    currentPage = 1;
-    stokList = pageCache[0] ?? stokList;
   }
 
   function setSort(value: "nama" | "tersedia_asc" | "tersedia_desc") {
     sortBy = value;
-    currentPage = 1;
-    stokList = pageCache[0] ?? stokList;
   }
 
   function getSelectedWarna(warnaId: string) {
@@ -746,10 +707,20 @@
     }
   }
 
-  afterNavigate(() => {
-    load();
-    loadAnalytics();
-  });
+  async function refreshPage() {
+    if (refreshInProgress) return;
+    refreshInProgress = true;
+    try {
+      await load();
+      await loadAnalytics();
+    } finally {
+      refreshInProgress = false;
+    }
+  }
+
+  // Auth guard can delay component mount until after the initial navigation.
+  onMount(() => { void refreshPage(); });
+  afterNavigate(() => { void refreshPage(); });
 </script>
 
 <!-- ── Toast Notification ──────────────────────────────────────── -->
@@ -1298,15 +1269,8 @@
       class="flex items-center justify-between border-t border-gray-100 bg-gray-50 px-5 py-3"
     >
       <p class="text-xs text-gray-400">
-        Menampilkan {groupedList.length} jenis kain pada halaman {currentPage}
+        Menampilkan {groupedList.length} jenis kain
       </p>
-      {#if currentPage > 1 || pageHasNext[currentPage - 1]}
-        <div class="flex items-center gap-2">
-          <Button variant="outline" size="sm" disabled={currentPage === 1 || pageLoading} onclick={previousPage}>Sebelumnya</Button>
-          <span class="text-xs font-medium text-gray-700">Halaman {currentPage}{pageLoading ? "..." : ""}</span>
-          <Button variant="outline" size="sm" disabled={pageLoading || !pageHasNext[currentPage - 1]} onclick={nextPage}>Berikutnya</Button>
-        </div>
-      {/if}
       <div class="flex flex-wrap gap-3 text-xs text-gray-400">
         {#if totalYard > 0}
           <span

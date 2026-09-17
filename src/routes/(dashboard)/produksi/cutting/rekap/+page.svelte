@@ -1,9 +1,8 @@
 <script lang="ts">
   import { goto } from "$app/navigation";
   import { onMount } from "svelte";
-  import { getBatchPage } from "$lib/firebase/batch-produksi";
+  import { batchCache } from "$lib/stores/data-cache.svelte";
   import { STATUS_LABEL, type BatchProduksi, type KainDigunakan, type StatusBatch } from "$lib/types";
-  import type { FirestoreCursor } from "$lib/firebase/pagination";
   import { Button } from "$lib/components/ui/button";
   import * as Table from "$lib/components/ui/table";
   import ArrowLeftIcon from "@lucide/svelte/icons/arrow-left";
@@ -14,13 +13,6 @@
   let loading = $state(true);
   let exporting = $state(false);
   let searchQuery = $state("");
-  let currentPage = $state(1);
-  let pageHasNext = $state(false);
-  let pageCursor = $state<FirestoreCursor>(null);
-  let pageCursors = $state<FirestoreCursor[]>([null]);
-  let pageCache = $state<BatchProduksi[][]>([]);
-  let pageLoading = $state(false);
-  const PAGE_SIZE = 25;
   const CUTTING_STATUSES: StatusBatch[] = ["PENDING_CUTTING", "CUTTING_IN_PROGRESS", "CUTTING_DONE"];
 
 
@@ -135,48 +127,13 @@
       .sort((a, b) => a.nama.localeCompare(b.nama));
   });
 
-  async function load(_force = false) {
+  async function load(force = false) {
     loading = true;
     try {
-      const firstPage = await getBatchPage(CUTTING_STATUSES, null, PAGE_SIZE);
-      batchList = firstPage.items;
-      currentPage = 1;
-      pageCursor = firstPage.cursor;
-      pageHasNext = firstPage.hasNext;
-      pageCursors = [null, firstPage.cursor];
-      pageCache = [firstPage.items];
+      batchList = await batchCache.get(force);
     } finally {
       loading = false;
     }
-  }
-
-  async function nextPage() {
-    if (pageLoading || !pageHasNext) return;
-    pageLoading = true;
-    try {
-      const result = await getBatchPage(
-        CUTTING_STATUSES,
-        pageCursors[currentPage] ?? pageCursor,
-        PAGE_SIZE,
-      );
-      batchList = result.items;
-      pageCache[currentPage] = result.items;
-      pageCache = [...pageCache];
-      pageCursors[currentPage + 1] = result.cursor;
-      pageCursors = [...pageCursors];
-      pageCursor = result.cursor;
-      pageHasNext = result.hasNext;
-      currentPage += 1;
-    } finally {
-      pageLoading = false;
-    }
-  }
-
-  function previousPage() {
-    if (pageLoading || currentPage <= 1) return;
-    currentPage -= 1;
-    batchList = pageCache[currentPage - 1] ?? batchList;
-    pageHasNext = true;
   }
 
   async function exportPdf() {
@@ -319,15 +276,6 @@
         </Table.Root>
       </section>
     {/each}
-    {#if currentPage > 1 || pageHasNext}
-      <div class="flex items-center justify-between rounded-xl border border-gray-100 bg-white px-4 py-3 text-xs text-gray-500 shadow-sm">
-        <span>Menampilkan {rekapRows.length} batch pada halaman {currentPage}</span>
-        <div class="flex items-center gap-2">
-          <Button variant="outline" size="sm" disabled={currentPage === 1 || pageLoading} onclick={previousPage}>Sebelumnya</Button>
-          <span>Halaman {currentPage}</span>
-          <Button variant="outline" size="sm" disabled={!pageHasNext || pageLoading} onclick={nextPage}>{pageLoading ? "Memuat..." : "Berikutnya"}</Button>
-        </div>
-      </div>
-    {/if}
+    <div class="text-xs text-gray-500">Menampilkan {rekapRows.length} batch</div>
   {/if}
 </div>

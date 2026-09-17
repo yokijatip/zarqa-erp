@@ -2,7 +2,6 @@
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import {
-    getKaryawanPage,
     createAkunKaryawan,
     updateKaryawan,
     hapusAkunKaryawan,
@@ -10,7 +9,7 @@
     ROLE_KARYAWAN,
     tipeKaryawanLabel,
   } from "$lib/firebase/karyawan";
-  import type { FirestoreCursor } from "$lib/firebase/pagination";
+  import { karyawanCache } from "$lib/stores/data-cache.svelte";
   import { isKaryawanManager } from "$lib/stores/auth.store";
   import type { UserProfile, UserRole, TipePenggajian } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
@@ -32,12 +31,6 @@
   let successMsg = $state<string | null>(null);
   let searchQuery = $state("");
   let filterTipe = $state<"semua" | "permanent" | "temporary">("semua");
-  const PAGE_SIZE = 25;
-  let currentPage = $state(1);
-  let pageCursors = $state<FirestoreCursor[]>([null]);
-  let pageHasNext = $state<boolean[]>([]);
-  let pageCache = $state<UserProfile[][]>([]);
-  let pageLoading = $state(false);
 
   // Dialog state
   let openTambah = $state(false);
@@ -163,16 +156,11 @@
     return d.toISOString().slice(0, 10);
   }
 
-  async function load() {
+  async function load(force = false) {
     loading = true;
     errorMsg = null;
     try {
-      const firstPage = await getKaryawanPage(null, PAGE_SIZE);
-      karyawanList = firstPage.items;
-      pageCache = [firstPage.items];
-      pageCursors = [null, firstPage.cursor];
-      pageHasNext = [firstPage.hasNext];
-      currentPage = 1;
+      karyawanList = await karyawanCache.get(force);
     } catch {
       showError("Gagal memuat data karyawan.");
     } finally {
@@ -180,42 +168,12 @@
     }
   }
 
-  async function nextPage() {
-    if (pageLoading || !pageHasNext[currentPage - 1]) return;
-    pageLoading = true;
-    try {
-      const result = await getKaryawanPage(pageCursors[currentPage] ?? null, PAGE_SIZE);
-      pageCache[currentPage] = result.items;
-      pageCursors[currentPage + 1] = result.cursor;
-      pageHasNext[currentPage] = result.hasNext;
-      pageCache = [...pageCache];
-      pageCursors = [...pageCursors];
-      pageHasNext = [...pageHasNext];
-      currentPage += 1;
-      karyawanList = result.items;
-    } catch {
-      showError("Gagal memuat halaman karyawan berikutnya.");
-    } finally {
-      pageLoading = false;
-    }
-  }
-
-  function previousPage() {
-    if (currentPage <= 1 || pageLoading) return;
-    currentPage -= 1;
-    karyawanList = pageCache[currentPage - 1] ?? karyawanList;
-  }
-
   function setSearch(value: string) {
     searchQuery = value;
-    currentPage = 1;
-    karyawanList = pageCache[0] ?? karyawanList;
   }
 
   function setFilter(value: "semua" | "permanent" | "temporary") {
     filterTipe = value;
-    currentPage = 1;
-    karyawanList = pageCache[0] ?? karyawanList;
   }
 
   // ── Dialog helpers ──────────────────────────────────────────────────
@@ -290,7 +248,7 @@
       });
       openTambah = false;
       showSuccess(`Akun "${fNama.trim()}" berhasil dibuat.`);
-      await load();
+      await load(true);
     } catch (e: unknown) {
       showError(e instanceof Error ? e.message : "Gagal membuat akun.");
     } finally {
@@ -322,7 +280,7 @@
       });
       openEdit = false;
       showSuccess("Data karyawan berhasil diperbarui.");
-      await load();
+      await load(true);
     } catch (e: unknown) {
       showError(e instanceof Error ? e.message : "Gagal memperbarui data.");
     } finally {
@@ -337,7 +295,7 @@
       await hapusAkunKaryawan(selectedKaryawan.uid);
       openHapus = false;
       showSuccess(`Akun "${selectedKaryawan.name}" berhasil dihapus.`);
-      await load();
+      await load(true);
     } catch (e: unknown) {
       openHapus = false;
       showError(e instanceof Error ? e.message : "Gagal menghapus akun.");
@@ -493,7 +451,7 @@
       {/each}
     </div>
 
-    <Button variant="outline" size="sm" onclick={load} class="ml-auto">
+    <Button variant="outline" size="sm" onclick={() => load()} class="ml-auto">
       <svg
         class="h-3.5 w-3.5 {loading ? 'animate-spin' : ''}"
         xmlns="http://www.w3.org/2000/svg"
@@ -710,15 +668,8 @@
         class="flex items-center justify-between border-t border-gray-100 bg-gray-50 px-5 py-3"
       >
         <p class="text-xs text-gray-400">
-          Menampilkan {filteredList.length} karyawan pada halaman {currentPage}
+          Menampilkan {filteredList.length} karyawan
         </p>
-        {#if currentPage > 1 || pageHasNext[currentPage - 1]}
-          <div class="flex items-center gap-2">
-            <Button variant="outline" size="sm" disabled={currentPage === 1 || pageLoading} onclick={previousPage}>Sebelumnya</Button>
-            <span class="text-xs font-medium text-gray-700">Halaman {currentPage}{pageLoading ? "..." : ""}</span>
-            <Button variant="outline" size="sm" disabled={pageLoading || !pageHasNext[currentPage - 1]} onclick={nextPage}>Berikutnya</Button>
-          </div>
-        {/if}
       </div>
     {/if}
   </div>

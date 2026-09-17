@@ -4,14 +4,10 @@
     collectionGroup,
     getDocs,
     limit,
-    orderBy,
     query,
     writeBatch,
-    Timestamp,
-    where,
     type DocumentData,
     type Query,
-    type QueryConstraint,
     type QueryDocumentSnapshot,
   } from "firebase/firestore";
   import { db } from "$lib/firebase/config";
@@ -26,6 +22,7 @@
   import SearchIcon from "@lucide/svelte/icons/search";
   import ChevronLeftIcon from "@lucide/svelte/icons/chevron-left";
   import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
+  import { canonicalUkuran } from "$lib/types";
 
   type ActivityCategory =
     | "produksi"
@@ -158,7 +155,7 @@
     if (!Array.isArray(value) || value.length === 0) return "";
     return value
       .map((item) => {
-        const ukuran = item.ukuran ?? "-";
+        const ukuran = item.ukuran ? canonicalUkuran(String(item.ukuran)) : "-";
         const pcs = item.jumlah_pcs ?? item.pcs ?? item.jumlah ?? 0;
         return `${ukuran} ${pcs} pcs`;
       })
@@ -169,16 +166,12 @@
     return `${source}:${snap.ref.path}`;
   }
 
-  function dateQuery(base: Query<DocumentData>, field: string): Query<DocumentData> {
-    const constraints: QueryConstraint[] = [];
-    if (dateRange) {
-      constraints.push(
-        where(field, ">=", Timestamp.fromDate(dateRange.start)),
-        where(field, "<=", Timestamp.fromDate(dateRange.end)),
-      );
-    }
-    constraints.push(orderBy(field, "desc"), limit(500));
-    return query(base, ...constraints);
+  function dateQuery(base: Query<DocumentData>, _field: string): Query<DocumentData> {
+    // Collection-group queries need a composite index for where + orderBy.
+    // Activity volume is bounded here, so read a capped page and filter/sort
+    // after normalizing rows. This keeps the activity screen usable before
+    // indexes are deployed and across mixed legacy timestamp fields.
+    return query(base, limit(500));
   }
 
   function makeUserName(data: any, uidKeys: string[], nameKeys: string[]): { uid: string; name: string } {
@@ -229,7 +222,7 @@
       userName: user.name,
       category: "stok_jadi",
       action: stockActionLabel(data.tipe),
-      detail: `${data.nama_model ?? "-"}${data.nama_warna ? ` - ${data.nama_warna}` : ""} ${data.ukuran ?? ""}: ${jumlah > 0 ? "+" : ""}${jumlah} pcs (${data.stok_sebelum ?? 0} -> ${data.stok_sesudah ?? 0})${data.catatan ? ` - ${data.catatan}` : ""}`,
+      detail: `${data.nama_model ?? "-"}${data.nama_warna ? ` - ${data.nama_warna}` : ""} ${data.ukuran ? canonicalUkuran(String(data.ukuran)) : ""}: ${jumlah > 0 ? "+" : ""}${jumlah} pcs (${data.stok_sebelum ?? 0} -> ${data.stok_sesudah ?? 0})${data.catatan ? ` - ${data.catatan}` : ""}`,
       reference: data.batch_id ? `Batch ${data.batch_id}` : snap.id,
     };
   }
@@ -320,7 +313,7 @@
       userName: user.name,
       category: "reject",
       action: `Reject ${data.status ?? ""}`.trim(),
-      detail: `${data.nama_model ?? "-"}${data.nama_warna ? ` - ${data.nama_warna}` : ""} ${data.ukuran ?? ""}: ${data.jumlah ?? 0} pcs, diperbaiki ${data.jumlah_diperbaiki ?? 0}, scrap ${data.jumlah_gagal ?? 0}${data.catatan ? ` - ${data.catatan}` : ""}`,
+      detail: `${data.nama_model ?? "-"}${data.nama_warna ? ` - ${data.nama_warna}` : ""} ${data.ukuran ? canonicalUkuran(String(data.ukuran)) : ""}: ${data.jumlah ?? 0} pcs, diperbaiki ${data.jumlah_diperbaiki ?? 0}, scrap ${data.jumlah_gagal ?? 0}${data.catatan ? ` - ${data.catatan}` : ""}`,
       reference: data.batch_id ? `Batch ${data.batch_id}` : snap.id,
     };
   }

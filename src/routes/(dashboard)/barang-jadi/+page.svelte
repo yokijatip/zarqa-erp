@@ -1,8 +1,7 @@
 <script lang="ts">
   import { goto, afterNavigate } from "$app/navigation";
   import { onMount } from "svelte";
-  import { tambahStokBarangJadi, getStokBarangJadiPage } from "$lib/firebase/barang-jadi";
-  import type { FirestoreCursor } from "$lib/firebase/pagination";
+  import { tambahStokBarangJadi, getStokBarangJadi } from "$lib/firebase/barang-jadi";
   import { barangJadiCache, modelBajuCache } from "$lib/stores/data-cache.svelte";
   import { currentUser } from "$lib/stores/auth.store";
   import { UKURAN_ORDER, type StokBarangJadi, type UkuranBaju, type ModelBaju } from "$lib/types";
@@ -28,12 +27,6 @@
   let sortBy = $state<"kritis" | "terbanyak" | "nama" | "keluar">("kritis");
   let filterStatus = $state<"semua" | "kritis" | "low" | "kosong">("semua");
   let lastLoaded = $state<Date | null>(null);
-  const PAGE_SIZE = 25;
-  let currentPage = $state(1);
-  let pageCursors = $state<FirestoreCursor[]>([null]);
-  let pageHasNext = $state<boolean[]>([]);
-  let pageCache = $state<StokBarangJadi[][]>([]);
-  let pageLoading = $state(false);
 
   // Collapse state: set of expanded model names
   let expandedModels = $state<Set<string>>(new Set());
@@ -85,6 +78,9 @@
     model_id: string;
     nama_model: string;
     colors: Map<string, ColorGroup>;
+    isLinked?: boolean;
+    stok_model_id?: string;
+    stok_model_name?: string;
   };
 
   let grouped = $derived.by((): ModelGroup[] => {
@@ -95,6 +91,7 @@
           model_id: item.model_id,
           nama_model: item.nama_model,
           colors: new Map(),
+          isLinked: false,
         });
       }
       const model = modelMap.get(item.model_id)!;
@@ -117,6 +114,7 @@
           model_id: master.id,
           nama_model: master.nama_model,
           colors: new Map(),
+          isLinked: false,
         });
       }
       const model = modelMap.get(master.id)!;
@@ -150,6 +148,35 @@
           }
         }
       }
+    }
+
+    // Model set tetap ditampilkan sebagai model yang bisa dijual, tetapi
+    // salin tampilan stok dari sumber fisiknya tanpa membuat stok kedua.
+    for (const model of modelList) {
+      const sourceId = model.stok_model_id;
+      if (!sourceId || sourceId === model.id) continue;
+      const source = modelMap.get(sourceId);
+      if (!source) continue;
+      const sourceMaster = modelList.find((item) => item.id === sourceId);
+      const colors = new Map<string, ColorGroup>();
+      for (const [key, color] of source.colors) {
+        colors.set(key, {
+          ...color,
+          items: color.items.map((item) => ({
+            ...item,
+            model_id: sourceId,
+            nama_model: sourceMaster?.nama_model ?? item.nama_model,
+          })),
+        });
+      }
+      modelMap.set(model.id, {
+        model_id: model.id,
+        nama_model: model.nama_model,
+        colors,
+        isLinked: true,
+        stok_model_id: sourceId,
+        stok_model_name: sourceMaster?.nama_model ?? source.nama_model,
+      });
     }
 
     for (const model of modelMap.values()) {
@@ -278,6 +305,7 @@
   let ukuranMenipis = $derived(
     stokList.filter((i) => i.stok_tersedia > KRITIS_THRESHOLD && i.stok_tersedia <= LOW_THRESHOLD).length,
   );
+  let stockEntryModels = $derived(modelList.filter((model) => !model.stok_model_id));
 
   // ── Helpers ────────────────────────────────────────────────────────
   function getUkuranStatus(
@@ -341,47 +369,17 @@
     errorMsg = null;
     try {
       const [firstPage, models] = await Promise.all([
-        getStokBarangJadiPage(null, PAGE_SIZE),
+        getStokBarangJadi(),
         modelBajuCache.get(force),
       ]);
-      stokList = firstPage.items;
-      pageCache = [firstPage.items];
-      pageCursors = [null, firstPage.cursor];
-      pageHasNext = [firstPage.hasNext];
-      currentPage = 1;
       modelList = models.filter((model) => model.aktif);
+      stokList = firstPage;
       lastLoaded = new Date();
     } catch {
       showError("Gagal memuat data. Periksa koneksi Firebase.");
     } finally {
       loading = false;
     }
-  }
-
-  async function nextPage() {
-    if (pageLoading || !pageHasNext[currentPage - 1]) return;
-    pageLoading = true;
-    try {
-      const result = await getStokBarangJadiPage(pageCursors[currentPage] ?? null, PAGE_SIZE);
-      pageCache[currentPage] = result.items;
-      pageCursors[currentPage + 1] = result.cursor;
-      pageHasNext[currentPage] = result.hasNext;
-      pageCache = [...pageCache];
-      pageCursors = [...pageCursors];
-      pageHasNext = [...pageHasNext];
-      currentPage += 1;
-      stokList = result.items;
-    } catch (e) {
-      showError(e instanceof Error ? e.message : "Gagal memuat halaman stok berikutnya.");
-    } finally {
-      pageLoading = false;
-    }
-  }
-
-  function previousPage() {
-    if (currentPage <= 1 || pageLoading) return;
-    currentPage -= 1;
-    stokList = pageCache[currentPage - 1] ?? stokList;
   }
 
   async function bukaTambah() {
@@ -391,7 +389,7 @@
     fWarnaIds = [];
     fJumlahPerUkuran = {};
     fJumlahPerWarna = {};
-    if (modelList.length === 0) {
+    if (stockEntryModels.length === 0) {
       loadingModels = true;
       try {
         const all = await modelBajuCache.get();
@@ -583,16 +581,16 @@
     {/each}
   {:else}
     <StatCard
-      title="Total Model"
+      title="Model Penjualan"
       value={totalModel}
       icon={ShirtIcon}
-      footerSubtext="jenis model terdaftar"
+      footerSubtext="model penjualan terdaftar"
     />
     <StatCard
       title="Stok Tersedia"
       value={totalTersedia.toLocaleString("id-ID")}
       icon={PackageCheckIcon}
-      footerSubtext="pcs siap kirim"
+      footerSubtext="pcs stok fisik unik"
       class="border-teal-100 bg-teal-50"
       valueClass="text-teal-700"
     />
@@ -788,6 +786,11 @@
               >
                 {model.nama_model}
               </a>
+              {#if model.isLinked}
+                <span class="inline-flex shrink-0 items-center rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700 dark:border-blue-400/20 dark:bg-blue-400/10 dark:text-blue-200">
+                  Stok bersama
+                </span>
+              {/if}
               {#if colorCount > 1}
                 <span class="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-500 dark:bg-white/10 dark:text-slate-300">
                   {colorCount} warna
@@ -805,6 +808,11 @@
                 {/each}
               {/if}
             </div>
+            {#if model.isLinked && model.stok_model_name}
+              <p class="mt-0.5 truncate text-[11px] text-gray-400 dark:text-slate-400">
+                Stok mengikuti: <span class="font-medium text-gray-600 dark:text-slate-300">{model.stok_model_name}</span>
+              </p>
+            {/if}
           </div>
 
           <!-- Total pcs -->
@@ -812,7 +820,7 @@
             <p class="text-base font-bold tabular-nums text-gray-800 dark:text-slate-100 {modelStatus === 'kritis' ? 'text-red-600 dark:text-red-400' : ''}">
               {totalModelPcs.toLocaleString("id-ID")}
             </p>
-            <p class="text-xs text-gray-400">pcs tersedia</p>
+            <p class="text-xs text-gray-400">{model.isLinked ? "pcs stok bersama" : "pcs tersedia"}</p>
           </div>
 
           <!-- Status badge -->
@@ -928,7 +936,7 @@
       Menampilkan <span class="font-medium text-gray-700 dark:text-slate-200"
         >{filteredGrouped.length}</span
       >
-      dari {totalModel} model
+      dari {totalModel} model penjualan
       {#if filterStatus !== "semua"}
         <button
           onclick={() => (filterStatus = "semua")}
@@ -940,7 +948,7 @@
     </p>
     <div class="flex flex-wrap gap-4 text-xs text-gray-400">
       <span>
-        Tersedia: <span class="font-semibold text-teal-700 dark:text-teal-300"
+        Stok fisik unik: <span class="font-semibold text-teal-700 dark:text-teal-300"
           >{totalTersedia.toLocaleString("id-ID")} pcs</span
         >
       </span>
@@ -951,13 +959,6 @@
         <span class="font-medium text-gray-400">{modelKosong} model habis</span>
       {/if}
     </div>
-    {#if currentPage > 1 || pageHasNext[currentPage - 1]}
-      <div class="flex items-center gap-2">
-        <Button variant="outline" size="sm" disabled={currentPage === 1 || pageLoading} onclick={previousPage}>Sebelumnya</Button>
-        <span class="text-xs font-medium text-gray-700">Halaman {currentPage}{pageLoading ? "..." : ""}</span>
-        <Button variant="outline" size="sm" disabled={pageLoading || !pageHasNext[currentPage - 1]} onclick={nextPage}>Berikutnya</Button>
-      </div>
-    {/if}
   </div>
 {/if}
 
@@ -1001,7 +1002,7 @@
               {/if}
             </Select.Trigger>
             <Select.Content preventScroll={false}>
-              {#each modelList as m}
+              {#each stockEntryModels as m}
                 <Select.Item value={m.id}>
                   <span class="flex items-center gap-1.5">
                     <span>{m.nama_model}</span>

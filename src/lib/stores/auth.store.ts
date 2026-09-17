@@ -17,6 +17,9 @@ export const isLoggedIn = derived(currentUser, ($user) => $user !== null);
 // Derived: role user saat ini
 export const userRole = derived(currentUser, ($user): UserRole | null => $user?.role ?? null);
 
+// Harga dan tarif produksi adalah informasi internal pemilik.
+export const isOwner = derived(currentUser, ($user) => $user?.role === 'owner');
+
 // Derived: apakah user adalah admin web
 export const isAdmin = derived(
   currentUser,

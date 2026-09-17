@@ -4,7 +4,6 @@
     addStokHijab,
     deleteStokHijab,
     getRiwayatStokHijabPage,
-    getStokHijabPage,
     kurangiStokHijabManual,
     restockHijab,
     updateStokHijab,
@@ -24,17 +23,20 @@
   import MinusIcon from "@lucide/svelte/icons/minus";
   import Trash2Icon from "@lucide/svelte/icons/trash-2";
 
-  const PAGE_SIZE = 20;
+  type StokHijabGroup = {
+    key: string;
+    modelId?: string;
+    nama: string;
+    items: StokHijab[];
+    totalStok: number;
+    totalKeluar: number;
+  };
+
   let stokList = $state<StokHijab[]>([]);
   let loading = $state(true);
-  let pageLoading = $state(false);
   let errorMsg = $state<string | null>(null);
   let successMsg = $state<string | null>(null);
   let searchQuery = $state("");
-  let currentPage = $state(1);
-  let pageCursors = $state<FirestoreCursor[]>([null]);
-  let pageHasNext = $state<boolean[]>([]);
-  let pageCache = $state<StokHijab[][]>([]);
   let modelHijabList = $state<ModelHijab[]>([]);
   let warnaList = $state<Warna[]>([]);
 
@@ -81,6 +83,26 @@
       ? stokList.filter((item) => item.nama_hijab.toLowerCase().includes(query))
       : stokList;
   });
+  let groupedList = $derived.by(() => {
+    const groups = new Map<string, StokHijabGroup>();
+    for (const item of filteredList) {
+      const model = modelHijabList.find((entry) => entry.id === item.model_hijab_id);
+      const key = item.model_hijab_id ?? `legacy:${item.nama_hijab.trim().toLowerCase()}`;
+      const group = groups.get(key) ?? {
+        key,
+        modelId: item.model_hijab_id,
+        nama: model?.nama_hijab ?? item.nama_hijab,
+        items: [],
+        totalStok: 0,
+        totalKeluar: 0,
+      };
+      group.items.push(item);
+      group.totalStok += item.stok_tersedia;
+      group.totalKeluar += item.total_keluar;
+      groups.set(key, group);
+    }
+    return [...groups.values()];
+  });
   let totalStok = $derived(stokList.reduce((sum, item) => sum + item.stok_tersedia, 0));
   let totalNilai = $derived(stokList.reduce((sum, item) => sum + item.stok_tersedia * (item.harga_per_unit ?? 0), 0));
   let totalKritis = $derived(stokList.filter((item) => item.stok_tersedia <= (item.stok_minimum ?? 0)).length);
@@ -125,53 +147,23 @@
     return modelHijabList.find((model) => model.id === modelId)?.harga_produksi ?? 0;
   }
 
-  async function load() {
+  async function load(force = false) {
     loading = true;
     errorMsg = null;
     try {
-      const [result, modelHijab, warna] = await Promise.all([
-        getStokHijabPage(null, PAGE_SIZE),
-        modelHijabCache.get(),
-        warnaCache.get(),
+      const [stok, modelHijab, warna] = await Promise.all([
+        stokHijabCache.get(force),
+        modelHijabCache.get(force),
+        warnaCache.get(force),
       ]);
       modelHijabList = modelHijab;
       warnaList = warna;
-      stokList = result.items;
-      pageCache = [result.items];
-      pageCursors = [null, result.cursor];
-      pageHasNext = [result.hasNext];
-      currentPage = 1;
+      stokList = stok;
     } catch (error) {
       showError(error instanceof Error ? error.message : "Gagal memuat stok hijab.");
     } finally {
       loading = false;
     }
-  }
-
-  async function nextPage() {
-    if (pageLoading || !pageHasNext[currentPage - 1]) return;
-    pageLoading = true;
-    try {
-      const result = await getStokHijabPage(pageCursors[currentPage] ?? null, PAGE_SIZE);
-      pageCache[currentPage] = result.items;
-      pageCursors[currentPage + 1] = result.cursor;
-      pageHasNext[currentPage] = result.hasNext;
-      pageCache = [...pageCache];
-      pageCursors = [...pageCursors];
-      pageHasNext = [...pageHasNext];
-      currentPage += 1;
-      stokList = result.items;
-    } catch (error) {
-      showError(error instanceof Error ? error.message : "Gagal memuat halaman berikutnya.");
-    } finally {
-      pageLoading = false;
-    }
-  }
-
-  function previousPage() {
-    if (currentPage <= 1 || pageLoading) return;
-    currentPage -= 1;
-    stokList = pageCache[currentPage - 1] ?? stokList;
   }
 
   function resetTambah() {
@@ -419,7 +411,7 @@
     <SearchIcon class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
     <Input class="pl-9" placeholder="Cari nama hijab..." bind:value={searchQuery} />
   </div>
-  <p class="text-xs text-muted-foreground">Halaman {currentPage} · {filteredList.length} stok tampil</p>
+  <p class="text-xs text-muted-foreground">{filteredList.length} stok tampil</p>
 </div>
 
 {#if loading}
@@ -431,37 +423,51 @@
     <p class="mt-1 text-sm text-muted-foreground">Tambahkan stok awal sebelum dipilih pada varian penjualan.</p>
   </div>
 {:else}
-  <div class="overflow-hidden rounded-lg border bg-card shadow-sm">
-    <div class="hidden grid-cols-[minmax(0,1.6fr)_120px_140px_130px_190px] gap-4 border-b bg-muted/40 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground md:grid">
-      <span>Hijab</span><span>Stok tersedia</span><span>Minimum</span><span>Status</span><span class="text-right">Aksi</span>
-    </div>
-    {#each filteredList as item}
-      {@const itemStatus = status(item)}
-      <div class="grid gap-3 border-b px-4 py-4 last:border-b-0 md:grid-cols-[minmax(0,1.6fr)_120px_140px_130px_190px] md:items-center md:gap-4">
-        <div class="min-w-0">
-          <p class="truncate font-semibold text-foreground">{modelHijabList.find((model) => model.id === item.model_hijab_id)?.nama_hijab ?? item.nama_hijab}</p>
-          {#if item.nama_warna}
-            <p class="mt-1 flex items-center gap-1.5 text-xs text-foreground"><span class="h-2.5 w-2.5 rounded-full border border-black/10" style="background-color: {item.kode_hex_warna ?? '#d1d5db'}"></span>{item.nama_warna}</p>
-          {/if}
-          <p class="mt-1 text-xs {item.model_hijab_id ? 'text-primary' : 'text-amber-600'}">{item.model_hijab_id ? "Model Hijab terhubung" : "Belum dikaitkan ke Model Hijab"}</p>
-          <p class="mt-1 text-xs text-muted-foreground">{item.harga_per_unit ? `${formatRupiah(item.harga_per_unit)} / pcs` : "HPP belum diisi"}</p>
+  <div class="space-y-3">
+    {#each groupedList as group}
+      <section class="overflow-hidden rounded-lg border bg-card shadow-sm">
+        <div class="flex flex-wrap items-center justify-between gap-3 border-b bg-muted/20 px-4 py-3">
+          <div class="min-w-0">
+            <p class="truncate font-semibold text-foreground">{group.nama}</p>
+            <p class="mt-1 text-xs text-muted-foreground">
+              {group.items.length} warna · HPP {formatRupiah(hppModel(group.modelId) || group.items[0]?.harga_per_unit || 0)} / pcs
+            </p>
+          </div>
+          <div class="text-left sm:text-right">
+            <p class="font-semibold tabular-nums text-foreground">{group.totalStok.toLocaleString("id-ID")} pcs</p>
+            <p class="text-xs text-muted-foreground">{group.totalKeluar.toLocaleString("id-ID")} keluar</p>
+          </div>
         </div>
-        <div><p class="font-semibold tabular-nums text-foreground">{item.stok_tersedia.toLocaleString("id-ID")} pcs</p><p class="text-xs text-muted-foreground">{item.total_keluar.toLocaleString("id-ID")} keluar</p></div>
-        <div class="text-sm text-muted-foreground">{(item.stok_minimum ?? 0).toLocaleString("id-ID")} pcs</div>
-        <div><span class={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${itemStatus.className}`}>{itemStatus.label}</span></div>
-        <div class="flex flex-wrap justify-start gap-1.5 md:justify-end">
-          <Button variant="outline" size="sm" title="Restock" onclick={() => bukaRestock(item)}><PlusIcon class="h-3.5 w-3.5" /><span class="sr-only">Restock</span></Button>
-          <Button variant="outline" size="sm" title="Kurangi stok" onclick={() => bukaKurangi(item)}><MinusIcon class="h-3.5 w-3.5" /><span class="sr-only">Kurangi stok</span></Button>
-          <Button variant="outline" size="sm" title="Riwayat stok" onclick={() => bukaRiwayat(item)}><HistoryIcon class="h-3.5 w-3.5" /><span class="sr-only">Riwayat</span></Button>
-          <Button variant="outline" size="sm" title="Edit" onclick={() => bukaEdit(item)}><PencilIcon class="h-3.5 w-3.5" /><span class="sr-only">Edit</span></Button>
+        <div class="hidden grid-cols-[minmax(0,1.8fr)_130px_120px_120px_180px] gap-4 border-b bg-muted/10 px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground md:grid">
+          <span>Warna</span><span>Stok tersedia</span><span>Minimum</span><span>Status</span><span class="text-right">Aksi</span>
         </div>
-      </div>
+        <div class="divide-y">
+          {#each group.items as item}
+            {@const itemStatus = status(item)}
+            <div class="grid gap-3 px-4 py-3 md:grid-cols-[minmax(0,1.8fr)_130px_120px_120px_180px] md:items-center md:gap-4">
+              <div class="min-w-0">
+                <p class="flex items-center gap-2 truncate font-medium text-foreground">
+                  <span class="h-2.5 w-2.5 shrink-0 rounded-full border border-black/10" style="background-color: {item.kode_hex_warna ?? '#d1d5db'}"></span>
+                  <span class="truncate">{item.nama_warna || "Tanpa warna / stok umum"}</span>
+                </p>
+                {#if !item.model_hijab_id}
+                  <p class="mt-1 text-xs text-amber-600">Belum dikaitkan ke Model Hijab</p>
+                {/if}
+              </div>
+              <div><p class="font-semibold tabular-nums text-foreground">{item.stok_tersedia.toLocaleString("id-ID")} pcs</p><p class="text-xs text-muted-foreground">{item.total_keluar.toLocaleString("id-ID")} keluar</p></div>
+              <div class="text-sm text-muted-foreground">{(item.stok_minimum ?? 0).toLocaleString("id-ID")} pcs</div>
+              <div><span class={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${itemStatus.className}`}>{itemStatus.label}</span></div>
+              <div class="flex flex-wrap justify-start gap-1.5 md:justify-end">
+                <Button variant="outline" size="sm" title="Restock" onclick={() => bukaRestock(item)}><PlusIcon class="h-3.5 w-3.5" /><span class="sr-only">Restock</span></Button>
+                <Button variant="outline" size="sm" title="Kurangi stok" onclick={() => bukaKurangi(item)}><MinusIcon class="h-3.5 w-3.5" /><span class="sr-only">Kurangi stok</span></Button>
+                <Button variant="outline" size="sm" title="Riwayat stok" onclick={() => bukaRiwayat(item)}><HistoryIcon class="h-3.5 w-3.5" /><span class="sr-only">Riwayat</span></Button>
+                <Button variant="outline" size="sm" title="Edit" onclick={() => bukaEdit(item)}><PencilIcon class="h-3.5 w-3.5" /><span class="sr-only">Edit</span></Button>
+              </div>
+            </div>
+          {/each}
+        </div>
+      </section>
     {/each}
-  </div>
-  <div class="mt-4 flex items-center justify-end gap-2">
-    <Button variant="outline" size="sm" disabled={currentPage <= 1 || pageLoading} onclick={previousPage}>Sebelumnya</Button>
-    <span class="min-w-20 text-center text-xs text-muted-foreground">Halaman {currentPage}{pageLoading ? "..." : ""}</span>
-    <Button variant="outline" size="sm" disabled={!pageHasNext[currentPage - 1] || pageLoading} onclick={nextPage}>{pageLoading ? "Memuat..." : "Berikutnya"}</Button>
   </div>
 {/if}
 

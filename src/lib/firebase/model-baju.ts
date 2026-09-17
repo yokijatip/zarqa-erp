@@ -12,8 +12,8 @@ const COL = 'model_baju';
 
 function normalizeSizeMap(value: Partial<Record<string, number>> | undefined): Partial<Record<UkuranBaju, number>> {
   const result: Partial<Record<UkuranBaju, number>> = {};
-  for (const ukuran of ['XS', 'M/S', 'L/XL', 'XXL'] as UkuranBaju[]) {
-    const aliases = ukuran === 'M/S' ? ['M/S', 'M', 'S'] : ukuran === 'L/XL' ? ['L/XL', 'L', 'XL'] : [ukuran];
+  for (const ukuran of ['XS', 'S/M', 'L/XL', 'XXL'] as UkuranBaju[]) {
+    const aliases = ukuran === 'S/M' ? ['S/M', 'M/S', 'M', 'S'] : ukuran === 'L/XL' ? ['L/XL', 'L', 'XL'] : [ukuran];
     const source = aliases.find((key) => Number(value?.[key]) > 0);
     if (source) result[ukuran] = Number(value?.[source]);
   }
@@ -23,6 +23,7 @@ function normalizeSizeMap(value: Partial<Record<string, number>> | undefined): P
 function normalizeModel(model: ModelBaju): ModelBaju {
   return {
     ...model,
+    aktif: model.aktif !== false,
     ukuran_tersedia: [...new Set((model.ukuran_tersedia ?? []).map((ukuran) => canonicalUkuran(ukuran)))],
     kebutuhan_yard_per_pcs: normalizeSizeMap(model.kebutuhan_yard_per_pcs as Partial<Record<string, number>>),
     harga_jual_per_ukuran: normalizeSizeMap(model.harga_jual_per_ukuran as Partial<Record<string, number>>),
@@ -30,6 +31,18 @@ function normalizeModel(model: ModelBaju): ModelBaju {
     varian_penjualan: Array.isArray(model.varian_penjualan)
       ? model.varian_penjualan.map((variant) => ({
           ...variant,
+          harga_jual_mode: variant.harga_jual_mode === 'custom' || variant.harga_jual_mode === 'induk_plus_addon'
+            ? variant.harga_jual_mode
+            : variant.harga_jual != null && variant.harga_jual > 0
+              ? 'custom'
+              : 'induk_plus_addon',
+          harga_jual_per_ukuran: normalizeSizeMap(variant.harga_jual_per_ukuran as Partial<Record<string, number>>),
+          harga_produksi_mode: variant.harga_produksi_mode === 'custom' || variant.harga_produksi_mode === 'induk_plus_addon'
+            ? variant.harga_produksi_mode
+            : variant.harga_produksi != null && variant.harga_produksi > 0
+              ? 'custom'
+              : 'induk_plus_addon',
+          harga_produksi_per_ukuran: normalizeSizeMap(variant.harga_produksi_per_ukuran as Partial<Record<string, number>>),
           komponen: Array.isArray(variant.komponen) ? variant.komponen : [],
           aktif: variant.aktif !== false,
         }))

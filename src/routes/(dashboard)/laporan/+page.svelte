@@ -106,6 +106,14 @@
     return Number.isNaN(d.getTime()) ? null : d;
   }
 
+  function isCashMovementAfterCutover(date: Date | null): boolean {
+    const cutover = saldoAwal?.tanggal ? toDate(saldoAwal.tanggal) : null;
+    if (!cutover || !date) return !cutover;
+    const cutoverDay = new Date(cutover.getFullYear(), cutover.getMonth(), cutover.getDate()).getTime();
+    const movementDay = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+    return movementDay >= cutoverDay;
+  }
+
   function rupiah(value: number): string {
     return new Intl.NumberFormat("id-ID", {
       style: "currency",
@@ -228,27 +236,19 @@
   const totalKeluarPcs = $derived(listBarangKeluarRows.reduce((sum, row) => sum + row.pcsKeluar, 0));
   const totalPendingPcs = $derived(listBarangKeluarRows.reduce((sum, row) => sum + row.pcsPending, 0));
   const pemasukanManual = $derived(transaksi.filter((t) => t.tipe === "pemasukan" && (t.dampak_laba_rugi ?? transaksiBerdampakLabaRugi(t.tipe, t.kategori))).reduce((s, t) => s + t.nominal, 0));
-  const pemasukanKasNonPendapatan = $derived(transaksi.filter((t) => t.tipe === "pemasukan" && !(t.dampak_laba_rugi ?? transaksiBerdampakLabaRugi(t.tipe, t.kategori))).reduce((s, t) => s + t.nominal, 0));
   const isPembelianPersediaan = (t: TransaksiKeuangan) => t.tipe === "pengeluaran" && t.kategori !== "aset" && (t.kategori === "bahan_baku" || t.jenis_transaksi === "pembelian_persediaan" || t.dampak_laba_rugi === false);
   const isPembelianAset = (t: TransaksiKeuangan) => t.tipe === "pengeluaran" && (t.kategori === "aset" || t.jenis_transaksi === "pembelian_aset");
   const pengeluaranManual = $derived(transaksi.filter((t) => t.tipe === "pengeluaran" && !isPembelianPersediaan(t) && !isPembelianAset(t)).reduce((s, t) => s + t.nominal, 0));
-  const pembelianPersediaan = $derived(transaksi.filter(isPembelianPersediaan).reduce((s, t) => s + t.nominal, 0));
-  const pembelianAset = $derived(transaksi.filter(isPembelianAset).reduce((s, t) => s + t.nominal, 0));
-  const totalPengeluaranKas = $derived(transaksi.filter((t) => t.tipe === "pengeluaran").reduce((s, t) => s + t.nominal, 0));
-  const gajiTerbayar = $derived(gaji.reduce((s, item) => s + item.total_gaji, 0));
   const isGajiProduksi = (item: PembayaranGajiRecord) => {
     const employee = karyawan.find((worker) => worker.uid === item.karyawan_uid);
     return employee
       ? ["kepala_cutting", "kepala_jahit", "kepala_steam"].includes(employee.role)
       : ["Cutting", "Jahit", "Steam"].includes(item.divisi);
   };
-  const gajiProduksiTerbayar = $derived(gaji.filter(isGajiProduksi).reduce((s, item) => s + item.total_gaji, 0));
   const gajiRegulerTerbayar = $derived(gaji.filter((item) => !isGajiProduksi(item)).reduce((s, item) => s + item.total_gaji, 0));
   const penyusutanAset = $derived(aset.reduce((sum, item) => sum + hitungPenyusutanPeriode(item, dateRange), 0));
   const labaKotor = $derived(penjualan - hpp);
   const labaBersih = $derived(labaKotor + pemasukanManual - pengeluaranManual - gajiRegulerTerbayar - penyusutanAset);
-  const kasMasuk = $derived(penjualan + pemasukanManual + pemasukanKasNonPendapatan);
-  const kasKeluar = $derived(totalPengeluaranKas + gajiTerbayar);
   const saldoAwalKas = $derived.by(() => {
     const tanggal = saldoAwal?.tanggal ? toDate(saldoAwal.tanggal) : null;
     return tanggal && tanggal <= (dateRange?.end ?? new Date()) ? saldoAwal?.saldo_kas ?? 0 : 0;
@@ -257,6 +257,26 @@
     const tanggal = saldoAwal?.tanggal ? toDate(saldoAwal.tanggal) : null;
     return tanggal && tanggal <= (dateRange?.end ?? new Date()) ? saldoAwal?.modal_awal ?? 0 : 0;
   });
+  const cashTransactions = $derived(transaksi.filter((item) => isCashMovementAfterCutover(toDate(item.tanggal))));
+  const cashSales = $derived(listBarangKeluarRows.filter((row) => isCashMovementAfterCutover(row.tanggal)));
+  const cashPayroll = $derived(gaji.filter((item) => {
+    const date = item.created_at ? toDate(item.created_at) : item.periode_end ? new Date(`${item.periode_end}T00:00:00`) : null;
+    return Boolean(date && !Number.isNaN(date.getTime()) && isCashMovementAfterCutover(date));
+  }));
+  const kasMasukPenjualan = $derived(cashSales.reduce((sum, row) => sum + row.nilaiJual, 0));
+  const kasMasukManual = $derived(cashTransactions.filter((item) => item.tipe === "pemasukan").reduce((sum, item) => sum + item.nominal, 0));
+  const kasMasukNonPendapatan = $derived(cashTransactions
+    .filter((item) => item.tipe === "pemasukan" && !(item.dampak_laba_rugi ?? transaksiBerdampakLabaRugi(item.tipe, item.kategori)))
+    .reduce((sum, item) => sum + item.nominal, 0));
+  const kasPengeluaranOperasional = $derived(cashTransactions
+    .filter((item) => item.tipe === "pengeluaran" && !isPembelianPersediaan(item) && !isPembelianAset(item))
+    .reduce((sum, item) => sum + item.nominal, 0));
+  const kasPembelianPersediaan = $derived(cashTransactions.filter(isPembelianPersediaan).reduce((sum, item) => sum + item.nominal, 0));
+  const kasPembelianAset = $derived(cashTransactions.filter(isPembelianAset).reduce((sum, item) => sum + item.nominal, 0));
+  const kasGajiProduksi = $derived(cashPayroll.filter(isGajiProduksi).reduce((sum, item) => sum + item.total_gaji, 0));
+  const kasGajiReguler = $derived(cashPayroll.filter((item) => !isGajiProduksi(item)).reduce((sum, item) => sum + item.total_gaji, 0));
+  const kasMasuk = $derived(kasMasukPenjualan + kasMasukManual);
+  const kasKeluar = $derived(kasPengeluaranOperasional + kasPembelianPersediaan + kasPembelianAset + kasGajiProduksi + kasGajiReguler);
   const kasBersihPeriode = $derived(kasMasuk - kasKeluar);
   const kasBersih = $derived(saldoAwalKas + kasBersihPeriode);
   const nilaiAset = $derived(aset.reduce((sum, item) => sum + hitungNilaiBukuAset(item), 0));
@@ -321,19 +341,19 @@
       return row;
     }
 
-    for (const row of listBarangKeluarRows) {
+    for (const row of listBarangKeluarRows.filter((item) => isCashMovementAfterCutover(item.tanggal))) {
       if (row.tanggal && row.nilaiJual > 0) rowFor(row.tanggal).masuk += row.nilaiJual;
     }
     for (const item of transaksi) {
       const date = toDate(item.tanggal);
-      if (!date) continue;
+      if (!date || !isCashMovementAfterCutover(date)) continue;
       const row = rowFor(date);
       if (item.tipe === "pemasukan") row.masuk += item.nominal;
       else row.keluar += item.nominal;
     }
     for (const item of gaji) {
-      const date = new Date(`${item.periode_end}T00:00:00`);
-      if (!Number.isNaN(date.getTime())) rowFor(date).keluar += item.total_gaji;
+      const date = item.created_at ? toDate(item.created_at) : item.periode_end ? new Date(`${item.periode_end}T00:00:00`) : null;
+      if (date && !Number.isNaN(date.getTime()) && isCashMovementAfterCutover(date)) rowFor(date).keluar += item.total_gaji;
     }
 
     return [...map.values()].sort((a, b) => a.date.getTime() - b.date.getTime());
@@ -676,11 +696,11 @@
             ["HPP produksi", rupiah(hpp)],
             ["Laba kotor", rupiah(labaKotor)],
             ["Pemasukan manual", rupiah(pemasukanManual)],
-            ["Pemasukan kas non-pendapatan", rupiah(pemasukanKasNonPendapatan)],
-            ["Pengeluaran operasional", rupiah(pengeluaranManual)],
-            ["Pembelian bahan baku (persediaan)", rupiah(pembelianPersediaan)],
-            ["Gaji produksi (sudah termasuk HPP)", rupiah(gajiProduksiTerbayar)],
-            ["Gaji karyawan reguler", rupiah(gajiRegulerTerbayar)],
+            ["Pemasukan kas non-pendapatan", rupiah(kasMasukNonPendapatan)],
+            ["Pengeluaran operasional (arus kas)", rupiah(kasPengeluaranOperasional)],
+            ["Pembelian bahan baku (arus kas, masuk persediaan)", rupiah(kasPembelianPersediaan)],
+            ["Gaji produksi (arus kas, sudah termasuk HPP)", rupiah(kasGajiProduksi)],
+            ["Gaji karyawan reguler (arus kas)", rupiah(kasGajiReguler)],
             ["Penyusutan aset (non-kas)", rupiah(penyusutanAset)],
             ["Laba bersih estimasi", rupiah(labaBersih)],
             ["Kas masuk", rupiah(kasMasuk)],
@@ -902,12 +922,12 @@
         <h2 class="text-sm font-semibold text-gray-800">Rekonsiliasi Kas</h2>
         <p class="mt-1 text-xs text-gray-500">Arus kas tetap mencatat pembayaran persediaan, produksi, operasional, dan aset. Bagian ini bukan laba rugi.</p>
         <div class="mt-4 divide-y divide-gray-100 rounded-lg border border-gray-100">
-          <div class="flex justify-between px-4 py-3 text-sm"><span>Pengeluaran operasional</span><strong class="text-red-700">({rupiah(pengeluaranManual)})</strong></div>
-          <div class="flex justify-between px-4 py-3 text-sm"><span>Modal / piutang / refund (kas, bukan pendapatan)</span><strong class="text-green-700">{rupiah(pemasukanKasNonPendapatan)}</strong></div>
-          <div class="flex justify-between px-4 py-3 text-sm"><span>Pembelian bahan baku (masuk persediaan)</span><strong class="text-blue-700">({rupiah(pembelianPersediaan)})</strong></div>
-          <div class="flex justify-between px-4 py-3 text-sm"><span>Gaji produksi (sudah termasuk HPP)</span><strong class="text-blue-700">({rupiah(gajiProduksiTerbayar)})</strong></div>
-          <div class="flex justify-between px-4 py-3 text-sm"><span>Gaji karyawan reguler</span><strong class="text-red-700">({rupiah(gajiRegulerTerbayar)})</strong></div>
-          <div class="flex justify-between px-4 py-3 text-sm"><span>Pembelian aset (bukan beban laba rugi)</span><strong class="text-purple-700">({rupiah(pembelianAset)})</strong></div>
+          <div class="flex justify-between px-4 py-3 text-sm"><span>Pengeluaran operasional</span><strong class="text-red-700">({rupiah(kasPengeluaranOperasional)})</strong></div>
+          <div class="flex justify-between px-4 py-3 text-sm"><span>Modal / piutang / refund (kas, bukan pendapatan)</span><strong class="text-green-700">{rupiah(kasMasukNonPendapatan)}</strong></div>
+          <div class="flex justify-between px-4 py-3 text-sm"><span>Pembelian bahan baku (masuk persediaan)</span><strong class="text-blue-700">({rupiah(kasPembelianPersediaan)})</strong></div>
+          <div class="flex justify-between px-4 py-3 text-sm"><span>Gaji produksi (sudah termasuk HPP)</span><strong class="text-blue-700">({rupiah(kasGajiProduksi)})</strong></div>
+          <div class="flex justify-between px-4 py-3 text-sm"><span>Gaji karyawan reguler</span><strong class="text-red-700">({rupiah(kasGajiReguler)})</strong></div>
+          <div class="flex justify-between px-4 py-3 text-sm"><span>Pembelian aset (bukan beban laba rugi)</span><strong class="text-purple-700">({rupiah(kasPembelianAset)})</strong></div>
           <div class="flex justify-between bg-gray-50 px-4 py-3 text-sm"><span class="font-semibold">Total kas keluar</span><strong>{rupiah(kasKeluar)}</strong></div>
           <div class="flex justify-between px-4 py-3 text-sm"><span>Saldo awal kas</span><strong>{rupiah(saldoAwalKas)}</strong></div>
           <div class="flex justify-between px-4 py-3 text-sm"><span>Perubahan kas periode</span><strong class={kasBersihPeriode < 0 ? "text-red-700" : "text-blue-700"}>{rupiah(kasBersihPeriode)}</strong></div>

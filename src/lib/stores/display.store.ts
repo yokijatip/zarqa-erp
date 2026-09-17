@@ -1,7 +1,7 @@
 // src/lib/stores/display.store.ts
 import { browser } from '$app/environment';
 
-export type Tema     = 'light' | 'dark' | 'system';
+export type Tema     = 'light' | 'dark' | 'system' | 'midnight' | 'ocean' | 'forest' | 'amoled';
 export type Densitas = 'default' | 'compact';
 
 export type DisplaySettings = {
@@ -18,11 +18,28 @@ export const DEFAULT: DisplaySettings = {
   animasi:  true,
 };
 
+const THEME_VALUES: Tema[] = ['light', 'dark', 'system', 'midnight', 'ocean', 'forest', 'amoled'];
+const DARK_THEMES = new Set<Tema>(['dark', 'midnight', 'ocean', 'forest', 'amoled']);
+
+function isTema(value: unknown): value is Tema {
+  return typeof value === 'string' && THEME_VALUES.includes(value as Tema);
+}
+
+function isDensitas(value: unknown): value is Densitas {
+  return value === 'default' || value === 'compact';
+}
+
 export function loadSettings(): DisplaySettings {
   if (!browser) return DEFAULT;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? { ...DEFAULT, ...JSON.parse(raw) } : DEFAULT;
+    if (!raw) return DEFAULT;
+    const parsed = JSON.parse(raw) as Partial<DisplaySettings>;
+    return {
+      tema: isTema(parsed.tema) ? parsed.tema : DEFAULT.tema,
+      densitas: isDensitas(parsed.densitas) ? parsed.densitas : DEFAULT.densitas,
+      animasi: typeof parsed.animasi === 'boolean' ? parsed.animasi : DEFAULT.animasi,
+    };
   } catch {
     return DEFAULT;
   }
@@ -32,11 +49,13 @@ export function applySettings(s: DisplaySettings): void {
   if (!browser) return;
   const html = document.documentElement;
   const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-  const isDark = s.tema === 'dark' || (s.tema === 'system' && prefersDark);
+  const isDark = DARK_THEMES.has(s.tema) || (s.tema === 'system' && prefersDark);
+  const resolvedTheme = s.tema === 'system' ? (isDark ? 'dark' : 'light') : s.tema;
 
   // ── Tema ──────────────────────────────────────────────────────────
   html.classList.remove('dark');
   if (isDark) html.classList.add('dark');
+  html.dataset.theme = resolvedTheme;
   html.style.colorScheme = isDark ? 'dark' : 'light';
 
   // ── Densitas ──────────────────────────────────────────────────────

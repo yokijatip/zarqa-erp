@@ -5,12 +5,10 @@
     aktifkanModelHijab,
     addModelHijab,
     deleteModelHijab,
-    getModelHijabPage,
     nonaktifkanModelHijab,
     updateModelHijab,
   } from '$lib/firebase/model-hijab';
-  import type { FirestoreCursor } from '$lib/firebase/pagination';
-  import { isAdmin } from '$lib/stores/auth.store';
+  import { isAdmin, isOwner } from '$lib/stores/auth.store';
   import { modelHijabCache, warnaCache } from '$lib/stores/data-cache.svelte';
   import type { ModelHijab, Warna, WarnaTersedia } from '$lib/types';
   import * as Dialog from '$lib/components/ui/dialog';
@@ -25,19 +23,13 @@
   import Trash2Icon from '@lucide/svelte/icons/trash-2';
   import PackageIcon from '@lucide/svelte/icons/package';
 
-  const PAGE_SIZE = 12;
   let modelList = $state<ModelHijab[]>([]);
   let loading = $state(true);
-  let pageLoading = $state(false);
   let saving = $state(false);
   let errorMsg = $state<string | null>(null);
   let successMsg = $state<string | null>(null);
   let searchQuery = $state('');
   let tampilNonaktif = $state(false);
-  let currentPage = $state(1);
-  let pageCursors = $state<FirestoreCursor[]>([null]);
-  let pageHasNext = $state<boolean[]>([]);
-  let pageCache = $state<ModelHijab[][]>([]);
   let warnaList = $state<Warna[]>([]);
 
   let openForm = $state(false);
@@ -93,54 +85,31 @@
     }
   }
 
+  function toggleSemuaWarna() {
+    const semuaTerpilih = warnaList.length > 0 && warnaList.every((warna) => isWarnaSelected(warna.id));
+    fWarna = semuaTerpilih
+      ? []
+      : warnaList.map((warna) => ({ warna_id: warna.id, nama_warna: warna.nama_warna, kode_hex: warna.kode_hex }));
+  }
+
   function isWarnaSelected(warnaId: string): boolean {
     return fWarna.some((item) => item.warna_id === warnaId);
   }
 
-  async function load() {
+  async function load(force = false) {
     loading = true;
     try {
-      const [result, warna] = await Promise.all([
-        getModelHijabPage(!tampilNonaktif, null, PAGE_SIZE),
-        warnaCache.get(),
+      const [models, warna] = await Promise.all([
+        modelHijabCache.get(force),
+        warnaCache.get(force),
       ]);
       warnaList = warna;
-      modelList = result.items;
-      pageCache = [result.items];
-      pageCursors = [null, result.cursor];
-      pageHasNext = [result.hasNext];
-      currentPage = 1;
+      modelList = models.filter((model) => tampilNonaktif || model.aktif);
     } catch (error) {
       logLoadError('Gagal memuat data.', error);
     } finally {
       loading = false;
     }
-  }
-
-  async function nextPage() {
-    if (pageLoading || !pageHasNext[currentPage - 1]) return;
-    pageLoading = true;
-    try {
-      const result = await getModelHijabPage(!tampilNonaktif, pageCursors[currentPage] ?? null, PAGE_SIZE);
-      pageCache[currentPage] = result.items;
-      pageCursors[currentPage + 1] = result.cursor;
-      pageHasNext[currentPage] = result.hasNext;
-      pageCache = [...pageCache];
-      pageCursors = [...pageCursors];
-      pageHasNext = [...pageHasNext];
-      currentPage += 1;
-      modelList = result.items;
-    } catch (error) {
-      logLoadError('Gagal memuat halaman berikutnya.', error);
-    } finally {
-      pageLoading = false;
-    }
-  }
-
-  function previousPage() {
-    if (currentPage <= 1 || pageLoading) return;
-    currentPage -= 1;
-    modelList = pageCache[currentPage - 1] ?? modelList;
   }
 
   async function toggleNonaktif() {
@@ -271,10 +240,9 @@
 <div class="mb-6 flex flex-wrap items-start justify-between gap-4">
   <div>
     <h1 class="text-xl font-semibold text-foreground">Model Hijab</h1>
-    <p class="mt-1 text-sm text-muted-foreground">Master hijab tanpa ukuran. Harga berlaku pusat untuk satu pcs.</p>
   </div>
   <div class="flex flex-wrap gap-2">
-    <Button variant="outline" size="sm" onclick={load} disabled={loading}>
+    <Button variant="outline" size="sm" onclick={() => load()} disabled={loading}>
       <RefreshCwIcon class={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> Refresh
     </Button>
     {#if $isAdmin}
@@ -307,30 +275,46 @@
       <article class={`flex flex-col overflow-hidden rounded-xl border bg-card shadow-sm ${model.aktif ? '' : 'opacity-70'}`}>
         {#if model.foto_url}<img src={model.foto_url} alt={model.nama_hijab} loading="lazy" class="h-36 w-full object-cover" />{/if}
         <div class="flex items-start justify-between gap-3 border-b px-5 py-4">
-          <div class="min-w-0"><h2 class="truncate text-sm font-semibold text-foreground">{model.nama_hijab}</h2><p class="mt-1 text-xs text-muted-foreground">{model.deskripsi || 'Master hijab tanpa ukuran'}</p></div>
-          <span class={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ${model.aktif ? 'bg-green-100 text-green-700' : 'bg-muted text-muted-foreground'}`}>{model.aktif ? 'Aktif' : 'Nonaktif'}</span>
+          <div class="min-w-0"><h2 class="truncate text-sm font-semibold text-foreground">{model.nama_hijab}</h2>{#if model.deskripsi}<p class="mt-1 text-xs text-muted-foreground">{model.deskripsi}</p>{/if}</div>
+          <span class="shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium text-muted-foreground">{model.aktif ? 'Aktif' : 'Nonaktif'}</span>
         </div>
         <div class="flex-1 space-y-4 px-5 py-4">
-          <div class="rounded-lg border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground">Tidak ada ukuran. Stok dicatat per pcs dan dapat dipakai oleh beberapa varian set.</div>
           {#if (model.warna_tersedia ?? []).length > 0}
             <div>
               <p class="text-[11px] text-muted-foreground">Warna tersedia</p>
-              <div class="mt-2 flex flex-wrap gap-1.5">
-                {#each model.warna_tersedia ?? [] as warna}
-                  <span class="inline-flex items-center gap-1.5 rounded-full border bg-muted/30 px-2 py-1 text-[11px] font-medium text-foreground">
-                    <span class="h-2.5 w-2.5 rounded-full border border-black/10" style="background-color: {warna.kode_hex}"></span>
-                    {warna.nama_warna}
+              <details class="group mt-2">
+                <summary class="flex cursor-pointer list-none items-center gap-2 rounded-md border bg-transparent px-2.5 py-2 text-xs text-muted-foreground transition hover:bg-muted">
+                  <span class="flex items-center -space-x-1">
+                    {#each (model.warna_tersedia ?? []).slice(0, 6) as warna}
+                      <span
+                        class="h-4 w-4 rounded-full border-2 border-background ring-1 ring-black/10"
+                        style="background-color: {warna.kode_hex}"
+                        title={warna.nama_warna}
+                      ></span>
+                    {/each}
                   </span>
-                {/each}
-              </div>
+                  <span class="font-medium">{(model.warna_tersedia ?? []).length} warna</span>
+                  <span class="ml-auto text-[11px] transition-transform group-open:rotate-180">⌄</span>
+                </summary>
+                <div class="mt-2 flex max-h-24 flex-wrap gap-1.5 overflow-y-auto pr-1">
+                  {#each model.warna_tersedia ?? [] as warna}
+                    <span class="inline-flex items-center gap-1.5 rounded-md border bg-transparent px-2 py-1 text-[11px] text-muted-foreground">
+                      <span class="h-2.5 w-2.5 rounded-full border border-black/10" style="background-color: {warna.kode_hex}"></span>
+                      {warna.nama_warna}
+                    </span>
+                  {/each}
+                </div>
+              </details>
             </div>
           {:else}
             <p class="text-xs text-muted-foreground">Belum ada warna yang ditentukan.</p>
           {/if}
-          <div class="grid grid-cols-2 gap-3">
-            <div><p class="text-[11px] text-muted-foreground">Harga jual / pcs</p><p class="mt-1 text-sm font-semibold text-foreground">{rupiah(model.harga_jual)}</p></div>
-            <div><p class="text-[11px] text-muted-foreground">Harga produksi / pcs</p><p class="mt-1 text-sm font-semibold text-foreground">{rupiah(model.harga_produksi)}</p></div>
-          </div>
+          {#if $isOwner}
+            <div class="grid grid-cols-2 gap-3">
+              <div><p class="text-[11px] text-muted-foreground">Harga jual / pcs</p><p class="mt-1 text-sm font-semibold text-foreground">{rupiah(model.harga_jual)}</p></div>
+              <div><p class="text-[11px] text-muted-foreground">Harga produksi / pcs</p><p class="mt-1 text-sm font-semibold text-foreground">{rupiah(model.harga_produksi)}</p></div>
+            </div>
+          {/if}
           <a href={`/stok-hijab?model_id=${model.id}`} class="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"><PackageIcon class="h-3.5 w-3.5" />Kelola stok hijab</a>
         </div>
         <div class="border-t px-5 py-3">
@@ -353,8 +337,7 @@
     {/each}
   </div>
   <div class="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
-    <span>Menampilkan {filteredList.length} model pada halaman {currentPage}</span>
-    <div class="flex items-center gap-2"><Button variant="outline" size="sm" disabled={currentPage <= 1 || pageLoading} onclick={previousPage}>Sebelumnya</Button><span>Halaman {currentPage}{pageLoading ? '...' : ''}</span><Button variant="outline" size="sm" disabled={!pageHasNext[currentPage - 1] || pageLoading} onclick={nextPage}>{pageLoading ? 'Memuat...' : 'Berikutnya'}</Button></div>
+    <span>Menampilkan {filteredList.length} model</span>
   </div>
 {/if}
 
@@ -387,6 +370,16 @@
               <span class="ml-2 shrink-0 text-muted-foreground">⌄</span>
             </Popover.Trigger>
             <Popover.Content class="w-[--bits-popover-anchor-width] overflow-hidden p-1" align="start">
+              <div class="border-b border-border p-1">
+                <button
+                  type="button"
+                  onclick={toggleSemuaWarna}
+                  class="flex w-full items-center justify-between rounded-sm px-2 py-1.5 text-xs font-medium text-primary hover:bg-accent"
+                >
+                  <span>{warnaList.length > 0 && warnaList.every((warna) => isWarnaSelected(warna.id)) ? 'Hapus semua' : 'Pilih semua'}</span>
+                  <span class="text-muted-foreground">{fWarna.length}/{warnaList.length}</span>
+                </button>
+              </div>
               <div class="max-h-[min(16rem,var(--bits-popover-content-available-height))] overflow-y-auto">
                 {#each warnaList as warna}
                   {@const selected = isWarnaSelected(warna.id)}
@@ -402,7 +395,9 @@
           <p class="mt-1 text-[11px] text-muted-foreground">Stok hijab nanti dicatat terpisah berdasarkan warna yang dipilih.</p>
         {/if}
       </div>
-      <div class="rounded-lg border bg-muted/30 p-4"><p class="text-sm font-semibold text-foreground">Harga pusat hijab</p><p class="mt-1 text-xs text-muted-foreground">Harga ini berlaku per pcs hijab dan dipakai sebagai referensi. Harga jual paket tetap diatur pada varian model baju.</p><div class="mt-3 grid gap-3 sm:grid-cols-2"><div><label for="model-hijab-sale-price" class="mb-1 block text-xs font-medium">Harga jual / pcs</label><Input id="model-hijab-sale-price" type="number" min="0" bind:value={fHargaJual} placeholder="0" /></div><div><label for="model-hijab-production-price" class="mb-1 block text-xs font-medium">Harga produksi / pcs</label><Input id="model-hijab-production-price" type="number" min="0" bind:value={fHargaProduksi} placeholder="0" /></div></div></div>
+      {#if $isOwner}
+        <div class="rounded-lg border bg-muted/30 p-4"><p class="text-sm font-semibold text-foreground">Harga pusat hijab</p><p class="mt-1 text-xs text-muted-foreground">Harga ini berlaku per pcs hijab dan dipakai sebagai referensi. Harga jual paket tetap diatur pada varian model baju.</p><div class="mt-3 grid gap-3 sm:grid-cols-2"><div><label for="model-hijab-sale-price" class="mb-1 block text-xs font-medium">Harga jual / pcs</label><Input id="model-hijab-sale-price" type="number" min="0" bind:value={fHargaJual} placeholder="0" /></div><div><label for="model-hijab-production-price" class="mb-1 block text-xs font-medium">Harga produksi / pcs</label><Input id="model-hijab-production-price" type="number" min="0" bind:value={fHargaProduksi} placeholder="0" /></div></div></div>
+      {/if}
     </div>
     <Dialog.Footer class="shrink-0 border-t px-6 py-4"><Button variant="outline" onclick={() => (openForm = false)}>Batal</Button><Button onclick={submitForm} disabled={saving || !canSubmit}>{saving ? 'Menyimpan...' : isEditing ? 'Simpan Perubahan' : 'Tambah Model'}</Button></Dialog.Footer>
   </Dialog.Content>

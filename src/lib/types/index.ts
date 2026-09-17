@@ -115,13 +115,13 @@ export type StokKainInput = Omit<StokKain, 'id' | 'stok_terpakai' | 'updatedAt'>
 
 // ─── MODEL BAJU ──────────────────────────────────────────────────
 
-export type UkuranBaju = 'XS' | 'M/S' | 'L/XL' | 'XXL';
+export type UkuranBaju = 'XS' | 'S/M' | 'L/XL' | 'XXL';
 
-export const UKURAN_ORDER: UkuranBaju[] = ['XS', 'M/S', 'L/XL', 'XXL'];
+export const UKURAN_ORDER: UkuranBaju[] = ['XS', 'S/M', 'L/XL', 'XXL'];
 
 // Alias ukuran lama dipertahankan untuk membaca histori Firestore.
 export function canonicalUkuran(value: string): UkuranBaju {
-  if (value === 'S' || value === 'M' || value === 'M/S') return 'M/S';
+  if (value === 'S' || value === 'M' || value === 'M/S' || value === 'S/M') return 'S/M';
   if (value === 'L' || value === 'XL' || value === 'L/XL') return 'L/XL';
   if (value === 'XS' || value === 'XXL') return value;
   return value as UkuranBaju;
@@ -129,7 +129,7 @@ export function canonicalUkuran(value: string): UkuranBaju {
 
 export function ukuranAliases(value: string): string[] {
   const ukuran = canonicalUkuran(value);
-  if (ukuran === 'M/S') return ['M/S', 'M', 'S'];
+  if (ukuran === 'S/M') return ['S/M', 'M/S', 'M', 'S'];
   if (ukuran === 'L/XL') return ['L/XL', 'L', 'XL'];
   return [ukuran];
 }
@@ -142,6 +142,10 @@ export interface WarnaTersedia {
 
 export type TipeKomponenVarianPenjualan = 'model_baju' | 'aksesori';
 
+// Harga varian dapat dihitung dari model sumber dan komponennya, atau diisi
+// sebagai harga total paket per ukuran.
+export type ModeHargaVarian = 'induk_plus_addon' | 'custom';
+
 export interface KomponenVarianPenjualan {
   tipe: TipeKomponenVarianPenjualan;
   ref_id?: string;
@@ -153,12 +157,90 @@ export interface KomponenVarianPenjualan {
   jumlah: number;
   // Komponen aksesori dengan kelola_stok=true akan dikurangi saat barang keluar.
   kelola_stok: boolean;
+  // Jika diisi, stok aksesori dipilih berdasarkan warna model baju yang dijual.
+  // Key biasanya warna_id, dengan nama warna sebagai fallback untuk data lama.
+  stok_hijab_per_warna?: Record<string, string>;
+}
+
+export function warnaMappingKey(warnaId?: string, namaWarna?: string): string {
+  return warnaId?.trim()
+    || namaWarna?.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
+    || '__tanpa_warna__';
+}
+
+export function getStokHijabIdUntukWarna(
+  component: Pick<KomponenVarianPenjualan, 'stok_hijab_per_warna' | 'stok_hijab_id' | 'ref_id'>,
+  warna?: { warna_id?: string; nama_warna?: string },
+): string | undefined {
+  const mapping = component.stok_hijab_per_warna;
+  if (mapping && Object.keys(mapping).length > 0) {
+    const candidates = [
+      warna?.warna_id,
+      warna?.nama_warna?.trim(),
+      warnaMappingKey(undefined, warna?.nama_warna),
+      '__tanpa_warna__',
+      '*',
+    ].filter((key): key is string => Boolean(key));
+    for (const key of candidates) {
+      if (mapping[key]) return mapping[key];
+    }
+    // Explicit per-color mapping must not silently fall back to its first
+    // stock when a color has not been mapped.
+    return undefined;
+  }
+  return component.stok_hijab_id ?? component.ref_id;
+}
+
+function normalizeColorLookup(value?: string): string {
+  return (value ?? '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+export function resolveStokHijabIdUntukWarna(
+  component: Pick<KomponenVarianPenjualan, 'model_hijab_id' | 'stok_hijab_per_warna' | 'stok_hijab_id' | 'ref_id' | 'nama'>,
+  warna: { warna_id?: string; nama_warna?: string } | undefined,
+  stokList: Pick<StokHijab, 'id' | 'model_hijab_id' | 'nama_hijab' | 'warna_id' | 'nama_warna'>[],
+): string | undefined {
+  const direct = getStokHijabIdUntukWarna(component, warna);
+  if (direct) return direct;
+
+  // A non-empty mapping is explicit. Missing mapping means no matching stock.
+  if (component.stok_hijab_per_warna && Object.keys(component.stok_hijab_per_warna).length > 0) {
+    return undefined;
+  }
+
+  // No fixed stock selected: follow clothing color from the same hijab model.
+  const candidates = component.model_hijab_id
+    ? stokList.filter((stock) => stock.model_hijab_id === component.model_hijab_id)
+    : stokList.filter((stock) => normalizeColorLookup(stock.nama_hijab) === normalizeColorLookup(component.nama));
+  if (!warna?.warna_id && !warna?.nama_warna) {
+    return candidates.length === 1 ? candidates[0].id : undefined;
+  }
+
+  const colorId = warna?.warna_id?.trim();
+  const colorName = normalizeColorLookup(warna?.nama_warna);
+  const matching = candidates.filter((stock) =>
+    (colorId && stock.warna_id === colorId) ||
+    (colorName && normalizeColorLookup(stock.nama_warna) === colorName),
+  );
+  return matching[0]?.id;
 }
 
 export interface VarianPenjualan {
   id: string;
   nama_varian: string;
   sku?: string;
+  harga_jual_mode?: ModeHargaVarian;
+  harga_jual_per_ukuran?: Partial<Record<UkuranBaju, number>>;
+  harga_produksi_mode?: ModeHargaVarian;
+  harga_produksi_per_ukuran?: Partial<Record<UkuranBaju, number>>;
+  // Legacy: harga tunggal dibaca sebagai harga custom total untuk semua ukuran.
   harga_jual?: number;
   harga_produksi?: number;
   komponen: KomponenVarianPenjualan[];
@@ -220,7 +302,7 @@ export function defaultVarianPenjualan(
 ): VarianPenjualan {
   return {
     id: `reguler_${modelId}`,
-    nama_varian: namaModel,
+    nama_varian: 'Reguler',
     komponen: [
       {
         tipe: 'model_baju',
@@ -519,18 +601,26 @@ export type StatusBarangKeluar = 'selesai' | 'pending';
 
 export interface BarangKeluarItem {
   model_id: string;
+  jenis_produk?: 'baju' | 'hijab';
   // Model yang stok fisiknya dikurangi. Biasanya sama dengan model_id,
   // tetapi model paket dapat memakai stok model dasar.
   stok_model_id?: string;
+  model_hijab_id?: string;
+  stok_hijab_id?: string;
   nama_model: string;
+  nama_hijab?: string;
   varian_id?: string;
   nama_varian?: string;
   // Snapshot komponen varian supaya retur/pembatalan tetap memakai aturan saat transaksi dibuat.
   komponen_varian?: KomponenVarianPenjualan[];
+  warna_id?: string;
   nama_warna?: string;
   kode_hex_warna?: string;
   detail_keluar: DetailKeluar[];
   total_pcs: number;
+  // Hijab tidak memiliki detail ukuran; harga tetap disimpan dari master hijab.
+  harga_jual_per_pcs?: number;
+  harga_produksi_per_pcs?: number;
   status: StatusBarangKeluarItem;
   tujuan?: string;
   nama_reseller?: string;

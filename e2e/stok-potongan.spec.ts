@@ -6,10 +6,10 @@ test.describe.configure({ mode: 'serial' });
 async function waitForStokPotonganReady(page: import('@playwright/test').Page) {
   await page.waitForFunction(() => {
     const bodyText = document.body.innerText.toLowerCase();
-    const hasHeaderTable = bodyText.includes('nama model') && bodyText.includes('stok tersedia');
+    const hasHeaderTable = bodyText.includes('model & detail potongan') && bodyText.includes('total tersedia');
     const hasEmptyState = bodyText.includes('belum ada stok potongan');
     const hasErrorState = bodyText.includes('gagal memuat data stok potongan');
-    const hasRows = document.querySelectorAll('tbody tr').length > 0;
+    const hasRows = document.querySelectorAll('[class*="divide-y"] > div').length > 0;
 
     return hasHeaderTable || hasEmptyState || hasErrorState || hasRows;
   }, undefined, { timeout: 15_000 });
@@ -51,24 +51,16 @@ test.describe('Stok Potongan Kain', () => {
     if (await emptyState.isVisible().catch(() => false)) {
       await expect(emptyState).toBeVisible();
       await expect(
-        page.getByText(/stok akan muncul saat worker cutting menyimpan sisa potongan/i),
+        page.getByText(/stok akan muncul otomatis saat cutting selesai/i),
       ).toBeVisible();
       return;
     }
 
-    await expect(page.getByRole('columnheader', { name: /nama model/i })).toBeVisible();
-    await expect(page.getByRole('columnheader', { name: /warna/i })).toBeVisible();
-    await expect(page.getByRole('columnheader', { name: /ukuran/i })).toBeVisible();
-    await expect(
-      page.getByRole('columnheader', { name: /stok tersedia/i }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole('columnheader', { name: /total masuk/i }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole('columnheader', { name: /total terpakai/i }),
-    ).toBeVisible();
-    await expect(firstDataRow).toBeVisible();
+    await expect(page.getByText('Model & Detail Potongan', { exact: true })).toBeVisible();
+    await expect(page.getByText('Total Tersedia', { exact: true })).toBeVisible();
+    await expect(page.getByText('Masuk', { exact: true })).toBeVisible();
+    await expect(page.getByText('Terpakai', { exact: true })).toBeVisible();
+    await expect(page.getByText(/pcs$/i).first()).toBeVisible();
   });
 
   test('pencarian stok potongan bekerja untuk data hasil cutting', async ({
@@ -78,28 +70,27 @@ test.describe('Stok Potongan Kain', () => {
 
     const searchInput = page.getByPlaceholder(/cari nama model/i);
     const errorState = page.getByText(/gagal memuat data stok potongan/i);
-    const firstModelCell = page.locator('tbody tr td').first();
+    const firstDataRow = page.locator('[class*="divide-y"] > div').first();
 
     if (await errorState.isVisible().catch(() => false)) {
       throw new Error('Halaman stok potongan gagal memuat data dari Firebase.');
     }
 
-    if ((await page.locator('tbody tr').count()) === 0) {
+    if ((await page.locator('[class*="divide-y"] > div').count()) === 0) {
       await expect(page.getByText(/belum ada stok potongan/i)).toBeVisible();
       return;
     }
 
-    const modelName = (await firstModelCell.textContent())?.trim() ?? '';
+    const modelName = (await firstDataRow.locator('p').first().textContent())?.trim() ?? '';
     expect(modelName.length).toBeGreaterThan(0);
 
     await searchInput.fill(modelName.slice(0, Math.min(modelName.length, 5)));
-    await expect(page.locator('tbody tr')).toHaveCount(1);
-    await expect(firstModelCell).toContainText(modelName);
+    await expect(page.getByText(modelName, { exact: true })).toBeVisible();
 
     await searchInput.fill('zzztidakadahasil');
     await expect(page.getByText(/tidak ada hasil untuk/i)).toBeVisible();
 
     await searchInput.fill('');
-    await expect(page.locator('tbody tr').first()).toBeVisible();
+    await expect(firstDataRow).toBeVisible();
   });
 });
