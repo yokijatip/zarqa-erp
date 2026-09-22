@@ -41,6 +41,7 @@
 
   // Filter tabs
   let activeTab = $state<TipePenggajian | "all">("all");
+  let activeDivisi = $state<DivisiProduksi | "all">("all");
 
   // Dialog cetak
   let cetakDialogOpen = $state(false);
@@ -73,6 +74,7 @@
     "bulanan",
     "tahunan",
   ];
+  const DIVISI_OPTIONS: DivisiProduksi[] = ["Cutting", "Jahit", "Steam"];
 
   // ── Derived ────────────────────────────────────────────────────────
   let karyawanMap = $derived(new Map(karyawanList.map(k => [k.uid, k])));
@@ -102,25 +104,26 @@
   );
 
   let filteredData = $derived.by(() => {
-    if (activeTab === "all") return data;
-    return data.filter(d => {
+    return data.filter((d) => {
       const k = karyawanMap.get(d.uid);
-      return k?.tipe_penggajian === activeTab;
+      const cocokTipe = activeTab === "all" || k?.tipe_penggajian === activeTab;
+      const cocokDivisi = activeDivisi === "all" || d.divisi === activeDivisi;
+      return cocokTipe && cocokDivisi;
     });
   });
 
   let stats = $derived.by(() => {
     // Hitung pcs baju unik per batch agar tidak berlipat 3x dari total pengerjaan divisi
     const batchPcsMap = new Map<string, number>();
-    for (const d of data) {
+    for (const d of filteredData) {
       for (const b of d.breakdown) {
         const key = `${b.batch_id}__${b.nama_model}__${b.ukuran}`;
         batchPcsMap.set(key, Math.max(batchPcsMap.get(key) ?? 0, b.pcs));
       }
     }
     const totalPcs = [...batchPcsMap.values()].reduce((s, v) => s + v, 0);
-    const totalKaryawan = new Set(data.map(d => d.uid)).size;
-    const belumDicetak = data.filter(d => !printedSet.has(d.uid)).length;
+    const totalKaryawan = new Set(filteredData.map(d => d.uid)).size;
+    const belumDicetak = filteredData.filter(d => !printedSet.has(d.uid)).length;
     return { totalPcs, totalKaryawan, belumDicetak };
   });
 
@@ -706,6 +709,26 @@
 
 <!-- ── Filter Tabs ─────────────────────────────────────────────────── -->
 {#if payrollMode === "produksi"}
+<div class="mb-3 flex flex-wrap items-center gap-2 border-b border-gray-200">
+  <button
+    onclick={() => (activeDivisi = "all")}
+    class="flex items-center gap-2 px-4 py-2 text-sm font-medium transition {activeDivisi === 'all' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500 hover:text-gray-700'}"
+  >
+    Semua Divisi ({data.length})
+  </button>
+  {#each DIVISI_OPTIONS as divisi}
+    {@const cfg = DIVISI_CONFIG[divisi]}
+    {@const DivisiIcon = cfg.icon}
+    {@const count = data.filter((d) => d.divisi === divisi).length}
+    <button
+      onclick={() => (activeDivisi = divisi)}
+      class="flex items-center gap-2 px-4 py-2 text-sm font-medium transition {activeDivisi === divisi ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500 hover:text-gray-700'}"
+    >
+      <DivisiIcon class="h-4 w-4" />
+      {cfg.label} ({count})
+    </button>
+  {/each}
+</div>
 <div class="mb-4 flex items-center gap-2 border-b border-gray-200">
   <button
     onclick={() => (activeTab = "all")}

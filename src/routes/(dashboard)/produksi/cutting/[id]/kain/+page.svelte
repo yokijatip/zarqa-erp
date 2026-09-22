@@ -75,7 +75,7 @@
         nama_kain: "",
         satuan: "yard",
         jumlah_dipakai: "",
-        yard_per_pcs: defaultYardPerPcs(),
+        yard_per_pcs: fKain.length === 0 ? defaultYardPerPcs() : "",
       },
     ];
   }
@@ -84,7 +84,7 @@
     fKain
       .map((kain, index) => {
         const yard = Number(kain.jumlah_dipakai) || 0;
-        const rasio = Number(kain.yard_per_pcs || defaultYardPerPcs()) || 0;
+        const rasio = Number(kain.yard_per_pcs) || 0;
         if (yard <= 0 || rasio <= 0) return null;
         const pcs = Math.floor(yard / rasio);
         return {
@@ -107,12 +107,16 @@
   );
   let kainDibutuhkan = $derived(
     fKain
-      .map((kain) => ({
-        kain_id: kain.kain_id,
-        nama_kain: kain.nama_kain,
-        satuan: kain.satuan,
-        jumlah_dipakai: Number(kain.jumlah_dipakai) || 0,
-      }))
+      .map((kain) => {
+        const yardPerPcs = Number(kain.yard_per_pcs) || 0;
+        return {
+          kain_id: kain.kain_id,
+          nama_kain: kain.nama_kain,
+          satuan: kain.satuan,
+          jumlah_dipakai: Number(kain.jumlah_dipakai) || 0,
+          ...(yardPerPcs > 0 ? { yard_per_pcs: yardPerPcs } : {}),
+        };
+      })
       .filter((kain) => kain.kain_id && kain.jumlah_dipakai > 0),
   ) as KainDigunakan[];
   let canSubmit = $derived(

@@ -6,6 +6,7 @@
     getRiwayatBatch,
     updateStatusBatch,
     completeBatchProduksi,
+    recordSteamPartialProgress,
     sinkronStokPotonganBatch,
     deleteBatchProduksi,
     editKuantitasBatch,
@@ -164,11 +165,13 @@
           isFinal: false,
         };
       case "STEAM_IN_PROGRESS":
-        // Langsung ke COMPLETED, skip STEAM_DONE
+        // Steam bisa disetor sebagian pada batch yang sama dan petugasnya
+        // boleh diganti di setiap setoran.
         return {
-          label: b.jenis_produk === "hijab" ? "Selesaikan Steam & Kirim ke Stok Hijab" : "Selesaikan Steam & Kirim ke Barang Jadi",
+          label: "Catat Hasil Steam",
           nextStatus: "COMPLETED",
-          needsWorker: false,
+          needsWorker: true,
+          workerRole: "kepala_steam",
           needsPcs: true,
           isFinal: true,
         };
@@ -512,11 +515,16 @@
       : new Map<string, number>(),
   );
   let actionRemainingBySize = $derived(
+    // detail_ukuran sudah berisi sisa pekerjaan setelah setor parsial.
+    // Riwayat tidak boleh dikurangkan lagi karena akan double-count.
+    batch?.detail_ukuran.map((du) => Math.max(0, du.jumlah_pcs)) ?? [],
+  );
+  let actionOriginalBySize = $derived(
     batch?.detail_ukuran.map((du) =>
       Math.max(
         0,
-        du.jumlah_pcs -
-          (actionSubmittedBySize.get(du.ukuran) ?? 0) -
+        du.jumlah_pcs +
+          (actionSubmittedBySize.get(du.ukuran) ?? 0) +
           (actionRejectedBySize.get(du.ukuran) ?? 0),
       ),
     ) ?? [],
@@ -545,7 +553,13 @@
       : actionRemainingBySize.reduce((s, n) => s + n, 0),
   );
   let actionMaxPcs = $derived(
-    batch ? (batch.pcs_saat_ini ?? batch.total_pcs) : 0,
+    batch
+      ? Math.max(
+          batch.total_pcs,
+          batch.pcs_saat_ini ?? 0,
+          ...riwayat.map((r) => r.pcs_berhasil + (r.pcs_reject ?? 0)),
+        )
+      : 0,
   );
   let displayTotalPcsAwal = $derived.by(() => {
     if (!batch) return 0;
@@ -564,7 +578,8 @@
   // sisanya tetap dikerjakan). Cutting selalu dituntaskan sekali jalan dengan pcs
   // aktual yang didapat — tidak ada mekanisme lanjutan di backend untuk cutting.
   let actionCanPartial = $derived(
-    !currentAction?.isFinal && batch?.status === "JAHIT_IN_PROGRESS" && batch?.jenis_produk !== "hijab",
+    (batch?.status === "JAHIT_IN_PROGRESS" && batch?.jenis_produk !== "hijab") ||
+      batch?.status === "STEAM_IN_PROGRESS",
   );
 
   let actionFormValid = $derived.by(() => {
@@ -576,26 +591,17 @@
         if (actionTotalBerhasil + actionTotalReject <= 0) return false;
         if (actionTotalBerhasil + actionTotalReject > actionTotalRemaining) return false;
         if (actionTotalBerhasil < 0 || actionTotalReject < 0) return false;
-        if ((currentAction.isFinal || batch?.status === "JAHIT_IN_PROGRESS") && actionTotalBerhasil + actionTotalReject !== actionTotalRemaining) return false;
+        if (!actionCanPartial && actionTotalBerhasil + actionTotalReject !== actionTotalRemaining) return false;
         return true;
       }
-      if (currentAction.isFinal && batch?.status === "STEAM_IN_PROGRESS") {
-        // Steam: harus full completion
-        if (actionTotalBerhasil + actionTotalReject > actionTotalRemaining)
-          return false;
-        if (actionTotalBerhasil <= 0 && actionTotalReject <= 0) return false;
-        if (!actionCompletesStage) return false;
-      } else {
-        // Cutting dan Jahit: boleh partial, minimal 1 pcs
-        if (actionTotalBerhasil <= 0) return false;
-        if (
-          batch?.detail_ukuran.some((_, i) => {
-            const berhasil = Number(actionUkuranBerhasil[i]) || 0;
-            return berhasil > (actionRemainingBySize[i] ?? 0);
-          })
-        )
-          return false;
-      }
+      if (actionTotalBerhasil <= 0) return false;
+      if (
+        batch?.detail_ukuran.some((_, i) => {
+          const berhasil = Number(actionUkuranBerhasil[i]) || 0;
+          const reject = Number(actionUkuranReject[i]) || 0;
+          return berhasil + (currentAction.isFinal ? reject : 0) > (actionRemainingBySize[i] ?? 0);
+        })
+      ) return false;
       if (actionUkuranBerhasil.some((jumlah) => (Number(jumlah) || 0) < 0))
         return false;
       if (
@@ -703,14 +709,8 @@
         ? actionTotalBerhasil
         : (batch.pcs_saat_ini ?? batch.total_pcs);
       const pcsReject = currentAction.needsPcs ? actionTotalReject : 0;
-      const pcsBerhasilFinal =
-        currentAction.needsPcs && actionCompletesStage
-          ? actionTotalSubmittedBefore + actionTotalBerhasil
-          : pcsBerhasil;
-      const pcsRejectFinal =
-        currentAction.needsPcs && actionCompletesStage
-          ? actionTotalRejectedBefore + actionTotalReject
-          : pcsReject;
+      const pcsBerhasilFinal = pcsBerhasil;
+      const pcsRejectFinal = pcsReject;
       const submitDetailUkuran = batch.detail_ukuran
         .map((du, i) => ({
           ukuran: du.ukuran,
@@ -730,14 +730,17 @@
           : batch.detail_ukuran
             .map((du, i) => ({
               ukuran: du.ukuran,
-              jumlah_pcs:
-                (actionSubmittedBySize.get(du.ukuran) ?? 0) +
-                (Number(actionUkuranBerhasil[i]) || 0),
+              jumlah_pcs: Number(actionUkuranBerhasil[i]) || 0,
             }))
             .filter((du) => du.jumlah_pcs > 0)
         : undefined;
 
-      if (currentAction.needsPcs && actionCanPartial && !actionCompletesStage) {
+      if (
+        currentAction.needsPcs &&
+        actionCanPartial &&
+        batch.status === "JAHIT_IN_PROGRESS" &&
+        !actionCompletesStage
+      ) {
         await splitJahitPartialToSteam(
           batch.id,
           riwayatUid,
@@ -745,8 +748,22 @@
           submitDetailUkuran,
           submitDetailReject,
         );
+      } else if (currentAction.isFinal && batch.status === "STEAM_IN_PROGRESS" && !actionCompletesStage) {
+        await recordSteamPartialProgress(
+          batch.id,
+          riwayatUid,
+          riwayatNama,
+          {
+            status_dari: batch.status,
+            pcs_berhasil: pcsBerhasil,
+            pcs_reject: pcsReject,
+            detail_reject: submitDetailReject,
+            catatan: `Setor parsial Steam ${pcsBerhasil} pcs`,
+          },
+          newDetailUkuran ?? undefined,
+          worker,
+        );
       } else if (currentAction.isFinal) {
-        // Steam selesai: langsung complete dalam satu operasi (skip STEAM_DONE)
         await completeBatchProduksi(
           batch.id,
           riwayatUid,
@@ -758,6 +775,7 @@
             detail_reject: submitDetailReject,
           },
           newDetailUkuran ?? undefined,
+          worker,
         );
       } else {
         await updateStatusBatch(
@@ -1306,6 +1324,9 @@
                 <span class="text-sm text-gray-600">
                   {kain.jumlah_dipakai}
                   {kain.satuan}
+                  {#if kain.yard_per_pcs}
+                    · {kain.yard_per_pcs} {kain.satuan}/pcs
+                  {/if}
                 </span>
               </div>
             {/each}
@@ -1661,7 +1682,7 @@
                   ? "Jahit"
                   : "Steam"}
             </p>
-            {#if currentAssignedWorker}
+            {#if currentAssignedWorker && batch?.status !== "STEAM_IN_PROGRESS"}
               <div
                 class="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm font-medium text-gray-800"
               >
@@ -1718,7 +1739,7 @@
                   </div>
                 {/if}
               </div>
-              <p class="mt-2 text-xs text-gray-400">Hijab tidak memakai ukuran. Total berhasil + reject harus menghabiskan sisa pekerjaan.</p>
+              <p class="mt-2 text-xs text-gray-400">Hijab tidak memakai ukuran. Hasil boleh disetor sebagian; sisanya tetap menjadi pekerjaan Steam.</p>
             </div>
           {:else}
           <!-- Tabel per-ukuran -->
@@ -1770,7 +1791,7 @@
                       >{du.ukuran}</td
                     >
                     <td class="px-3 py-2 text-center text-gray-500"
-                      >{du.jumlah_pcs}</td
+                    >{actionOriginalBySize[i] ?? du.jumlah_pcs}</td
                     >
                     <td class="px-3 py-2 text-center text-gray-500">{sudah}</td>
                     <td class="px-3 py-2 text-center font-medium text-gray-700"
@@ -1844,7 +1865,7 @@
           {/if}
           {#if batch?.status === "STEAM_IN_PROGRESS"}
             <p class="text-xs text-emerald-600">
-              Batch akan langsung diselesaikan dan masuk ke {batch?.jenis_produk === "hijab" ? "stok hijab" : "stok barang jadi"}.
+              Hasil yang dicatat langsung masuk ke {batch?.jenis_produk === "hijab" ? "stok hijab" : "stok barang jadi"}; sisa batch tetap menjadi pekerjaan Steam berikutnya.
             </p>
           {:else if currentAction?.needsPcs && !actionCanPartial}
             <p class="text-xs text-emerald-600">
@@ -1880,7 +1901,7 @@
             <LoaderIcon class="mr-2 h-4 w-4 animate-spin" />
             Menyimpan...
           {:else}
-            {currentAction.isFinal
+            {currentAction.isFinal && actionCompletesStage
               ? batch.jenis_produk === "hijab"
                 ? "Selesaikan & Kirim ke Stok Hijab"
                 : "Selesaikan & Kirim ke Barang Jadi"

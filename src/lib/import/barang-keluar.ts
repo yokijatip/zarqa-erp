@@ -5,6 +5,7 @@ import {
   resolveStokHijabIdUntukWarna,
   type BarangKeluarItem,
   type DetailKeluar,
+  type KanalPenjualan,
   type ModelBaju,
   type ModelHijab,
   type StokBarangJadi,
@@ -74,9 +75,10 @@ function normalize(value: string): string {
     .replace(/\s+/g, " ");
 }
 
-function findTujuan(text: string): string | undefined {
+function findTujuan(text: string, kanalPenjualan: KanalPenjualan[] = []): string | undefined {
   const normalizedText = normalize(text);
-  return TUJUAN_PENGIRIMAN_OPTIONS.find((tujuan) =>
+  const options = [...kanalPenjualan.map((channel) => channel.nama), ...TUJUAN_PENGIRIMAN_OPTIONS];
+  return options.find((tujuan) =>
     normalizedText.includes(normalize(tujuan)),
   );
 }
@@ -295,6 +297,7 @@ export function parseBarangKeluarText(
   stokList: StokBarangJadi[],
   modelHijabList: ModelHijab[] = [],
   stokHijabList: StokHijab[] = [],
+  kanalPenjualan: KanalPenjualan[] = [],
 ): ParseBarangKeluarResult {
   const lines = text
     .split(/\r?\n/)
@@ -314,17 +317,14 @@ export function parseBarangKeluarText(
       stokHijabList,
     );
     const detailKeluar = parseSizeQty(line);
-    const allSize = /\bALL\s*SIZE\b/i.test(line);
     const fallbackQty = detailKeluar.reduce(
       (sum, detail) => sum + detail.jumlah_pcs,
       0,
     );
     const statusCounts = parsePcsColumns(line, fallbackQty);
-    const looksLikeProductRow =
-      detailKeluar.length > 0 ||
-      (allSize && statusCounts.qty > 0) ||
-      (statusCounts.qty > 0 &&
-        /\b(?:XS|S\/M|M\/S|L\/XL|XXL)\b/i.test(line));
+    // Baris hasil PDF bisa kehilangan label ALL SIZE atau label ukuran.
+    // Kolom Pcs tetap menjadi penanda bahwa baris ini adalah item barang.
+    const looksLikeProductRow = detailKeluar.length > 0 || statusCounts.qty > 0;
     const product = matchedOnLine ?? pendingProduct;
 
     if (!product) {
@@ -368,7 +368,7 @@ export function parseBarangKeluarText(
         ...(warna?.warna_id ? { warna_id: warna.warna_id } : {}),
         ...(warna?.nama_warna ? { nama_warna: warna.nama_warna } : {}),
         ...(warna?.kode_hex_warna ? { kode_hex_warna: warna.kode_hex_warna } : {}),
-        ...(findTujuan(line) ? { tujuan: findTujuan(line) } : {}),
+        ...(findTujuan(line, kanalPenjualan) ? { tujuan: findTujuan(line, kanalPenjualan) } : {}),
         detail_keluar: details,
         total_pcs: statusCounts.qty || fallbackQty,
         terpenuhi_pcs: statusCounts.terpenuhi,
@@ -388,7 +388,11 @@ export function parseBarangKeluarText(
       };
       const warna = findColor(line, colorsForHijab(model ?? fallbackModel, stokHijabList));
       const stock = findHijabStock(product, warna?.nama_warna, stokHijabList);
-      if (!allSize || statusCounts.qty <= 0) {
+      // Hijab memang biasanya ditulis ALL SIZE, tetapi hasil ekstraksi PDF
+      // kadang membuang label tersebut. Selama model hijab sudah cocok dan
+      // ada jumlah Pcs, tetap masukkan item agar stok kosong menjadi pending,
+      // bukan dianggap sebagai baris import yang gagal.
+      if (statusCounts.qty <= 0) {
         if (looksLikeProductRow) unmatchedLines.push(line);
         continue;
       }
@@ -408,7 +412,7 @@ export function parseBarangKeluarText(
               harga_produksi_per_pcs: model.harga_produksi ?? 0,
             }
           : {}),
-        ...(findTujuan(line) ? { tujuan: findTujuan(line) } : {}),
+        ...(findTujuan(line, kanalPenjualan) ? { tujuan: findTujuan(line, kanalPenjualan) } : {}),
         detail_keluar: [],
         total_pcs: statusCounts.qty,
         terpenuhi_pcs: statusCounts.terpenuhi,
@@ -424,7 +428,7 @@ export function parseBarangKeluarText(
 
   return {
     items,
-    tujuan: findTujuan(text),
+    tujuan: findTujuan(text, kanalPenjualan),
     nama_reseller: findReseller(lines),
     batal_pcs: batalPcs,
     unmatched_lines: unmatchedLines,

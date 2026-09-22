@@ -232,9 +232,14 @@
     return value && value > 0 ? String(value) : "";
   }
 
-  function applyDefaultYardPerPcs() {
+  function resetYardPerPcsForSelection() {
     const value = defaultYardPerPcs();
-    fKain = fKain.map((k) => ({ ...k, yard_per_pcs: value }));
+    fKain = fKain.map((k, index) => ({
+      ...k,
+      // Nilai master hanya menjadi saran kain pertama. Kain berikutnya
+      // harus diisi sesuai kebutuhan kainnya sendiri.
+      yard_per_pcs: index === 0 ? value : "",
+    }));
   }
 
   function updateKainField(
@@ -333,12 +338,16 @@
   );
   let kainDibutuhkan = $derived(
     fKain
-      .map((k) => ({
-        kain_id: k.kain_id,
-        nama_kain: k.nama_kain,
-        satuan: k.satuan,
-        jumlah_dipakai: parseFloat(k.jumlah_dipakai) || 0,
-      }))
+      .map((k) => {
+        const yardPerPcs = parseFloat(k.yard_per_pcs) || 0;
+        return {
+          kain_id: k.kain_id,
+          nama_kain: k.nama_kain,
+          satuan: k.satuan,
+          jumlah_dipakai: parseFloat(k.jumlah_dipakai) || 0,
+          ...(yardPerPcs > 0 ? { yard_per_pcs: yardPerPcs } : {}),
+        };
+      })
       .filter((k) => k.kain_id !== "" && k.jumlah_dipakai > 0),
   );
   let canSubmit = $derived(
@@ -510,7 +519,7 @@
     fJumlahHijab = "";
     fJumlah = {};
     // Rasio kebutuhan kain spesifik per ukuran/model — perlu diisi ulang
-    if (!isHijab) applyDefaultYardPerPcs();
+    if (!isHijab) resetYardPerPcsForSelection();
     errorMsg = null;
     stokPotonganModel = [];
   }
@@ -845,7 +854,7 @@
                 fWarnaId = value ?? "";
                 fUkuran = "";
                 fJumlah = {};
-                applyDefaultYardPerPcs();
+                resetYardPerPcsForSelection();
                 errorMsg = null;
               }}
             >
@@ -891,7 +900,7 @@
               onValueChange={(val) => {
                 fUkuran = (val ?? "") as UkuranBaju | "";
                 // Rasio "1 pcs = ? yard" spesifik per ukuran — reset supaya diisi ulang
-                applyDefaultYardPerPcs();
+                resetYardPerPcsForSelection();
               }}
             >
               <Select.Trigger class="w-full">
@@ -1227,7 +1236,7 @@
                         nama_kain: "",
                         satuan: "yard" as const,
                         jumlah_dipakai: "",
-                        yard_per_pcs: defaultYardPerPcs(),
+                        yard_per_pcs: fKain.length === 0 ? defaultYardPerPcs() : "",
                       },
                     ];
                   }}

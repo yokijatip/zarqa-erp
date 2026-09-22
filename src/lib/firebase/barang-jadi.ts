@@ -6,7 +6,9 @@ import {
 } from 'firebase/firestore';
 import { db } from './config';
 import { getCursorPage, type FirestoreCursor, type CursorPage } from './pagination';
-import { canonicalUkuran, ukuranAliases, getStokHijabIdUntukWarna, resolveStokHijabIdUntukWarna, type StokBarangJadi, type BarangKeluar, type BarangKeluarInput, type RiwayatBarangJadi, type TipeRiwayatBarangJadi, type SumberProduksi, type BatchProduksi, type BarangKeluarItem, type DetailKeluar, type StokHijab, type KomponenVarianPenjualan } from '$lib/types';
+import { canonicalUkuran, ukuranAliases, getStokHijabIdUntukWarna, resolveStokHijabIdUntukWarna, type StokBarangJadi, type BarangKeluar, type BarangKeluarInput, type RiwayatBarangJadi, type TipeRiwayatBarangJadi, type SumberProduksi, type BatchProduksi, type BarangKeluarItem, type DetailKeluar, type StokHijab, type KomponenVarianPenjualan, type ModelBaju, type ModelHijab } from '$lib/types';
+import { DEFAULT_KANAL_PENJUALAN, adminFeeForChannel, channelIdForName, getKanalPenjualan, netSalesValue } from './penjualan';
+import { hargaJualKanalUntukUkuran, hargaJualVarianKanalUntukUkuran, modeHargaVarian } from '$lib/sales/penjualan';
 
 const COL_RIWAYAT = 'riwayat_barang_jadi';
 
@@ -268,6 +270,93 @@ function normalizeBarangKeluarSnapshot(id: string, value: Record<string, unknown
   } as BarangKeluar;
 }
 
+async function snapshotSalesPricing(
+  sourceItems: BarangKeluarItem[],
+  defaultTujuan: string,
+): Promise<BarangKeluarItem[]> {
+  let channels = DEFAULT_KANAL_PENJUALAN;
+  try {
+    channels = await getKanalPenjualan();
+  } catch {
+    // Harga lama tetap bisa dicatat bila konfigurasi kanal belum dapat dibaca.
+  }
+
+  const bajuCache = new Map<string, ModelBaju | null>();
+  const hijabCache = new Map<string, ModelHijab | null>();
+  const getBaju = async (id: string | undefined): Promise<ModelBaju | null> => {
+    if (!id) return null;
+    if (bajuCache.has(id)) return bajuCache.get(id) ?? null;
+    const snap = await getDoc(doc(db, COL_MODEL_BAJU, id));
+    const model = snap.exists() ? ({ id: snap.id, ...snap.data() } as ModelBaju) : null;
+    bajuCache.set(id, model);
+    return model;
+  };
+  const getHijab = async (id: string | undefined): Promise<ModelHijab | null> => {
+    if (!id) return null;
+    if (hijabCache.has(id)) return hijabCache.get(id) ?? null;
+    const snap = await getDoc(doc(db, 'model_hijab', id));
+    const model = snap.exists() ? ({ id: snap.id, ...snap.data() } as ModelHijab) : null;
+    hijabCache.set(id, model);
+    return model;
+  };
+
+  return Promise.all(sourceItems.map(async (item) => {
+    const tujuan = item.tujuan ?? defaultTujuan;
+    const kanalId = item.kanal_penjualan_id ?? channelIdForName(tujuan, channels);
+    const fee = adminFeeForChannel(channels, kanalId ?? tujuan);
+    const baseItem = {
+      ...item,
+      tujuan,
+      ...(kanalId ? { kanal_penjualan_id: kanalId } : {}),
+      biaya_admin_persen: fee,
+    };
+
+    if (item.jenis_produk === 'hijab') {
+      const model = await getHijab(item.model_hijab_id ?? item.model_id);
+      const channelPrice = kanalId ? model?.harga_jual_per_kanal?.[kanalId] : undefined;
+      const gross = channelPrice != null && channelPrice > 0
+        ? channelPrice
+        : item.harga_jual_per_pcs ?? model?.harga_jual ?? 0;
+      return {
+        ...baseItem,
+        harga_jual_per_pcs: gross,
+        harga_jual_bersih_per_pcs: netSalesValue(gross, fee),
+      };
+    }
+
+    const model = await getBaju(item.model_id);
+    const sourceModel = model?.stok_model_id ? await getBaju(model.stok_model_id) : model;
+    const variant = model?.varian_penjualan?.find((entry) => entry.id === item.varian_id);
+    const details = await Promise.all(item.detail_keluar.map(async (detail) => {
+      const customVariantPrice = modeHargaVarian(variant, 'jual') === 'custom'
+        ? hargaJualVarianKanalUntukUkuran(variant, detail.ukuran, kanalId)
+        : undefined;
+      let gross = customVariantPrice ?? hargaJualKanalUntukUkuran(sourceModel ?? undefined, detail.ukuran, kanalId);
+
+      if (modeHargaVarian(variant, 'jual') === 'induk_plus_addon') {
+        for (const component of item.komponen_varian ?? variant?.komponen ?? []) {
+          if (component.tipe !== 'aksesori' || component.jumlah <= 0) continue;
+          const hijab = await getHijab(component.model_hijab_id);
+          const channelPrice = kanalId ? hijab?.harga_jual_per_kanal?.[kanalId] : undefined;
+          gross += component.jumlah * (channelPrice != null && channelPrice > 0
+            ? channelPrice
+            : hijab?.harga_jual ?? 0);
+        }
+      }
+
+      const feePercent = detail.biaya_admin_persen ?? fee;
+      return {
+        ...detail,
+        harga_jual: gross,
+        harga_jual_bersih: netSalesValue(gross, feePercent),
+        biaya_admin_persen: feePercent,
+      };
+    }));
+
+    return { ...baseItem, detail_keluar: details };
+  }));
+}
+
 function normalizeStokBarangJadiSnapshot(id: string, value: Record<string, unknown>): StokBarangJadi {
   return {
     ...value,
@@ -388,6 +477,7 @@ export async function catatBarangKeluar(
     data.items && data.items.length > 0
       ? data.items.map((item) => ({
           ...item,
+          tujuan: item.tujuan ?? data.tujuan,
           detail_keluar: normalizeDetailKeluar(item.detail_keluar),
           total_pcs: item.jenis_produk === 'hijab'
             ? Math.max(0, Number(item.total_pcs) || 0)
@@ -399,12 +489,14 @@ export async function catatBarangKeluar(
             nama_model: data.nama_model,
             ...(data.nama_warna ? { nama_warna: data.nama_warna } : {}),
             ...(data.kode_hex_warna ? { kode_hex_warna: data.kode_hex_warna } : {}),
+            tujuan: data.tujuan,
             detail_keluar: normalizeDetailKeluar(data.detail_keluar),
             total_pcs: data.detail_keluar.reduce((sum, i) => sum + i.jumlah_pcs, 0),
             status: 'keluar',
           },
         ];
-  const items = await hydrateAutoHijabComponents(normalizedItems);
+  const hydratedItems = await hydrateAutoHijabComponents(normalizedItems);
+  const items = await snapshotSalesPricing(hydratedItems, data.tujuan);
   const keluarItems = items.filter((item) => item.status !== 'pending');
   validateManagedHijabComponents(keluarItems);
   for (const item of keluarItems) {

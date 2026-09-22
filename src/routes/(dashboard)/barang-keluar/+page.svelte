@@ -11,6 +11,7 @@
   import type { FirestoreCursor } from "$lib/firebase/pagination";
   import { barangJadiCache, modelBajuCache, modelHijabCache, stokHijabCache } from "$lib/stores/data-cache.svelte";
   import { currentUser, userRole } from "$lib/stores/auth.store";
+  import { getKanalPenjualan } from "$lib/firebase/penjualan";
   import {
     UKURAN_ORDER,
     TUJUAN_PENGIRIMAN_OPTIONS,
@@ -21,6 +22,7 @@
     type BarangKeluar,
     type BarangKeluarItem,
     type UkuranBaju,
+    type KanalPenjualan,
   } from "$lib/types";
   import * as Dialog from "$lib/components/ui/dialog";
   import * as Select from "$lib/components/ui/select/index.js";
@@ -59,6 +61,7 @@
   let modelList = $state<ModelBaju[]>([]);
   let modelHijabList = $state<ModelHijab[]>([]);
   let stokHijabList = $state<StokHijab[]>([]);
+  let kanalList = $state<KanalPenjualan[]>([]);
   let riwayat = $state<BarangKeluar[]>([]);
   let loading = $state(true);
   let saving = $state(false);
@@ -80,6 +83,13 @@
   let importNamaReseller = $state("");
   let importKeterangan = $state("");
   let importBatalPcs = $state(0);
+  let tujuanOptions = $derived.by(() => {
+    const options: string[] = [];
+    for (const value of [...kanalList.filter((channel) => channel.aktif).map((channel) => channel.nama), ...TUJUAN_PENGIRIMAN_OPTIONS]) {
+      if (!options.some((existing) => existing.trim().toLowerCase() === value.trim().toLowerCase())) options.push(value);
+    }
+    return options;
+  });
 
   // Cancel dialog
   let batalTarget = $state<BarangKeluar | null>(null);
@@ -354,13 +364,11 @@
   };
   let rekapPerTujuan = $derived.by(() => {
     const map = new Map<string, RekapTujuan>();
-    for (const t of TUJUAN_PENGIRIMAN_OPTIONS) {
+    for (const t of tujuanOptions) {
       map.set(t, { tujuan: t, jumlahPengiriman: 0, totalPcs: 0 });
     }
     for (const r of riwayatPeriod) {
-      const key = (TUJUAN_PENGIRIMAN_OPTIONS as readonly string[]).includes(
-        r.tujuan,
-      )
+      const key = tujuanOptions.includes(r.tujuan)
         ? r.tujuan
         : "Lainnya";
       if (!map.has(key))
@@ -794,6 +802,11 @@
       modelList = models;
       modelHijabList = hijabModels;
       stokHijabList = hijabStock;
+      try {
+        kanalList = await getKanalPenjualan();
+      } catch {
+        kanalList = [];
+      }
       riwayat = firstPage.items;
       pageCache = [firstPage.items];
       pageCursors = [null, firstPage.cursor];
@@ -997,6 +1010,7 @@
         stokList,
         modelHijabList,
         stokHijabList,
+        kanalList,
       );
       if (parsed.items.length === 0) {
         const detail = parsed.unmatched_lines.length > 0
@@ -1607,7 +1621,7 @@
               {/if}
             </Select.Trigger>
             <Select.Content preventScroll={false}>
-              {#each TUJUAN_PENGIRIMAN_OPTIONS as t}
+              {#each tujuanOptions as t}
                 <Select.Item value={t}>{t}</Select.Item>
               {/each}
             </Select.Content>
@@ -1708,7 +1722,7 @@
             {/if}
           </Select.Trigger>
           <Select.Content preventScroll={false}>
-            {#each TUJUAN_PENGIRIMAN_OPTIONS as t}
+            {#each tujuanOptions as t}
               <Select.Item value={t}>{t}</Select.Item>
             {/each}
           </Select.Content>

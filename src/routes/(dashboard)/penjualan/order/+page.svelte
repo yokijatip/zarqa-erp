@@ -35,7 +35,8 @@
 
   let filtered = $derived(filterSalesLists(rows, search));
   let pageRows = $derived(pageCache[currentPage - 1] ?? []);
-  let totalNilai = $derived(filtered.reduce((sum, row) => sum + row.nilaiJual, 0));
+  let totalNilai = $derived(filtered.reduce((sum, row) => sum + row.nilaiBersih, 0));
+  let totalAdmin = $derived(filtered.reduce((sum, row) => sum + row.biayaAdmin, 0));
   let totalPcs = $derived(filtered.reduce((sum, row) => sum + row.pcsKeluar, 0));
   let totalPending = $derived(filtered.reduce((sum, row) => sum + row.pcsPending, 0));
 
@@ -152,7 +153,8 @@
             <td>${escapeHtml(row.buyer)}</td>
             <td class="right">${row.pcsKeluar}</td>
             <td class="right">${row.pcsPending}</td>
-            <td class="right">${escapeHtml(rupiah(row.nilaiJual))}</td>
+            <td class="right">${escapeHtml(rupiah(row.biayaAdmin))}</td>
+            <td class="right">${escapeHtml(rupiah(row.nilaiBersih))}</td>
             <td class="right">${escapeHtml(rupiah(row.hpp))}</td>
             <td class="right">${escapeHtml(rupiah(row.laba))}</td>
           </tr>
@@ -184,17 +186,18 @@
             <div>List: ${filtered.length}</div>
             <div>Pcs keluar: ${totalPcs}</div>
             <div>Pending: ${totalPending}</div>
-            <div>Penjualan: ${escapeHtml(rupiah(totalNilai))}</div>
+            <div>Admin: ${escapeHtml(rupiah(totalAdmin))}</div>
+            <div>Penjualan bersih: ${escapeHtml(rupiah(totalNilai))}</div>
           </div>
           <table>
             <thead>
               <tr>
                 <th>No</th><th>Tanggal</th><th>List</th><th>Tujuan</th><th>Buyer</th>
                 <th class="right">Pcs</th><th class="right">Pending</th>
-                <th class="right">Penjualan</th><th class="right">HPP</th><th class="right">Laba</th>
+                <th class="right">Admin</th><th class="right">Penjualan bersih</th><th class="right">HPP</th><th class="right">Laba</th>
               </tr>
             </thead>
-            <tbody>${rowsHtml || '<tr><td colspan="10">Tidak ada data.</td></tr>'}</tbody>
+            <tbody>${rowsHtml || '<tr><td colspan="11">Tidak ada data.</td></tr>'}</tbody>
           </table>
         </body>
       </html>
@@ -235,8 +238,9 @@
     <div class="rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">{errorMsg}</div>
   {/if}
 
-  <div class="grid gap-3 md:grid-cols-3">
-    <div class="rounded-lg border bg-white p-4 shadow-sm"><p class="text-sm text-gray-400">Nilai Order</p><p class="mt-1 text-2xl font-semibold text-green-700">{rupiah(totalNilai)}</p></div>
+  <div class="grid gap-3 md:grid-cols-4">
+    <div class="rounded-lg border bg-white p-4 shadow-sm"><p class="text-sm text-gray-400">Penjualan Bersih</p><p class="mt-1 text-2xl font-semibold text-green-700">{rupiah(totalNilai)}</p></div>
+    <div class="rounded-lg border bg-white p-4 shadow-sm"><p class="text-sm text-gray-400">Biaya Admin</p><p class="mt-1 text-2xl font-semibold text-orange-700">{rupiah(totalAdmin)}</p></div>
     <div class="rounded-lg border bg-white p-4 shadow-sm"><p class="text-sm text-gray-400">Pcs Keluar</p><p class="mt-1 text-2xl font-semibold">{totalPcs}</p></div>
     <div class="rounded-lg border bg-white p-4 shadow-sm"><p class="text-sm text-gray-400">Pending</p><p class="mt-1 text-2xl font-semibold text-amber-700">{totalPending}</p></div>
   </div>
@@ -255,7 +259,8 @@
             <Table.Head>Buyer</Table.Head>
             <Table.Head>Status</Table.Head>
             <Table.Head class="text-right">Pcs</Table.Head>
-            <Table.Head class="text-right">Penjualan</Table.Head>
+            <Table.Head class="text-right">Admin</Table.Head>
+            <Table.Head class="text-right">Penjualan Bersih</Table.Head>
             <Table.Head class="text-right">Laba</Table.Head>
             <Table.Head class="text-right">Aksi</Table.Head>
           </Table.Row>
@@ -270,12 +275,13 @@
                 <Badge variant={row.pcsPending > 0 ? "secondary" : "outline"}>{row.pcsPending > 0 ? `Pending ${row.pcsPending}` : "Selesai"}</Badge>
               </Table.Cell>
               <Table.Cell class="text-right">{row.pcsKeluar}</Table.Cell>
-              <Table.Cell class="text-right font-medium text-green-700">{rupiah(row.nilaiJual)}</Table.Cell>
+              <Table.Cell class="text-right text-orange-700">{rupiah(row.biayaAdmin)}</Table.Cell>
+              <Table.Cell class="text-right font-medium text-green-700">{rupiah(row.nilaiBersih)}</Table.Cell>
               <Table.Cell class="text-right">{rupiah(row.laba)}</Table.Cell>
               <Table.Cell class="text-right"><Button variant="outline" size="sm" onclick={() => openDetail(row)}>Detail</Button></Table.Cell>
             </Table.Row>
           {:else}
-            <Table.Row><Table.Cell colspan={8} class="h-28 text-center text-gray-400">{loading ? "Memuat..." : "Belum ada order."}</Table.Cell></Table.Row>
+            <Table.Row><Table.Cell colspan={9} class="h-28 text-center text-gray-400">{loading ? "Memuat..." : "Belum ada order."}</Table.Cell></Table.Row>
           {/each}
         </Table.Body>
       </Table.Root>

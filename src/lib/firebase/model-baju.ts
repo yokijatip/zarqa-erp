@@ -6,7 +6,7 @@ import {
 } from 'firebase/firestore';
 import { db } from './config';
 import { getCursorPage, type FirestoreCursor, type CursorPage } from './pagination';
-import { canonicalUkuran, type ModelBaju, type ModelBajuInput, type UkuranBaju } from '$lib/types';
+import { canonicalUkuran, type HargaJualPerKanal, type ModelBaju, type ModelBajuInput, type UkuranBaju } from '$lib/types';
 
 const COL = 'model_baju';
 
@@ -20,6 +20,15 @@ function normalizeSizeMap(value: Partial<Record<string, number>> | undefined): P
   return result;
 }
 
+function normalizeChannelSizeMaps(value: HargaJualPerKanal | undefined): HargaJualPerKanal {
+  if (!value || typeof value !== 'object') return {};
+  return Object.fromEntries(
+    Object.entries(value)
+      .map(([channelId, sizeMap]) => [channelId, normalizeSizeMap(sizeMap as Partial<Record<string, number>>)] as const)
+      .filter(([, sizeMap]) => Object.keys(sizeMap).length > 0),
+  );
+}
+
 function normalizeModel(model: ModelBaju): ModelBaju {
   return {
     ...model,
@@ -27,6 +36,7 @@ function normalizeModel(model: ModelBaju): ModelBaju {
     ukuran_tersedia: [...new Set((model.ukuran_tersedia ?? []).map((ukuran) => canonicalUkuran(ukuran)))],
     kebutuhan_yard_per_pcs: normalizeSizeMap(model.kebutuhan_yard_per_pcs as Partial<Record<string, number>>),
     harga_jual_per_ukuran: normalizeSizeMap(model.harga_jual_per_ukuran as Partial<Record<string, number>>),
+    harga_jual_per_kanal: normalizeChannelSizeMaps(model.harga_jual_per_kanal),
     harga_produksi_per_ukuran: normalizeSizeMap(model.harga_produksi_per_ukuran as Partial<Record<string, number>>),
     varian_penjualan: Array.isArray(model.varian_penjualan)
       ? model.varian_penjualan.map((variant) => ({
@@ -37,6 +47,7 @@ function normalizeModel(model: ModelBaju): ModelBaju {
               ? 'custom'
               : 'induk_plus_addon',
           harga_jual_per_ukuran: normalizeSizeMap(variant.harga_jual_per_ukuran as Partial<Record<string, number>>),
+          harga_jual_per_kanal: normalizeChannelSizeMaps(variant.harga_jual_per_kanal),
           harga_produksi_mode: variant.harga_produksi_mode === 'custom' || variant.harga_produksi_mode === 'induk_plus_addon'
             ? variant.harga_produksi_mode
             : variant.harga_produksi != null && variant.harga_produksi > 0

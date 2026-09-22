@@ -161,6 +161,12 @@
           description: "Saldo kas dan modal awal saat cut-over.",
           warning: "Saldo awal migrasi akan dihapus.",
         },
+        {
+          collection: "tutup_buku_keuangan",
+          label: "Histori Tutup Buku Tahunan",
+          description: "Snapshot penutupan periode, pembagian laba, dan saldo pembuka tahun berikutnya.",
+          warning: "Histori tutup buku tahunan akan dihapus permanen.",
+        },
       ],
     },
     {

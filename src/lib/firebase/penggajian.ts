@@ -27,6 +27,9 @@ import type {
 const STATUS_DIVISI: Partial<Record<StatusBatch, DivisiProduksi>> = {
   CUTTING_DONE: 'Cutting',
   JAHIT_DONE: 'Jahit',
+  // Setoran parsial Steam tetap merupakan pekerjaan berbayar walau batch
+  // belum berstatus COMPLETED.
+  STEAM_IN_PROGRESS: 'Steam',
   STEAM_DONE: 'Steam',
   COMPLETED: 'Steam',
 };
@@ -46,6 +49,7 @@ interface RiwayatEvent {
   pcsBerhasil: number;
   detailUkuran: Array<{ ukuran: string; jumlah_pcs: number }>;
   timestamp: Date | null;
+  sumber?: 'proses' | 'reject_diperbaiki';
 }
 
 function tsToDate(ts: any): Date | null {
@@ -65,9 +69,72 @@ function dedupeSteamFinalizationEvents(events: RiwayatEvent[]): RiwayatEvent[] {
   );
 
   return events.filter((event) => {
+    // Resolusi reject adalah tambahan pcs yang memang harus dibayar,
+    // bukan duplikasi dari event penyelesaian Steam.
+    if (event.sumber === 'reject_diperbaiki') return true;
     if (event.statusKe !== 'COMPLETED' || event.divisi !== 'Steam') return true;
     return !steamDoneKeys.has(steamPayrollKey(event));
   });
+}
+
+// Reject yang selesai diperbaiki masuk stok sebagai pcs tambahan dan juga
+// menjadi pekerjaan Steam berbayar. Ambil langsung dari log resolusi supaya
+// data reject lama tetap ikut terhitung meskipun dibuat sebelum fitur ini ada.
+async function getRejectRepairEvents(
+  range: { start: Date; end: Date } | null,
+): Promise<RiwayatEvent[]> {
+  const rejectSnap = await getDocs(collection(db, 'reject_items'));
+  const events: RiwayatEvent[] = [];
+
+  await Promise.all(
+    rejectSnap.docs.map(async (rejectDoc) => {
+      const reject = rejectDoc.data() as {
+        batch_id?: string;
+        asal_proses?: StatusBatch;
+        ukuran?: string;
+        dicatat_oleh_uid?: string;
+        dicatat_oleh_nama?: string;
+      };
+
+      if (!reject.batch_id || !reject.dicatat_oleh_uid) return;
+      if (reject.asal_proses !== 'STEAM_IN_PROGRESS' && reject.asal_proses !== 'STEAM_DONE') return;
+
+      const resolusiSnap = await getDocs(
+        collection(db, 'reject_items', rejectDoc.id, 'riwayat_resolusi'),
+      );
+      for (const resolusiDoc of resolusiSnap.docs) {
+        const resolusi = resolusiDoc.data() as {
+          aksi?: string;
+          jumlah?: number;
+          timestamp?: unknown;
+        };
+        if (resolusi.aksi !== 'diperbaiki') continue;
+
+        const timestamp = tsToDate(resolusi.timestamp);
+        if (range && (!timestamp || timestamp < range.start || timestamp > range.end)) continue;
+
+        const jumlah = Math.max(0, Math.floor(Number(resolusi.jumlah) || 0));
+        if (jumlah <= 0) continue;
+
+        events.push({
+          batchId: reject.batch_id,
+          divisi: 'Steam',
+          statusKe: 'COMPLETED',
+          uid: reject.dicatat_oleh_uid,
+          nama: reject.dicatat_oleh_nama ?? reject.dicatat_oleh_uid,
+          pcsBerhasil: jumlah,
+          detailUkuran: [{
+            ukuran: canonicalUkuran(String(reject.ukuran ?? 'All Size')),
+            jumlah_pcs: jumlah,
+          }],
+          timestamp,
+          sumber: 'reject_diperbaiki',
+        });
+      }
+    }),
+  );
+
+  return events;
 }
 
 // Ambil semua event riwayat_proses yang relevan untuk penggajian
@@ -120,9 +187,11 @@ async function getRiwayatEvents(range: { start: Date; end: Date } | null): Promi
           }))
         : [],
       timestamp,
+      sumber: 'proses',
     });
   });
 
+  events.push(...await getRejectRepairEvents(range));
   const payrollEvents = dedupeSteamFinalizationEvents(events);
   if (!range) return payrollEvents;
   return payrollEvents.filter((event) => {
@@ -263,6 +332,12 @@ export async function getPenggajianPeriode(
     ev: RiwayatEvent,
     batch: BatchProduksi
   ): { uid: string; nama: string } | null {
+    // Setoran parsial Steam dan hasil perbaikan reject sudah menyimpan
+    // karyawan yang benar pada event-nya. Jangan menggantinya dengan petugas
+    // terakhir di batch karena satu batch boleh dikerjakan beberapa orang.
+    if (ev.sumber === 'reject_diperbaiki' || ev.statusKe === 'STEAM_IN_PROGRESS') {
+      return { uid: ev.uid, nama: ev.nama };
+    }
     if (ev.statusKe === 'CUTTING_DONE') return batch.penugasan?.cutting ?? { uid: ev.uid, nama: ev.nama };
     if (ev.statusKe === 'JAHIT_DONE') return batch.penugasan?.jahit ?? { uid: ev.uid, nama: ev.nama };
     if (ev.statusKe === 'STEAM_DONE' || ev.statusKe === 'COMPLETED') {

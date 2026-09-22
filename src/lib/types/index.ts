@@ -146,6 +146,26 @@ export type TipeKomponenVarianPenjualan = 'model_baju' | 'aksesori';
 // sebagai harga total paket per ukuran.
 export type ModeHargaVarian = 'induk_plus_addon' | 'custom';
 
+// Kanal penjualan bersifat extensible agar marketplace baru tidak perlu
+// mengubah schema model. Key harga memakai id kanal yang stabil.
+export interface KanalPenjualan {
+  id: string;
+  nama: string;
+  biaya_admin_persen: number;
+  aktif: boolean;
+  bawaan?: boolean;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export interface PengaturanPenjualan {
+  id: string;
+  kanal: KanalPenjualan[];
+  updatedAt?: Timestamp;
+}
+
+export type HargaJualPerKanal = Record<string, Partial<Record<UkuranBaju, number>>>;
+
 export interface KomponenVarianPenjualan {
   tipe: TipeKomponenVarianPenjualan;
   ref_id?: string;
@@ -238,6 +258,7 @@ export interface VarianPenjualan {
   sku?: string;
   harga_jual_mode?: ModeHargaVarian;
   harga_jual_per_ukuran?: Partial<Record<UkuranBaju, number>>;
+  harga_jual_per_kanal?: HargaJualPerKanal;
   harga_produksi_mode?: ModeHargaVarian;
   harga_produksi_per_ukuran?: Partial<Record<UkuranBaju, number>>;
   // Legacy: harga tunggal dibaca sebagai harga custom total untuk semua ukuran.
@@ -262,6 +283,7 @@ export interface ModelBaju {
   // Harga jual dapat berbeda untuk setiap ukuran. harga_jual tetap dipakai
   // sebagai fallback untuk data lama atau ukuran yang belum diberi harga.
   harga_jual_per_ukuran?: Partial<Record<UkuranBaju, number>>;
+  harga_jual_per_kanal?: HargaJualPerKanal;
   harga_produksi?: number;
   harga_produksi_per_ukuran?: Partial<Record<UkuranBaju, number>>;
   // Satu model produksi dapat memiliki beberapa bentuk penjualan, misalnya
@@ -286,6 +308,7 @@ export interface ModelHijab {
   deskripsi?: string;
   warna_tersedia?: WarnaTersedia[];
   harga_jual?: number;
+  harga_jual_per_kanal?: Record<string, number>;
   harga_produksi?: number;
   aktif: boolean;
   createdAt?: Timestamp;
@@ -364,6 +387,9 @@ export interface KainDigunakan {
   nama_kain: string;
   satuan: 'yard' | 'kg';
   jumlah_dipakai: number;
+  // Rasio kebutuhan kain ini sendiri untuk satu pcs hasil cutting.
+  // Opsional agar batch lama tetap kompatibel.
+  yard_per_pcs?: number;
 }
 
 export interface PenugasanWorker {
@@ -588,7 +614,10 @@ export interface DetailKeluar {
   // Snapshot harga saat barang keluar, supaya histori tidak berubah ketika
   // harga master model diperbarui.
   harga_jual?: number;
+  // Harga bersih setelah biaya admin kanal penjualan.
+  harga_jual_bersih?: number;
   harga_produksi?: number;
+  biaya_admin_persen?: number;
   // Snapshot lot produksi yang terkonsumsi (FIFO) untuk ukuran ini pada
   // pengiriman ini — dipakai untuk menampilkan siapa cutting/jahit/steam-nya
   // di laporan. Kalau kosong/tidak menutupi jumlah_pcs, sisanya adalah stok
@@ -620,7 +649,10 @@ export interface BarangKeluarItem {
   total_pcs: number;
   // Hijab tidak memiliki detail ukuran; harga tetap disimpan dari master hijab.
   harga_jual_per_pcs?: number;
+  harga_jual_bersih_per_pcs?: number;
   harga_produksi_per_pcs?: number;
+  kanal_penjualan_id?: string;
+  biaya_admin_persen?: number;
   status: StatusBarangKeluarItem;
   tujuan?: string;
   nama_reseller?: string;
@@ -657,6 +689,7 @@ export interface BarangKeluar {
   // masih valid secara tipe. Form baru hanya mengisi lewat dropdown
   // TUJUAN_PENGIRIMAN_OPTIONS, jadi data ke depannya konsisten.
   tujuan: string;
+  kanal_penjualan_id?: string;
   nama_reseller?: string;
   keterangan?: string;
   dicatat_oleh: string;
@@ -722,6 +755,7 @@ export type KategoriPengeluaran =
   | 'aset'
   | 'bahan_baku'
   | 'gaji'
+  | 'pembagian_laba'
   | 'operasional'
   | 'transport'
   | 'sewa'
@@ -782,6 +816,61 @@ export type SaldoAwalKeuanganInput = Omit<
   'id' | 'tanggal' | 'createdAt' | 'updatedAt'
 > & {
   tanggal: Date | Timestamp;
+};
+
+export type TipePersediaanKeuangan = 'barang_jadi' | 'stok_kain' | 'stok_hijab';
+
+export interface SnapshotPersediaanKeuangan {
+  id: string;
+  tipe: TipePersediaanKeuangan;
+  nama: string;
+  warna?: string;
+  ukuran?: string;
+  satuan: string;
+  jumlah: number;
+  harga_satuan: number;
+  nilai: number;
+}
+
+export interface PembagianLabaKaryawan {
+  uid: string;
+  nama: string;
+  nominal: number;
+}
+
+export interface SaldoAwalPeriodeKeuangan {
+  tahun: number;
+  saldo_kas: number;
+  nilai_persediaan: number;
+  modal_awal: number;
+}
+
+export interface TutupBukuTahunan {
+  id: string;
+  tahun: number;
+  tanggal_tutup: Timestamp;
+  saldo_kas_sebelum_pembagian: number;
+  pembagian_laba: number;
+  saldo_kas_akhir: number;
+  penjualan: number;
+  hpp: number;
+  beban_operasional: number;
+  laba_bersih: number;
+  nilai_persediaan_barang_jadi: number;
+  nilai_persediaan_kain: number;
+  nilai_persediaan_hijab: number;
+  nilai_persediaan_total: number;
+  snapshot_persediaan: SnapshotPersediaanKeuangan[];
+  pembagian_karyawan: PembagianLabaKaryawan[];
+  saldo_awal_tahun_berikutnya: SaldoAwalPeriodeKeuangan;
+  catatan?: string;
+  dibuat_oleh_uid?: string;
+  dibuat_oleh_nama?: string;
+  createdAt?: Timestamp;
+}
+
+export type TutupBukuTahunanInput = Omit<TutupBukuTahunan, 'id' | 'createdAt' | 'tanggal_tutup'> & {
+  tanggal_tutup: Date | Timestamp;
 };
 
 export type TransaksiKeuanganInput = Omit<

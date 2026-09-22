@@ -4,10 +4,12 @@
   import { getRiwayatBarangKeluarByPeriod, getStokBarangJadi } from "$lib/firebase/barang-jadi";
   import { getKaryawanList } from "$lib/firebase/karyawan";
   import { getModelBajuList } from "$lib/firebase/model-baju";
+  import { getStokHijabList } from "$lib/firebase/stok-hijab";
   import { stokKainCache } from "$lib/stores/data-cache.svelte";
   import {
     addAsetPerusahaan,
     addTransaksiKeuangan,
+    catatTutupBukuTahunan,
     deleteAsetPerusahaan,
     deleteTransaksiKeuangan,
     getAsetPerusahaan,
@@ -21,6 +23,7 @@
     DEFAULT_MASA_MANFAAT_BULAN,
     deleteSaldoAwalKeuangan,
     getSaldoAwalKeuangan,
+    getTutupBukuTahunanList,
     hitungNilaiBukuAset,
     hitungPenyusutanPeriode,
     saveSaldoAwalKeuangan,
@@ -41,8 +44,12 @@
     StokBarangJadi,
     StokKain,
     SaldoAwalKeuangan,
+    SnapshotPersediaanKeuangan,
+    StokHijab,
     TransaksiKeuangan,
     TipeTransaksiKeuangan,
+    TutupBukuTahunan,
+    PembagianLabaKaryawan,
     UserProfile,
   } from "$lib/types";
   import PeriodSelector from "$lib/components/period-selector.svelte";
@@ -79,6 +86,9 @@
     kategori: string;
     deskripsi: string;
     nominal: number;
+    nilaiBruto?: number;
+    biayaAdmin?: number;
+    kanal?: string;
     jenisGaji?: "produksi" | "reguler";
     karyawanUid?: string;
     hpp?: number;
@@ -87,6 +97,8 @@
     isInventoryPurchase?: boolean;
     isAssetPurchase?: boolean;
     isNonProfitIncome?: boolean;
+    isEquityDistribution?: boolean;
+    isLocked?: boolean;
   };
 
   let reportDateRange = $state<DateRange>(getPeriodRange("semua"));
@@ -100,7 +112,9 @@
   let saldoAwal = $state<SaldoAwalKeuangan | null>(null);
   let stokBarangJadi = $state<StokBarangJadi[]>([]);
   let stokKainList = $state<StokKain[]>([]);
+  let stokHijabList = $state<StokHijab[]>([]);
   let karyawanList = $state<UserProfile[]>([]);
+  let tutupBukuList = $state<TutupBukuTahunan[]>([]);
   let loading = $state(true);
   let saving = $state(false);
   let exporting = $state(false);
@@ -111,7 +125,7 @@
   let editing = $state<TransaksiKeuangan | null>(null);
   let editingAset = $state<AsetPerusahaan | null>(null);
   let activeTab = $state<"semua" | TipeTransaksiKeuangan>("semua");
-  let activePanel = $state<"transaksi" | "saldo_awal" | "aset" | "gudang">("transaksi");
+  let activePanel = $state<"transaksi" | "saldo_awal" | "aset" | "gudang" | "tutup_buku">("transaksi");
   let searchQuery = $state("");
   let expandedGudangModels = $state<Set<string>>(new Set());
   const transactionPageSize = 50;
@@ -156,9 +170,15 @@
   let sModalAwal = $state("0");
   let sCatatan = $state("");
 
+  let cTanggalTutup = $state(new Date().toISOString().slice(0, 10));
+  let cPembagianLaba = $state("0");
+  let cCatatan = $state("");
+  let closeError = $state<string | null>(null);
+
   const canAccess = $derived(
     ["admin_keuangan", "owner", "developer"].includes($userRole ?? ""),
   );
+  const canCloseBooks = $derived(["owner", "developer"].includes($userRole ?? ""));
   const modelMap = $derived(new Map(modelList.map((m) => [m.id, m])));
   const modelNameMap = $derived(
     new Map(modelList.map((m) => [m.nama_model.toLowerCase(), m])),
@@ -167,7 +187,7 @@
     const options = fTipe === "pemasukan" ? KATEGORI_PEMASUKAN : KATEGORI_PENGELUARAN;
     const kategoriKhusus = fTipe === "pemasukan"
       ? ["penjualan_manual"]
-      : ["aset", "bahan_baku", "gaji"];
+      : ["aset", "bahan_baku", "gaji", "pembagian_laba"];
     return Object.fromEntries(
       Object.entries(options).filter(([value]) => !kategoriKhusus.includes(value) || (editing && value === fKategori)),
     );
@@ -196,6 +216,8 @@
         (item) => item.status !== "pending",
       );
       let pendapatan = 0;
+      let nilaiBruto = 0;
+      let biayaAdmin = 0;
       let hpp = 0;
       let totalPcs = 0;
       const modelNames = new Set<string>();
@@ -203,14 +225,38 @@
         const model =
           modelMap.get(item.model_id) ??
           modelNameMap.get(item.nama_model.toLowerCase());
-        pendapatan += item.detail_keluar.reduce(
-          (sum, detail) => sum + detail.jumlah_pcs * (detail.harga_jual && detail.harga_jual > 0 ? detail.harga_jual : hargaJualUntukUkuran(model, detail.ukuran)),
-          0,
-        );
-        hpp += item.detail_keluar.reduce(
-          (sum, detail) => sum + detail.jumlah_pcs * (detail.harga_produksi && detail.harga_produksi > 0 ? detail.harga_produksi : hargaProduksiUntukUkuran(model, detail.ukuran)),
-          0,
-        );
+        if (item.status === "pending") continue;
+
+        if (item.jenis_produk === "hijab") {
+          const pcs = Math.max(0, item.total_pcs);
+          const hargaJual = Math.max(0, item.harga_jual_per_pcs ?? 0);
+          const biayaAdminPersen = Math.min(100, Math.max(0, item.biaya_admin_persen ?? 0));
+          const hargaBersih = Math.max(
+            0,
+            item.harga_jual_bersih_per_pcs ?? hargaJual * (1 - biayaAdminPersen / 100),
+          );
+          nilaiBruto += pcs * hargaJual;
+          pendapatan += pcs * hargaBersih;
+          biayaAdmin += pcs * Math.max(0, hargaJual - hargaBersih);
+          hpp += pcs * Math.max(0, item.harga_produksi_per_pcs ?? 0);
+          totalPcs += pcs;
+          modelNames.add(item.nama_model);
+          continue;
+        }
+
+        item.detail_keluar.forEach((detail) => {
+          const hargaJual = detail.harga_jual && detail.harga_jual > 0
+            ? detail.harga_jual
+            : hargaJualUntukUkuran(model, detail.ukuran);
+          const biayaAdminPersen = Math.min(100, Math.max(0, detail.biaya_admin_persen ?? item.biaya_admin_persen ?? 0));
+          const hargaBersih = detail.harga_jual_bersih != null
+            ? detail.harga_jual_bersih
+            : hargaJual * (1 - biayaAdminPersen / 100);
+          nilaiBruto += detail.jumlah_pcs * hargaJual;
+          pendapatan += detail.jumlah_pcs * hargaBersih;
+          biayaAdmin += detail.jumlah_pcs * Math.max(0, hargaJual - hargaBersih);
+          hpp += detail.jumlah_pcs * (detail.harga_produksi && detail.harga_produksi > 0 ? detail.harga_produksi : hargaProduksiUntukUkuran(model, detail.ukuran));
+        });
         totalPcs += item.total_pcs;
         modelNames.add(item.nama_model);
       }
@@ -228,6 +274,9 @@
         kategori: "Penjualan",
         deskripsi: `List barang keluar ke ${tujuan}: ${modelText} (${totalPcs} pcs)`,
         nominal: pendapatan,
+        nilaiBruto,
+        biayaAdmin,
+        kanal: tujuan,
         hpp,
         labaKotor: pendapatan - hpp,
         referensi: keluar.id,
@@ -246,9 +295,11 @@
       deskripsi: trx.deskripsi,
       nominal: trx.nominal,
       referensi: trx.referensi,
-      isInventoryPurchase: trx.tipe === "pengeluaran" && trx.kategori !== "aset" && (trx.kategori === "bahan_baku" || trx.jenis_transaksi === "pembelian_persediaan" || trx.dampak_laba_rugi === false),
+      isInventoryPurchase: trx.tipe === "pengeluaran" && trx.kategori !== "aset" && (trx.kategori === "bahan_baku" || trx.jenis_transaksi === "pembelian_persediaan"),
       isAssetPurchase: trx.tipe === "pengeluaran" && (trx.kategori === "aset" || trx.jenis_transaksi === "pembelian_aset"),
       isNonProfitIncome: trx.tipe === "pemasukan" && (trx.dampak_laba_rugi === false || !transaksiBerdampakLabaRugi(trx.tipe, trx.kategori)),
+      isEquityDistribution: trx.tipe === "pengeluaran" && trx.kategori === "pembagian_laba",
+      isLocked: trx.tipe === "pengeluaran" && trx.kategori === "pembagian_laba" && (trx.referensi ?? "").startsWith("tutup_buku:"),
     })),
   );
 
@@ -276,10 +327,10 @@
   let reportLines = $derived(allLines.filter((line) => inDateRange(line.tanggal, reportDateRange)));
   let overviewLines = $derived(allLines.filter((line) => inDateRange(line.tanggal, overviewDateRange)));
   let overviewSummary = $derived.by(() => {
-    const tanggalSaldoAwal = saldoAwal?.tanggal ? toDate(saldoAwal.tanggal) : null;
-    const saldoAwalKas = tanggalSaldoAwal && tanggalSaldoAwal <= (overviewDateRange?.end ?? new Date()) ? saldoAwal?.saldo_kas ?? 0 : 0;
+    const saldoAwalKas = saldoKasPembukaUntukRange(overviewDateRange);
     const cashLines = overviewLines.filter((line) => isCashMovementAfterCutover(line.tanggal));
     const penjualan = overviewLines.filter((line) => line.source === "penjualan").reduce((sum, line) => sum + line.nominal, 0);
+    const biayaAdmin = overviewLines.filter((line) => line.source === "penjualan").reduce((sum, line) => sum + (line.biayaAdmin ?? 0), 0);
     const pemasukanManual = overviewLines
       .filter((line) => line.source === "manual" && line.tipe === "pemasukan" && !line.isNonProfitIncome)
       .reduce((sum, line) => sum + line.nominal, 0);
@@ -295,7 +346,7 @@
     const pemasukan = pemasukanKasPenjualan + pemasukanKasManual;
     const hpp = overviewLines.filter((line) => line.source === "penjualan").reduce((sum, line) => sum + (line.hpp ?? 0), 0);
     const pengeluaranOperasional = overviewLines
-      .filter((line) => line.source === "manual" && line.tipe === "pengeluaran" && !line.isInventoryPurchase && !line.isAssetPurchase)
+      .filter((line) => line.source === "manual" && line.tipe === "pengeluaran" && !line.isInventoryPurchase && !line.isAssetPurchase && !line.isEquityDistribution)
       .reduce((sum, line) => sum + line.nominal, 0);
     const pembelianPersediaan = overviewLines
       .filter((line) => line.isInventoryPurchase)
@@ -313,7 +364,7 @@
     const penyusutanAset = asetList.reduce((sum, aset) => sum + hitungPenyusutanPeriode(aset, overviewDateRange), 0);
     const labaKotor = penjualan - hpp;
     const kasPengeluaranOperasional = cashLines
-      .filter((line) => line.source === "manual" && line.tipe === "pengeluaran" && !line.isInventoryPurchase && !line.isAssetPurchase)
+      .filter((line) => line.source === "manual" && line.tipe === "pengeluaran" && !line.isInventoryPurchase && !line.isAssetPurchase && !line.isEquityDistribution)
       .reduce((sum, line) => sum + line.nominal, 0);
     const kasPembelianPersediaan = cashLines
       .filter((line) => line.isInventoryPurchase)
@@ -324,9 +375,13 @@
     const kasGajiTerbayar = cashLines
       .filter((line) => line.source === "gaji")
       .reduce((sum, line) => sum + line.nominal, 0);
-    const kasTercatat = saldoAwalKas + pemasukan - kasPengeluaranOperasional - kasPembelianPersediaan - kasPembelianAset - kasGajiTerbayar;
+    const pembagianLabaKas = cashLines
+      .filter((line) => line.isEquityDistribution)
+      .reduce((sum, line) => sum + line.nominal, 0);
+    const kasTercatat = saldoAwalKas + pemasukan - kasPengeluaranOperasional - kasPembelianPersediaan - kasPembelianAset - kasGajiTerbayar - pembagianLabaKas;
     return {
       penjualan,
+      biayaAdmin,
       pemasukanManual,
       pemasukanKasNonPendapatan,
       pemasukan,
@@ -338,6 +393,7 @@
       saldoAwalKas,
       kasTercatat,
       kasMasuk: pemasukan,
+      pembagianLabaKas,
       penyusutanAset,
       labaKotor,
       marginKotor: penjualan > 0 ? Math.round((labaKotor / penjualan) * 100) : 0,
@@ -381,8 +437,7 @@
   );
 
   let summary = $derived.by(() => {
-    const tanggalSaldoAwal = saldoAwal?.tanggal ? toDate(saldoAwal.tanggal) : null;
-    const saldoAwalKas = tanggalSaldoAwal && tanggalSaldoAwal <= (reportDateRange?.end ?? new Date()) ? saldoAwal?.saldo_kas ?? 0 : 0;
+    const saldoAwalKas = saldoKasPembukaUntukRange(reportDateRange);
     const reportSalesLines = reportLines.filter((line) => line.source === "penjualan");
     const reportManualLines = reportLines.filter((line) => line.source === "manual");
     const reportPayrollLines = reportLines.filter((line) => line.source === "gaji");
@@ -390,13 +445,14 @@
     const cashManualLines = reportManualLines.filter((line) => isCashMovementAfterCutover(line.tanggal));
     const cashPayrollLines = reportPayrollLines.filter((line) => isCashMovementAfterCutover(line.tanggal));
     const penjualan = reportSalesLines.reduce((sum, line) => sum + line.nominal, 0);
+    const biayaAdmin = reportSalesLines.reduce((sum, line) => sum + (line.biayaAdmin ?? 0), 0);
     const hpp = reportSalesLines.reduce((sum, line) => sum + (line.hpp ?? 0), 0);
     const pemasukanManual = reportManualLines.filter((line) => line.tipe === "pemasukan" && !line.isNonProfitIncome).reduce((sum, line) => sum + line.nominal, 0);
     const pemasukanKasNonPendapatan = cashManualLines
       .filter((line) => line.tipe === "pemasukan" && line.isNonProfitIncome)
       .reduce((sum, line) => sum + line.nominal, 0);
     const pengeluaranOperasional = reportManualLines
-      .filter((line) => line.tipe === "pengeluaran" && !line.isInventoryPurchase && !line.isAssetPurchase)
+      .filter((line) => line.tipe === "pengeluaran" && !line.isInventoryPurchase && !line.isAssetPurchase && !line.isEquityDistribution)
       .reduce((sum, line) => sum + line.nominal, 0);
     const pembelianPersediaan = reportManualLines.filter((line) => line.isInventoryPurchase).reduce((sum, line) => sum + line.nominal, 0);
     const pembelianAset = reportManualLines.filter((line) => line.isAssetPurchase).reduce((sum, line) => sum + line.nominal, 0);
@@ -408,11 +464,12 @@
     const totalBebanGaji = gajiRegulerTerbayar + gajiRegulerEstimasi;
     const pembelianAsetKas = cashManualLines.filter((line) => line.isAssetPurchase).reduce((sum, line) => sum + line.nominal, 0);
     const pengeluaranOperasionalKas = cashManualLines
-      .filter((line) => line.tipe === "pengeluaran" && !line.isInventoryPurchase && !line.isAssetPurchase)
+      .filter((line) => line.tipe === "pengeluaran" && !line.isInventoryPurchase && !line.isAssetPurchase && !line.isEquityDistribution)
       .reduce((sum, line) => sum + line.nominal, 0);
     const pembelianPersediaanKas = cashManualLines.filter((line) => line.isInventoryPurchase).reduce((sum, line) => sum + line.nominal, 0);
     const gajiTerbayarKas = cashPayrollLines.reduce((sum, line) => sum + line.nominal, 0);
-    const totalPengeluaranKas = pengeluaranOperasionalKas + pembelianPersediaanKas + pembelianAsetKas + gajiTerbayarKas;
+    const pembagianLabaKas = cashManualLines.filter((line) => line.isEquityDistribution).reduce((sum, line) => sum + line.nominal, 0);
+    const totalPengeluaranKas = pengeluaranOperasionalKas + pembelianPersediaanKas + pembelianAsetKas + gajiTerbayarKas + pembagianLabaKas;
     const kasMasukPenjualan = cashSalesLines.reduce((sum, line) => sum + line.nominal, 0);
     const kasMasukManual = cashManualLines.filter((line) => line.tipe === "pemasukan").reduce((sum, line) => sum + line.nominal, 0);
     const kasMasuk = kasMasukPenjualan + kasMasukManual;
@@ -430,9 +487,11 @@
       return sum + stok.stok_tersedia * hargaJualUntukUkuran(model, stok.ukuran);
     }, 0);
     const gudangKain = stokKainList.reduce((sum, kain) => sum + kain.stok_tersedia * (kain.harga_per_unit ?? 0), 0);
+    const gudangHijab = stokHijabList.reduce((sum, hijab) => sum + hijab.stok_tersedia * (hijab.harga_per_unit ?? 0), 0);
     const marginKotor = penjualan > 0 ? Math.round((labaKotor / penjualan) * 100) : 0;
     return {
       penjualan,
+      biayaAdmin,
       hpp,
       pemasukanManual,
       pemasukanKasNonPendapatan,
@@ -446,6 +505,7 @@
       gajiRegulerEstimasi,
       totalBebanGaji,
       totalPengeluaranKas,
+      pembagianLabaKas,
       kasMasuk,
       saldoAwalKas,
       labaKotor,
@@ -456,6 +516,7 @@
       gudangProduksi,
       gudangJual,
       gudangKain,
+      gudangHijab,
       marginKotor,
       transaksi: allLines.length,
     };
@@ -535,6 +596,175 @@
     expandedGudangModels = next;
   }
 
+  let snapshotPersediaan = $derived.by<SnapshotPersediaanKeuangan[]>(() => {
+    const rows: SnapshotPersediaanKeuangan[] = [];
+    for (const row of inventoryRows) {
+      for (const detail of row.details) {
+        if (detail.stok <= 0) continue;
+        rows.push({
+          id: `${row.key}:${detail.ukuran}`,
+          tipe: "barang_jadi",
+          nama: row.model,
+          ukuran: detail.ukuran,
+          satuan: "pcs",
+          jumlah: detail.stok,
+          harga_satuan: detail.hargaProduksi,
+          nilai: detail.nilaiProduksi,
+        });
+      }
+    }
+    for (const kain of stokKainList) {
+      if (kain.stok_tersedia <= 0) continue;
+      const harga = kain.harga_per_unit ?? 0;
+      rows.push({
+        id: kain.id,
+        tipe: "stok_kain",
+        nama: kain.nama_kain,
+        ...(kain.nama_warna ? { warna: kain.nama_warna } : {}),
+        satuan: kain.satuan,
+        jumlah: kain.stok_tersedia,
+        harga_satuan: harga,
+        nilai: kain.stok_tersedia * harga,
+      });
+    }
+    for (const hijab of stokHijabList) {
+      if (hijab.stok_tersedia <= 0) continue;
+      const harga = hijab.harga_per_unit ?? 0;
+      rows.push({
+        id: hijab.id,
+        tipe: "stok_hijab",
+        nama: hijab.nama_hijab,
+        ...(hijab.nama_warna ? { warna: hijab.nama_warna } : {}),
+        satuan: "pcs",
+        jumlah: hijab.stok_tersedia,
+        harga_satuan: harga,
+        nilai: hijab.stok_tersedia * harga,
+      });
+    }
+    return rows;
+  });
+
+  const snapshotNilaiPersediaan = $derived.by(() => ({
+    barangJadi: snapshotPersediaan.filter((item) => item.tipe === "barang_jadi").reduce((sum, item) => sum + item.nilai, 0),
+    kain: snapshotPersediaan.filter((item) => item.tipe === "stok_kain").reduce((sum, item) => sum + item.nilai, 0),
+    hijab: snapshotPersediaan.filter((item) => item.tipe === "stok_hijab").reduce((sum, item) => sum + item.nilai, 0),
+  }));
+
+  const closingDate = $derived(cTanggalTutup ? new Date(`${cTanggalTutup}T23:59:59`) : null);
+  const closingYear = $derived(closingDate?.getFullYear() ?? 0);
+  const closingRange = $derived.by<DateRange>(() => {
+    if (!closingDate || !closingYear) return null;
+    return {
+      start: new Date(closingYear, 0, 1, 0, 0, 0, 0),
+      end: closingDate,
+    };
+  });
+  const closingAlreadySaved = $derived(tutupBukuList.some((book) => book.tahun === closingYear));
+  const eligibleDistributionEmployees = $derived(
+    karyawanList.filter((karyawan) => karyawan.role !== "owner" && (karyawan.status_kerja ?? "aktif") === "aktif"),
+  );
+
+  const closingOpening = $derived.by(() => {
+    const previous = tutupBukuList
+      .filter((book) => book.tahun < closingYear)
+      .sort((a, b) => b.tahun - a.tahun)[0];
+    if (previous) {
+      return {
+        saldoKas: previous.saldo_awal_tahun_berikutnya?.saldo_kas ?? previous.saldo_kas_akhir ?? 0,
+        modalAwal: previous.saldo_awal_tahun_berikutnya?.modal_awal ?? 0,
+        sumber: `Tutup buku ${previous.tahun}`,
+      };
+    }
+    const cutover = saldoAwal?.tanggal ? toDate(saldoAwal.tanggal) : null;
+    if (saldoAwal && cutover && closingDate && cutover <= closingDate) {
+      return {
+        saldoKas: saldoAwal.saldo_kas,
+        modalAwal: saldoAwal.modal_awal,
+        sumber: "Saldo awal migrasi",
+      };
+    }
+    return { saldoKas: 0, modalAwal: 0, sumber: "Belum ada saldo pembuka" };
+  });
+
+  const closingLines = $derived.by(() => {
+    if (!closingRange) return [] as FinanceLine[];
+    const cutover = saldoAwal?.tanggal ? toDate(saldoAwal.tanggal) : null;
+    const cutoverDay = cutover
+      ? new Date(cutover.getFullYear(), cutover.getMonth(), cutover.getDate()).getTime()
+      : null;
+    return allLines.filter((line) => {
+      if (!inDateRange(line.tanggal, closingRange)) return false;
+      if (cutoverDay === null || !line.tanggal || closingYear > cutover!.getFullYear()) return true;
+      return new Date(line.tanggal.getFullYear(), line.tanggal.getMonth(), line.tanggal.getDate()).getTime() >= cutoverDay;
+    });
+  });
+
+  const closingSummary = $derived.by(() => {
+    const sales = closingLines.filter((line) => line.source === "penjualan");
+    const manualIncome = closingLines.filter((line) => line.source === "manual" && line.tipe === "pemasukan");
+    const manualExpense = closingLines.filter((line) => line.source === "manual" && line.tipe === "pengeluaran");
+    const regularPayroll = closingLines
+      .filter((line) => line.source === "gaji" && line.jenisGaji === "reguler")
+      .reduce((sum, line) => sum + line.nominal, 0);
+    const penjualan = sales.reduce((sum, line) => sum + line.nominal, 0);
+    const biayaAdmin = sales.reduce((sum, line) => sum + (line.biayaAdmin ?? 0), 0);
+    const hpp = sales.reduce((sum, line) => sum + (line.hpp ?? 0), 0);
+    const pemasukanManual = manualIncome
+      .filter((line) => !line.isNonProfitIncome)
+      .reduce((sum, line) => sum + line.nominal, 0);
+    const bebanOperasional = manualExpense
+      .filter((line) => !line.isInventoryPurchase && !line.isAssetPurchase && !line.isEquityDistribution)
+      .reduce((sum, line) => sum + line.nominal, 0);
+    const penyusutan = closingRange
+      ? asetList.reduce((sum, aset) => sum + hitungPenyusutanPeriode(aset, closingRange), 0)
+      : 0;
+    const labaBersih = penjualan + pemasukanManual - hpp - bebanOperasional - regularPayroll - penyusutan;
+    const kasMasuk = closingLines
+      .filter((line) => line.source === "penjualan" || (line.source === "manual" && line.tipe === "pemasukan"))
+      .reduce((sum, line) => sum + line.nominal, 0);
+    const kasKeluar = closingLines
+      .filter((line) => line.source === "gaji" || (line.source === "manual" && line.tipe === "pengeluaran"))
+      .reduce((sum, line) => sum + line.nominal, 0);
+    const saldoKasSebelumPembagian = closingOpening.saldoKas + kasMasuk - kasKeluar;
+    const pembagianLaba = Math.max(0, Number(cPembagianLaba) || 0);
+    return {
+      penjualan,
+      biayaAdmin,
+      hpp,
+      bebanOperasional: bebanOperasional + regularPayroll + penyusutan,
+      labaBersih,
+      kasMasuk,
+      kasKeluar,
+      saldoKasSebelumPembagian,
+      pembagianLaba,
+      saldoKasAkhir: saldoKasSebelumPembagian - pembagianLaba,
+      modalAkhir: closingOpening.modalAwal + labaBersih - pembagianLaba,
+    };
+  });
+
+  const pembagianKaryawan = $derived.by<PembagianLabaKaryawan[]>(() => {
+    const total = closingSummary.pembagianLaba;
+    const count = eligibleDistributionEmployees.length;
+    if (total <= 0 || count <= 0) return [];
+    const dasar = Math.floor(total / count);
+    const sisa = total - dasar * count;
+    return eligibleDistributionEmployees.map((karyawan, index) => ({
+      uid: karyawan.uid,
+      nama: karyawan.name,
+      nominal: dasar + (index < sisa ? 1 : 0),
+    }));
+  });
+
+  const canSubmitTutupBuku = $derived(
+    canCloseBooks &&
+      Boolean(closingDate && closingDate <= new Date()) &&
+      !closingAlreadySaved &&
+      closingYear >= 2000 &&
+      closingSummary.saldoKasSebelumPembagian >= 0 &&
+      closingSummary.pembagianLaba <= closingSummary.saldoKasSebelumPembagian &&
+      (closingSummary.pembagianLaba === 0 || eligibleDistributionEmployees.length > 0),
+  );
+
   let regularSalaryRows = $derived.by(() =>
     karyawanList
       .filter((karyawan) => {
@@ -583,7 +813,7 @@
 
   let expenseBreakdown = $derived.by(() => {
     const map = new Map<string, number>();
-    for (const line of reportLines.filter((item) => item.source === "manual" && item.tipe === "pengeluaran" && !item.isInventoryPurchase && !item.isAssetPurchase)) {
+    for (const line of reportLines.filter((item) => item.source === "manual" && item.tipe === "pengeluaran" && !item.isInventoryPurchase && !item.isAssetPurchase && !item.isEquityDistribution)) {
       map.set(line.kategori, (map.get(line.kategori) ?? 0) + line.nominal);
     }
     if (summary.totalBebanGaji > 0) {
@@ -681,6 +911,32 @@
     if (!value) return null;
     const date = value.toDate ? value.toDate() : new Date(value);
     return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  function saldoKasPembukaUntukRange(range: DateRange): number {
+    if (!range) return saldoAwal?.saldo_kas ?? 0;
+
+    const startDay = new Date(range.start.getFullYear(), range.start.getMonth(), range.start.getDate()).getTime();
+    const previousClose = tutupBukuList
+      .map((book) => ({ book, tanggal: toDate(book.tanggal_tutup) }))
+      .filter(({ tanggal }) => {
+        if (!tanggal) return false;
+        const closeDay = new Date(tanggal.getFullYear(), tanggal.getMonth(), tanggal.getDate()).getTime();
+        return closeDay < startDay;
+      })
+      .sort((a, b) => (b.tanggal?.getTime() ?? 0) - (a.tanggal?.getTime() ?? 0))[0];
+
+    if (previousClose) {
+      return previousClose.book.saldo_awal_tahun_berikutnya?.saldo_kas ?? previousClose.book.saldo_kas_akhir ?? 0;
+    }
+
+    const cutover = saldoAwal?.tanggal ? toDate(saldoAwal.tanggal) : null;
+    const endDay = new Date(range.end.getFullYear(), range.end.getMonth(), range.end.getDate()).getTime();
+    if (saldoAwal && cutover) {
+      const cutoverDay = new Date(cutover.getFullYear(), cutover.getMonth(), cutover.getDate()).getTime();
+      if (cutoverDay <= endDay) return saldoAwal.saldo_kas;
+    }
+    return 0;
   }
 
   function isCashMovementAfterCutover(date: Date | null): boolean {
@@ -803,7 +1059,7 @@
     loading = true;
     errorMsg = null;
     try {
-      const [keluar, models, transaksi, gaji, aset, stokJadi, stokKain, karyawan, saldo] = await Promise.all([
+      const [keluar, models, transaksi, gaji, aset, stokJadi, stokKain, stokHijab, karyawan, saldo, tutupBuku] = await Promise.all([
         getRiwayatBarangKeluarByPeriod(null),
         getModelBajuList(false),
         getTransaksiKeuangan(null),
@@ -811,8 +1067,10 @@
         getAsetPerusahaan(),
         getStokBarangJadi(),
         stokKainCache.get(),
+        getStokHijabList(),
         getKaryawanList(),
         getSaldoAwalKeuangan(),
+        getTutupBukuTahunanList(),
       ]);
       barangKeluar = keluar;
       modelList = models;
@@ -821,8 +1079,10 @@
       asetList = aset;
       stokBarangJadi = stokJadi;
       stokKainList = stokKain;
+      stokHijabList = stokHijab;
       karyawanList = karyawan;
       saldoAwal = saldo;
+      tutupBukuList = tutupBuku;
       if (saldo && sSaldoKas === "") resetSaldoAwalForm();
     } catch (error) {
       errorMsg = error instanceof Error ? error.message : "Gagal memuat data keuangan.";
@@ -957,6 +1217,49 @@
     }
   }
 
+  async function submitTutupBuku() {
+    if (!canSubmitTutupBuku || !$currentUser || !closingDate || !closingRange) return;
+    saving = true;
+    closeError = null;
+    errorMsg = null;
+    try {
+      await catatTutupBukuTahunan({
+        tahun: closingYear,
+        tanggal_tutup: closingDate,
+        saldo_kas_sebelum_pembagian: closingSummary.saldoKasSebelumPembagian,
+        pembagian_laba: closingSummary.pembagianLaba,
+        saldo_kas_akhir: closingSummary.saldoKasAkhir,
+        penjualan: closingSummary.penjualan,
+        hpp: closingSummary.hpp,
+        beban_operasional: closingSummary.bebanOperasional,
+        laba_bersih: closingSummary.labaBersih,
+        nilai_persediaan_barang_jadi: snapshotNilaiPersediaan.barangJadi,
+        nilai_persediaan_kain: snapshotNilaiPersediaan.kain,
+        nilai_persediaan_hijab: snapshotNilaiPersediaan.hijab,
+        nilai_persediaan_total: snapshotNilaiPersediaan.barangJadi + snapshotNilaiPersediaan.kain + snapshotNilaiPersediaan.hijab,
+        snapshot_persediaan: snapshotPersediaan,
+        pembagian_karyawan: pembagianKaryawan,
+        saldo_awal_tahun_berikutnya: {
+          tahun: closingYear + 1,
+          saldo_kas: closingSummary.saldoKasAkhir,
+          nilai_persediaan: snapshotNilaiPersediaan.barangJadi + snapshotNilaiPersediaan.kain + snapshotNilaiPersediaan.hijab,
+          modal_awal: closingSummary.modalAkhir,
+        },
+        catatan: cCatatan,
+        dibuat_oleh_uid: $currentUser.uid,
+        dibuat_oleh_nama: $currentUser.name || $currentUser.email,
+      });
+      showSuccess(`Tutup buku tahun ${closingYear} berhasil disimpan.`);
+      cPembagianLaba = "0";
+      cCatatan = "";
+      await load();
+    } catch (error) {
+      closeError = error instanceof Error ? error.message : "Gagal menyimpan tutup buku.";
+    } finally {
+      saving = false;
+    }
+  }
+
   async function hapusSaldoAwal() {
     if (!saldoAwal || !confirm("Hapus saldo awal migrasi? Ringkasan kas akan kembali menghitung dari transaksi yang tercatat.")) return;
     saving = true;
@@ -988,6 +1291,7 @@
         head: [["Komponen", "Nominal"]],
         body: [
           ["Penjualan", rupiah(summary.penjualan)],
+          ["Biaya admin marketplace (sudah dipotong)", rupiah(summary.biayaAdmin)],
           ["HPP / biaya produksi barang", rupiah(summary.hpp)],
           ["Laba kotor", rupiah(summary.labaKotor)],
           ["Pemasukan lain", rupiah(summary.pemasukanManual)],
@@ -1007,12 +1311,14 @@
       });
       autoTable(doc, {
         startY: (doc as any).lastAutoTable.finalY + 8,
-        head: [["Tanggal", "Tipe", "Kategori", "Deskripsi", "Nominal", "HPP", "Laba Kotor"]],
+        head: [["Tanggal", "Tipe", "Kategori", "Deskripsi", "Bruto", "Admin", "Kas masuk bersih", "HPP", "Laba Kotor"]],
         body: filteredLines.map((line) => [
           formatDate(line.tanggal),
           line.tipe === "pemasukan" ? "Pemasukan" : "Pengeluaran",
           line.kategori,
           line.deskripsi,
+          line.nilaiBruto != null ? rupiah(line.nilaiBruto) : "-",
+          line.biayaAdmin != null ? rupiah(line.biayaAdmin) : "-",
           rupiah(line.nominal),
           line.hpp ? rupiah(line.hpp) : "-",
           line.labaKotor !== undefined ? rupiah(line.labaKotor) : "-",
@@ -1284,6 +1590,10 @@
           <span class="text-sm text-gray-500">Pendapatan penjualan</span>
           <span class="font-semibold text-gray-900">{rupiah(summary.penjualan)}</span>
         </div>
+        <div class="flex items-center justify-between bg-orange-50 px-4 py-3">
+          <span class="text-sm text-orange-800">Biaya admin marketplace <span class="text-xs text-orange-600">(sudah dipotong dari penjualan)</span></span>
+          <span class="font-semibold text-orange-700">{rupiah(summary.biayaAdmin)}</span>
+        </div>
         <div class="flex items-center justify-between px-4 py-3">
           <span class="text-sm text-gray-500">HPP / biaya produksi barang</span>
           <span class="font-semibold text-orange-700">({rupiah(summary.hpp)})</span>
@@ -1492,7 +1802,7 @@
     <section class="mb-4 rounded-xl border border-gray-100 bg-white p-3 shadow-sm">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div class="flex flex-wrap items-center gap-2">
-          {#each [["transaksi", "Transaksi"], ["saldo_awal", "Saldo Awal"], ["aset", "Aset"], ["gudang", "Tabungan Gudang"]] as panel}
+          {#each [["transaksi", "Transaksi"], ["saldo_awal", "Saldo Awal"], ["aset", "Aset"], ["gudang", "Tabungan Gudang"], ["tutup_buku", "Tutup Buku"]] as panel}
             <Button
               size="sm"
               variant={activePanel === panel[0] ? "default" : "outline"}
@@ -1603,6 +1913,7 @@
                     <p class="text-xs text-gray-400">
                       Otomatis barang keluar · HPP {rupiah(line.hpp ?? 0)} · laba kotor {rupiah(line.labaKotor ?? 0)}
                     </p>
+                    <p class="text-xs text-gray-400">Kanal {line.kanal ?? line.deskripsi} · bruto {rupiah(line.nilaiBruto ?? line.nominal)} · admin {rupiah(line.biayaAdmin ?? 0)} · kas masuk bersih {rupiah(line.nominal)}</p>
                   {:else if line.referensi}
                     <p class="text-xs text-gray-400">Ref: {line.referensi}</p>
                   {/if}
@@ -1621,14 +1932,18 @@
                 {#if line.source === "manual"}
                   {@const trx = transaksiManual.find((item) => item.id === line.id)}
                   {#if trx}
-                    <div class="flex justify-end gap-1">
-                      <Button variant="ghost" size="icon-sm" aria-label="Edit transaksi" onclick={() => openEdit(trx)}>
-                        <PencilIcon class="h-4 w-4" />
-                      </Button>
-                      <Button variant="ghost" size="icon-sm" aria-label="Hapus transaksi" class="text-red-600 hover:text-red-700" onclick={() => hapusTransaksi(trx)}>
-                        <Trash2Icon class="h-4 w-4" />
-                      </Button>
-                    </div>
+                    {#if line.isLocked}
+                      <span class="text-xs text-gray-400">Terkunci oleh tutup buku</span>
+                    {:else}
+                      <div class="flex justify-end gap-1">
+                        <Button variant="ghost" size="icon-sm" aria-label="Edit transaksi" onclick={() => openEdit(trx)}>
+                          <PencilIcon class="h-4 w-4" />
+                        </Button>
+                        <Button variant="ghost" size="icon-sm" aria-label="Hapus transaksi" class="text-red-600 hover:text-red-700" onclick={() => hapusTransaksi(trx)}>
+                          <Trash2Icon class="h-4 w-4" />
+                        </Button>
+                      </div>
+                    {/if}
                   {/if}
                 {:else}
                   <span class="text-xs text-gray-300">Auto</span>
@@ -1652,7 +1967,7 @@
     <section class="rounded-xl border border-gray-100 bg-white shadow-sm">
       <div class="border-b border-gray-100 p-4">
         <h2 class="text-sm font-semibold text-gray-800">Saldo Awal Migrasi</h2>
-        <p class="mt-0.5 text-xs text-gray-400">Masukkan posisi kas pada tanggal mulai memakai sistem. Data ini bukan transaksi baru.</p>
+        <p class="mt-0.5 text-xs text-gray-400">Masukkan posisi kas pada tanggal mulai memakai sistem. Simpan sekali untuk cut-over pertama.</p>
       </div>
       <div class="p-5">
         <div class="grid gap-4 md:grid-cols-3">
@@ -1671,7 +1986,7 @@
           </div>
         </div>
         <div class="mt-4 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-xs leading-relaxed text-blue-800">
-          Saldo awal menjadi titik awal kas sejak tanggal cut-over; bukan pendapatan, beban, transaksi baru, atau bagian chart arus kas. Transaksi lama sebelum tanggal ini tidak dihitung lagi ke saldo kas agar tidak double counting.
+          Isi hanya kas dan bank yang benar-benar tersisa. Stok awal dicatat dari menu stok dan tetap menjadi persediaan, bukan kas. Saldo awal bukan pendapatan, beban, transaksi baru, atau bagian chart arus kas. Setelah tahun pertama selesai, gunakan panel Tutup Buku dan jangan mengganti saldo migrasi.
         </div>
         <div class="mt-4">
           <label for="saldo-awal-catatan" class="mb-1.5 block text-xs font-medium text-gray-600">Catatan migrasi</label>
@@ -1753,6 +2068,169 @@
         </Table.Root>
       {/if}
     </section>
+  {:else if activePanel === "tutup_buku"}
+    <section class="rounded-xl border border-gray-100 bg-white shadow-sm">
+      <div class="border-b border-gray-100 p-4">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 class="text-sm font-semibold text-gray-800">Tutup Buku Tahunan</h2>
+            <p class="mt-0.5 text-xs text-gray-400">Kunci hasil satu tahun dan siapkan saldo pembuka tahun berikutnya.</p>
+          </div>
+          <span class="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">Owner / Developer</span>
+        </div>
+      </div>
+
+      <div class="space-y-5 p-5">
+        {#if !canCloseBooks}
+          <div class="rounded-lg border border-yellow-100 bg-yellow-50 px-4 py-3 text-xs leading-relaxed text-yellow-800">
+            Anda dapat melihat riwayat tutup buku, tetapi hanya Owner atau Developer yang dapat menyimpan penutupan periode.
+          </div>
+        {/if}
+
+        <div class="grid gap-4 md:grid-cols-3">
+          <div>
+            <label for="tutup-buku-tanggal" class="mb-1.5 block text-xs font-medium text-gray-600">Tanggal tutup</label>
+            <Input id="tutup-buku-tanggal" type="date" bind:value={cTanggalTutup} max={new Date().toISOString().slice(0, 10)} disabled={!canCloseBooks || closingAlreadySaved} />
+            <p class="mt-1 text-[11px] text-gray-400">Periode dihitung dari 1 Januari sampai tanggal ini.</p>
+          </div>
+          <div>
+            <label for="tutup-buku-pembagian" class="mb-1.5 block text-xs font-medium text-gray-600">Total pembagian laba</label>
+            <Input id="tutup-buku-pembagian" type="number" min="0" bind:value={cPembagianLaba} placeholder="0" disabled={!canCloseBooks || closingAlreadySaved} />
+            <p class="mt-1 text-[11px] text-gray-400">Dibagi rata kepada karyawan aktif non-owner.</p>
+          </div>
+          <div class="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2.5">
+            <p class="text-[11px] text-blue-700">Saldo pembuka</p>
+            <p class="mt-1 text-sm font-semibold text-blue-900">{rupiah(closingOpening.saldoKas)}</p>
+            <p class="mt-0.5 text-[11px] text-blue-700">{closingOpening.sumber}</p>
+          </div>
+        </div>
+
+        <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div class="rounded-lg border border-gray-100 bg-gray-50 p-3">
+            <p class="text-[11px] text-gray-400">Laba bersih</p>
+            <p class="mt-1 font-semibold {closingSummary.labaBersih < 0 ? 'text-red-700' : 'text-gray-900'}">{rupiah(closingSummary.labaBersih)}</p>
+          </div>
+          <div class="rounded-lg border border-gray-100 bg-gray-50 p-3">
+            <p class="text-[11px] text-gray-400">Kas sebelum pembagian</p>
+            <p class="mt-1 font-semibold {closingSummary.saldoKasSebelumPembagian < 0 ? 'text-red-700' : 'text-gray-900'}">{rupiah(closingSummary.saldoKasSebelumPembagian)}</p>
+          </div>
+          <div class="rounded-lg border border-gray-100 bg-gray-50 p-3">
+            <p class="text-[11px] text-gray-400">Persediaan akhir</p>
+            <p class="mt-1 font-semibold text-teal-700">{rupiah(snapshotNilaiPersediaan.barangJadi + snapshotNilaiPersediaan.kain + snapshotNilaiPersediaan.hijab)}</p>
+            <p class="mt-0.5 text-[11px] text-gray-400">Baju, kain, dan hijab</p>
+          </div>
+          <div class="rounded-lg border border-gray-100 bg-gray-50 p-3">
+            <p class="text-[11px] text-gray-400">Kas tahun berikutnya</p>
+            <p class="mt-1 font-semibold {closingSummary.saldoKasAkhir < 0 ? 'text-red-700' : 'text-blue-700'}">{rupiah(closingSummary.saldoKasAkhir)}</p>
+          </div>
+        </div>
+
+        <div class="rounded-lg border border-gray-100 px-4 py-3 text-xs leading-relaxed text-gray-500">
+          Stok tidak dikurangi atau dipindahkan saat tutup buku. Sistem hanya menyimpan snapshot nilai persediaan dan membawa kas, persediaan, serta estimasi ekuitas ke tahun berikutnya.
+        </div>
+
+        {#if closingSummary.pembagianLaba > 0}
+          <div class="rounded-lg border border-gray-100">
+            <div class="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 px-4 py-3">
+              <div>
+                <p class="text-xs font-semibold text-gray-800">Rincian pembagian</p>
+                <p class="mt-0.5 text-[11px] text-gray-400">{eligibleDistributionEmployees.length} karyawan aktif · dibulatkan dengan sisa ke urutan pertama</p>
+              </div>
+              <span class="text-sm font-semibold text-red-700">{rupiah(closingSummary.pembagianLaba)}</span>
+            </div>
+            {#if pembagianKaryawan.length > 0}
+              <div class="grid gap-x-5 gap-y-2 p-4 sm:grid-cols-2 lg:grid-cols-3">
+                {#each pembagianKaryawan as bagian}
+                  <div class="flex items-center justify-between gap-3 text-xs">
+                    <span class="truncate text-gray-600">{bagian.nama}</span>
+                    <span class="shrink-0 font-semibold text-gray-900">{rupiah(bagian.nominal)}</span>
+                  </div>
+                {/each}
+              </div>
+            {:else}
+              <p class="p-4 text-xs text-red-700">Belum ada karyawan aktif non-owner untuk menerima pembagian.</p>
+            {/if}
+          </div>
+        {/if}
+
+        {#if closingAlreadySaved}
+          <div class="rounded-lg border border-green-100 bg-green-50 px-4 py-3 text-xs leading-relaxed text-green-800">
+            Tahun {closingYear} sudah ditutup. Pilih tanggal pada tahun lain untuk membuat tutup buku baru.
+          </div>
+        {:else if closingDate && closingDate > new Date()}
+          <div class="rounded-lg border border-yellow-100 bg-yellow-50 px-4 py-3 text-xs leading-relaxed text-yellow-800">
+            Tanggal tutup tidak boleh melewati hari ini.
+          </div>
+        {:else if closingSummary.saldoKasSebelumPembagian < 0}
+          <div class="rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-xs leading-relaxed text-red-800">
+            Kas hasil perhitungan periode ini negatif. Rekonsiliasi saldo awal dan transaksi sebelum menutup buku.
+          </div>
+        {:else if closingSummary.pembagianLaba > closingSummary.saldoKasSebelumPembagian}
+          <div class="rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-xs leading-relaxed text-red-800">
+            Pembagian laba tidak boleh lebih besar dari kas yang tersedia.
+          </div>
+        {/if}
+
+        {#if closeError}
+          <div class="rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-xs text-red-800">{closeError}</div>
+        {/if}
+
+        <div>
+          <label for="tutup-buku-catatan" class="mb-1.5 block text-xs font-medium text-gray-600">Catatan tutup buku</label>
+          <textarea id="tutup-buku-catatan" rows="3" bind:value={cCatatan} disabled={!canCloseBooks || closingAlreadySaved} placeholder="Contoh: Opname 31 Desember dan pembagian laba tahun berjalan..." class="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none transition focus:border-gray-400 disabled:cursor-not-allowed disabled:bg-gray-50"></textarea>
+        </div>
+
+        <div class="flex justify-end">
+          <Button onclick={submitTutupBuku} disabled={saving || !canSubmitTutupBuku}>
+            <BanknoteIcon class="h-4 w-4" />
+            {saving ? "Menyimpan..." : `Tutup Buku ${closingYear}`}
+          </Button>
+        </div>
+
+        <div class="border-t border-gray-100 pt-5">
+          <div class="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <h3 class="text-sm font-semibold text-gray-800">Riwayat tutup buku</h3>
+              <p class="mt-0.5 text-xs text-gray-400">Setiap tahun disimpan sebagai snapshot terpisah.</p>
+            </div>
+            <span class="text-xs text-gray-400">{tutupBukuList.length} tahun</span>
+          </div>
+          {#if tutupBukuList.length === 0}
+            <div class="rounded-lg border border-dashed border-gray-200 py-10 text-center text-xs text-gray-400">Belum ada tahun yang ditutup.</div>
+          {:else}
+            <div class="overflow-x-auto rounded-lg border border-gray-100">
+              <Table.Root class="min-w-[760px]">
+                <Table.Header>
+                  <Table.Row class="bg-gray-50 hover:bg-gray-50">
+                    <Table.Head>Tahun</Table.Head>
+                    <Table.Head class="text-right">Laba bersih</Table.Head>
+                    <Table.Head class="text-right">Pembagian</Table.Head>
+                    <Table.Head class="text-right">Persediaan</Table.Head>
+                    <Table.Head class="text-right">Kas tahun berikutnya</Table.Head>
+                    <Table.Head>Karyawan</Table.Head>
+                  </Table.Row>
+                </Table.Header>
+                <Table.Body>
+                  {#each tutupBukuList as book}
+                    <Table.Row>
+                      <Table.Cell>
+                        <p class="font-medium text-gray-900">{book.tahun}</p>
+                        <p class="text-[11px] text-gray-400">{formatDate(toDate(book.tanggal_tutup))}</p>
+                      </Table.Cell>
+                      <Table.Cell class="text-right font-semibold {book.laba_bersih < 0 ? 'text-red-700' : 'text-gray-900'}">{rupiah(book.laba_bersih)}</Table.Cell>
+                      <Table.Cell class="text-right text-red-700">{rupiah(book.pembagian_laba)}</Table.Cell>
+                      <Table.Cell class="text-right text-teal-700">{rupiah(book.nilai_persediaan_total)}</Table.Cell>
+                      <Table.Cell class="text-right text-blue-700">{rupiah(book.saldo_awal_tahun_berikutnya?.saldo_kas ?? book.saldo_kas_akhir)}</Table.Cell>
+                      <Table.Cell class="text-sm text-gray-600">{book.pembagian_karyawan?.length ?? 0} orang</Table.Cell>
+                    </Table.Row>
+                  {/each}
+                </Table.Body>
+              </Table.Root>
+            </div>
+          {/if}
+        </div>
+      </div>
+    </section>
   {:else}
     <section class="rounded-xl border border-gray-100 bg-white shadow-sm">
       <div class="flex items-center justify-between border-b border-gray-100 p-4">
@@ -1772,6 +2250,10 @@
           <div>
             <p class="text-xs text-gray-400">Nilai stok kain</p>
             <p class="font-bold text-cyan-700">{rupiah(summary.gudangKain)}</p>
+          </div>
+          <div>
+            <p class="text-xs text-gray-400">Nilai stok hijab</p>
+            <p class="font-bold text-violet-700">{rupiah(summary.gudangHijab)}</p>
           </div>
         </div>
       </div>

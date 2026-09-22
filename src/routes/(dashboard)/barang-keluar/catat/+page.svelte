@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import { catatBarangKeluar } from "$lib/firebase/barang-jadi";
+  import { getKanalPenjualan } from "$lib/firebase/penjualan";
   import { barangJadiCache, modelBajuCache, barangKeluarCache, modelHijabCache, stokHijabCache } from "$lib/stores/data-cache.svelte";
   import { currentUser } from "$lib/stores/auth.store";
   import {
@@ -17,6 +18,7 @@
     type StokHijab,
     type UkuranBaju,
     type VarianPenjualan,
+    type KanalPenjualan,
 } from "$lib/types";
   import { hargaCustomVarianUntukUkuran } from "$lib/sales/penjualan";
   import * as Select from "$lib/components/ui/select/index.js";
@@ -68,6 +70,7 @@
   let stokHijabList = $state<StokHijab[]>([]);
   let modelHijabList = $state<ModelHijab[]>([]);
   let modelList = $state<ModelBaju[]>([]);
+  let kanalList = $state<KanalPenjualan[]>([]);
 
   let fTujuan = $state("");
   let fNamaReseller = $state("");
@@ -83,6 +86,18 @@
   let draftItems = $state<DraftBarangKeluarItem[]>([]);
   let importFileName = $state("");
   let importWarningLines = $state<string[]>([]);
+  let tujuanOptions = $derived.by(() => {
+    const options: string[] = [];
+    const configuredNames = new Set(kanalList.map((channel) => channel.nama.trim().toLowerCase()));
+    const values = [
+      ...kanalList.filter((channel) => channel.aktif).map((channel) => channel.nama),
+      ...TUJUAN_PENGIRIMAN_OPTIONS.filter((value) => !configuredNames.has(value.trim().toLowerCase())),
+    ];
+    for (const value of values) {
+      if (!options.some((existing) => existing.trim().toLowerCase() === value.trim().toLowerCase())) options.push(value);
+    }
+    return options;
+  });
 
   let modelOptions = $derived.by<ModelOption[]>(() => {
     const map = new Map<string, ModelOption>();
@@ -566,6 +581,11 @@
         stokHijabCache.get(),
         modelHijabCache.get(),
       ]);
+      try {
+        kanalList = await getKanalPenjualan();
+      } catch {
+        kanalList = [];
+      }
     } catch {
       errorMsg = "Gagal memuat data model dan stok.";
     } finally {
@@ -688,7 +708,7 @@
                 {/if}
               </Select.Trigger>
               <Select.Content preventScroll={false}>
-                {#each TUJUAN_PENGIRIMAN_OPTIONS as t}
+                {#each tujuanOptions as t}
                   <Select.Item value={t}>{t}</Select.Item>
                 {/each}
               </Select.Content>

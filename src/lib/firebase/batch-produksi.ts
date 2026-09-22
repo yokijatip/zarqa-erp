@@ -59,6 +59,12 @@ function buildStokPotonganHijabDocId(modelId: string, warnaId?: string, namaWarn
   return `${modelId}__tanpa_ukuran__${warna}`;
 }
 
+function buildStokBarangJadiDocId(modelId: string, ukuran: string, namaWarna?: string): string {
+  const ukuranKey = ukuranDocKey(ukuran);
+  if (!namaWarna) return `${modelId}__${ukuranKey}`;
+  return `${modelId}__${ukuranKey}__${warnaDocKey(namaWarna)}`;
+}
+
 function buildSumberCutting(batch: BatchProduksi, ukuran: string | undefined, jumlahPcs: number): SumberCutting {
   return {
     batch_id: batch.id,
@@ -1123,6 +1129,7 @@ async function completeBatchHijabProduksi(
   updatedByUid: string,
   updatedByNama: string,
   riwayat: Omit<RiwayatProses, 'status_ke' | 'updated_by_uid' | 'updated_by_nama' | 'timestamp'>,
+  steamWorker?: PenugasanWorker,
 ): Promise<void> {
   const batch = await getBatchById(batchId);
   if (!batch?.model_hijab_id) throw new Error('Batch hijab tidak memiliki model hijab');
@@ -1172,6 +1179,7 @@ async function completeBatchHijabProduksi(
     transaction.update(batchRef, {
       status: 'COMPLETED' as StatusBatch,
       pcs_saat_ini: jumlahMasuk,
+      ...(steamWorker ? { 'penugasan.steam': steamWorker } : {}),
       updatedAt: serverTimestamp(),
     });
     transaction.set(riwayatBatchRef, {
@@ -1212,6 +1220,288 @@ async function completeBatchHijabProduksi(
   });
 }
 
+// Catat sebagian hasil Steam pada batch yang sama. Hasil langsung masuk stok,
+// sedangkan sisa pcs tetap berada di STEAM_IN_PROGRESS untuk petugas berikutnya.
+export async function recordSteamPartialProgress(
+  batchId: string,
+  updatedByUid: string,
+  updatedByNama: string,
+  riwayat: Omit<RiwayatProses, 'status_ke' | 'updated_by_uid' | 'updated_by_nama' | 'timestamp'>,
+  detailBerhasil?: DetailUkuran[],
+  steamWorker?: PenugasanWorker,
+): Promise<void> {
+  riwayat = {
+    ...riwayat,
+    ...(detailBerhasil ? { detail_ukuran: normalizeDetailUkuran(detailBerhasil) } : {}),
+    ...(riwayat.detail_reject ? { detail_reject: normalizeDetailUkuran(riwayat.detail_reject) } : {}),
+  };
+
+  const batch = await getBatchById(batchId);
+  if (!batch) throw new Error('Batch tidak ditemukan');
+  if (batch.status !== 'STEAM_IN_PROGRESS') {
+    throw new Error('Setor parsial Steam hanya bisa dilakukan saat batch sedang Steam');
+  }
+  if (batch.jenis_produk === 'hijab' && !batch.model_hijab_id) {
+    throw new Error('Batch hijab tidak memiliki model hijab');
+  }
+
+  const pcsBerhasil = Math.max(0, Math.floor(Number(riwayat.pcs_berhasil) || 0));
+  const pcsReject = Math.max(0, Math.floor(Number(riwayat.pcs_reject) || 0));
+  const totalSetor = pcsBerhasil + pcsReject;
+  const sisaSebelum = batch.jenis_produk === 'hijab'
+    ? Math.max(0, Math.floor(batch.pcs_saat_ini ?? batch.total_pcs))
+    : totalDetailUkuran(batch.detail_ukuran);
+
+  if (pcsBerhasil <= 0) throw new Error('PCS berhasil harus lebih dari 0');
+  if (totalSetor <= 0 || totalSetor >= sisaSebelum) {
+    throw new Error('Untuk setoran terakhir, gunakan tombol Selesaikan Steam');
+  }
+
+  const successDetail = batch.jenis_produk === 'hijab'
+    ? []
+    : normalizeDetailUkuran(detailBerhasil ?? []);
+  const rejectDetail = batch.jenis_produk === 'hijab'
+    ? []
+    : normalizeDetailUkuran(riwayat.detail_reject ?? inferRejectDetail(batch, pcsReject, successDetail));
+
+  if (batch.jenis_produk !== 'hijab') {
+    if (totalDetailUkuran(successDetail) !== pcsBerhasil) {
+      throw new Error('Rincian ukuran hasil Steam tidak sesuai dengan total pcs berhasil');
+    }
+    if (totalDetailUkuran(rejectDetail) !== pcsReject) {
+      throw new Error('Rincian ukuran reject tidak sesuai dengan total pcs reject');
+    }
+  }
+
+  const stokBarangJadiRefs = new Map<string, ReturnType<typeof doc>>();
+  for (const item of successDetail) {
+    const q = batch.nama_warna
+      ? query(
+          collection(db, 'stok_barang_jadi'),
+          where('model_id', '==', batch.model_id),
+          where('ukuran', 'in', ukuranAliases(item.ukuran)),
+          where('nama_warna', '==', batch.nama_warna),
+        )
+      : query(
+          collection(db, 'stok_barang_jadi'),
+          where('model_id', '==', batch.model_id),
+          where('ukuran', 'in', ukuranAliases(item.ukuran)),
+        );
+    const snap = await getDocs(q);
+    const ref = snap.empty
+      ? doc(db, 'stok_barang_jadi', buildStokBarangJadiDocId(batch.model_id, item.ukuran, batch.nama_warna))
+      : snap.docs[0].ref;
+    stokBarangJadiRefs.set(item.ukuran, ref);
+  }
+
+  const stokHijabRef = batch.jenis_produk === 'hijab'
+    ? doc(
+        db,
+        'stok_hijab',
+        batch.stok_hijab_id || buildStokHijabDocId(batch.model_hijab_id || batch.model_id, batch.warna_id, batch.nama_warna),
+      )
+    : null;
+  const modelHijabRef = batch.jenis_produk === 'hijab' && batch.model_hijab_id
+    ? doc(db, 'model_hijab', batch.model_hijab_id)
+    : null;
+  const batchRef = doc(db, COL, batchId);
+  const riwayatRef = doc(collection(db, COL, batchId, 'riwayat_proses'));
+
+  await runTransaction(db, async (transaction) => {
+    const batchSnap = await transaction.get(batchRef);
+    if (!batchSnap.exists()) throw new Error('Batch tidak ditemukan');
+    const currentBatch = normalizeBatchSnapshot(batchSnap.id, batchSnap.data());
+    if (currentBatch.status !== 'STEAM_IN_PROGRESS') {
+      throw new Error('Status batch sudah berubah, muat ulang halaman lalu coba lagi');
+    }
+
+    const liveSisa = currentBatch.jenis_produk === 'hijab'
+      ? Math.max(0, Math.floor(currentBatch.pcs_saat_ini ?? currentBatch.total_pcs))
+      : totalDetailUkuran(currentBatch.detail_ukuran);
+    if (totalSetor >= liveSisa) {
+      throw new Error('Sisa batch berubah. Gunakan Selesaikan Steam untuk setoran terakhir');
+    }
+
+    const currentSuccessBySize = new Map(successDetail.map((item) => [canonicalUkuran(item.ukuran), item.jumlah_pcs]));
+    const currentRejectBySize = new Map(rejectDetail.map((item) => [canonicalUkuran(item.ukuran), item.jumlah_pcs]));
+    const remainingDetail = currentBatch.detail_ukuran
+      .map((item) => ({
+        ukuran: canonicalUkuran(item.ukuran),
+        jumlah_pcs: item.jumlah_pcs - (currentSuccessBySize.get(canonicalUkuran(item.ukuran)) ?? 0) - (currentRejectBySize.get(canonicalUkuran(item.ukuran)) ?? 0),
+      }))
+      .filter((item) => item.jumlah_pcs > 0);
+
+    if (currentBatch.jenis_produk !== 'hijab') {
+      for (const item of currentBatch.detail_ukuran) {
+        const ukuran = canonicalUkuran(item.ukuran);
+        const used = (currentSuccessBySize.get(ukuran) ?? 0) + (currentRejectBySize.get(ukuran) ?? 0);
+        if (used < 0 || used > item.jumlah_pcs) {
+          throw new Error(`Jumlah ukuran ${ukuran} melebihi sisa pekerjaan`);
+        }
+      }
+    }
+
+    // Semua dokumen yang dibaca transaksi harus diambil sebelum ada write.
+    const hijabStockReads = currentBatch.jenis_produk === 'hijab' && stokHijabRef && modelHijabRef
+      ? await Promise.all([
+          transaction.get(stokHijabRef),
+          transaction.get(modelHijabRef),
+        ])
+      : null;
+    const bajuStockReads = currentBatch.jenis_produk !== 'hijab'
+      ? await Promise.all(
+          successDetail.map(async (item) => {
+            const stokRef = stokBarangJadiRefs.get(canonicalUkuran(item.ukuran));
+            if (!stokRef) return null;
+            return { item, stokRef, stokSnap: await transaction.get(stokRef) };
+          }),
+        )
+      : [];
+
+    const history = {
+      ...riwayat,
+      ...(currentBatch.jenis_produk === 'hijab' ? {} : { detail_ukuran: successDetail, detail_reject: rejectDetail }),
+      tipe: 'setor_proses' as const,
+      status_dari: currentBatch.status,
+      status_ke: currentBatch.status,
+      updated_by_uid: updatedByUid,
+      updated_by_nama: updatedByNama,
+      ...(pcsReject > 0 && currentBatch.jenis_produk !== 'hijab'
+        ? { reject_attribusi: resolveRejectAttribusi(currentBatch, currentBatch.status) }
+        : {}),
+      timestamp: serverTimestamp(),
+    };
+
+    transaction.update(batchRef, {
+      ...(currentBatch.jenis_produk === 'hijab'
+        ? { pcs_saat_ini: liveSisa - totalSetor }
+        : { detail_ukuran: remainingDetail, pcs_saat_ini: liveSisa - totalSetor }),
+      ...(steamWorker ? { 'penugasan.steam': steamWorker } : {}),
+      updatedAt: serverTimestamp(),
+    });
+    transaction.set(riwayatRef, history);
+
+    if (currentBatch.jenis_produk === 'hijab' && stokHijabRef && modelHijabRef) {
+      const [stokSnap, modelSnap] = hijabStockReads ?? [];
+      if (!stokSnap || !modelSnap) {
+        throw new Error('Referensi stok hijab tidak ditemukan');
+      }
+      const stokSebelum = stokSnap.exists()
+        ? Number((stokSnap.data() as { stok_tersedia?: number }).stok_tersedia) || 0
+        : 0;
+      const hargaProduksi = Math.max(
+        0,
+        Number(
+          currentBatch.harga_produksi_per_pcs ??
+            (modelSnap.data() as { harga_produksi?: number } | undefined)?.harga_produksi,
+        ) || 0,
+      );
+      const stokSesudah = stokSebelum + pcsBerhasil;
+      const stokPayload = {
+        model_hijab_id: currentBatch.model_hijab_id,
+        nama_hijab: currentBatch.nama_model,
+        ...(currentBatch.warna_id ? { warna_id: currentBatch.warna_id } : {}),
+        ...(currentBatch.nama_warna ? { nama_warna: currentBatch.nama_warna } : {}),
+        ...(currentBatch.kode_hex_warna ? { kode_hex_warna: currentBatch.kode_hex_warna } : {}),
+        satuan: 'pcs' as const,
+        stok_tersedia: stokSesudah,
+        total_masuk: (Number(stokSnap.data()?.total_masuk) || 0) + pcsBerhasil,
+        total_keluar: Number(stokSnap.data()?.total_keluar) || 0,
+        ...(hargaProduksi > 0 ? { harga_per_unit: hargaProduksi } : {}),
+        updatedAt: serverTimestamp(),
+      };
+      if (!stokSnap.exists()) transaction.set(stokHijabRef, stokPayload);
+      else transaction.update(stokHijabRef, stokPayload);
+
+      transaction.set(doc(collection(db, 'stok_hijab', stokHijabRef.id, 'riwayat')), {
+        tipe: 'hasil_produksi',
+        jumlah: pcsBerhasil,
+        stok_sebelum: stokSebelum,
+        stok_sesudah: stokSesudah,
+        batch_id: batchId,
+        catatan: `Hasil Steam parsial batch hijab ${currentBatch.nama_model}`,
+        timestamp: serverTimestamp(),
+      });
+    }
+
+    if (currentBatch.jenis_produk !== 'hijab') {
+      const penugasan = {
+        ...(currentBatch.penugasan ?? {}),
+        ...(steamWorker ? { steam: steamWorker } : {}),
+      };
+
+      for (const entry of bajuStockReads) {
+        if (!entry) continue;
+        const { item, stokRef, stokSnap } = entry;
+        const stokSebelum = stokSnap.exists()
+          ? Number((stokSnap.data() as { stok_tersedia?: number }).stok_tersedia) || 0
+          : 0;
+        const stokSesudah = stokSebelum + item.jumlah_pcs;
+        const lot: SumberProduksi = {
+          batch_id: currentBatch.id,
+          jumlah_pcs: item.jumlah_pcs,
+          ...(Object.keys(penugasan).length > 0 ? { penugasan } : {}),
+        };
+        if (!stokSnap.exists()) {
+          transaction.set(stokRef, {
+            model_id: currentBatch.model_id,
+            nama_model: currentBatch.nama_model,
+            ...(currentBatch.nama_warna ? { nama_warna: currentBatch.nama_warna } : {}),
+            ...(currentBatch.kode_hex_warna ? { kode_hex_warna: currentBatch.kode_hex_warna } : {}),
+            ukuran: item.ukuran,
+            stok_tersedia: stokSesudah,
+            total_masuk: item.jumlah_pcs,
+            total_keluar: 0,
+            sumber_produksi: [lot],
+            updatedAt: serverTimestamp(),
+          });
+        } else {
+          const stok = stokSnap.data() as { stok_tersedia?: number; total_masuk?: number; sumber_produksi?: SumberProduksi[] };
+          transaction.update(stokRef, {
+            stok_tersedia: stokSesudah,
+            total_masuk: (Number(stok.total_masuk) || 0) + item.jumlah_pcs,
+            sumber_produksi: appendSumberProduksiLot(stok.sumber_produksi, lot),
+            ...(currentBatch.nama_warna ? { nama_warna: currentBatch.nama_warna } : {}),
+            ...(currentBatch.kode_hex_warna ? { kode_hex_warna: currentBatch.kode_hex_warna } : {}),
+            updatedAt: serverTimestamp(),
+          });
+        }
+        transaction.set(doc(collection(db, 'riwayat_barang_jadi')), {
+          model_id: currentBatch.model_id,
+          nama_model: currentBatch.nama_model,
+          ...(currentBatch.nama_warna ? { nama_warna: currentBatch.nama_warna } : {}),
+          ...(currentBatch.kode_hex_warna ? { kode_hex_warna: currentBatch.kode_hex_warna } : {}),
+          ukuran: item.ukuran,
+          tipe: 'masuk_produksi',
+          jumlah: item.jumlah_pcs,
+          stok_sebelum: stokSebelum,
+          stok_sesudah: stokSesudah,
+          catatan: 'Hasil Steam parsial',
+          batch_id: batchId,
+          dicatat_oleh_uid: updatedByUid,
+          dicatat_oleh_nama: updatedByNama,
+          timestamp: serverTimestamp(),
+        });
+      }
+
+      if (rejectDetail.length > 0) {
+        createRejectItemsInTransaction(transaction, {
+          batchId,
+          modelId: currentBatch.model_id,
+          namaModel: currentBatch.nama_model,
+          namaWarna: currentBatch.nama_warna,
+          kodeHexWarna: currentBatch.kode_hex_warna,
+          asalProses: currentBatch.status,
+          detailReject: rejectDetail,
+          uid: updatedByUid,
+          nama: updatedByNama,
+          attribusi: resolveRejectAttribusi(currentBatch, currentBatch.status),
+        });
+      }
+    }
+  });
+}
+
 // Selesaikan batch + tambah stok barang jadi dalam satu transaction
 // Bisa dipanggil dari STEAM_IN_PROGRESS (skip STEAM_DONE) atau STEAM_DONE (recovery)
 export async function completeBatchProduksi(
@@ -1219,7 +1509,8 @@ export async function completeBatchProduksi(
   updatedByUid: string,
   updatedByNama: string,
   riwayat: Omit<RiwayatProses, 'status_ke' | 'updated_by_uid' | 'updated_by_nama' | 'timestamp'>,
-  newDetailUkuran?: DetailUkuran[]
+  newDetailUkuran?: DetailUkuran[],
+  steamWorker?: PenugasanWorker,
 ): Promise<void> {
   riwayat = {
     ...riwayat,
@@ -1242,7 +1533,7 @@ export async function completeBatchProduksi(
     }
   }
   if (batch.jenis_produk === 'hijab') {
-    await completeBatchHijabProduksi(batchId, updatedByUid, updatedByNama, riwayat);
+    await completeBatchHijabProduksi(batchId, updatedByUid, updatedByNama, riwayat, steamWorker);
     return;
   }
 
@@ -1267,13 +1558,6 @@ export async function completeBatchProduksi(
       .filter((du) => du.jumlah_pcs > 0);
   }
 
-  function buildBarangJadiId(modelId: string, ukuran: string, namaWarna?: string): string {
-    const ukuranKey = ukuranDocKey(ukuran);
-    if (!namaWarna) return `${modelId}__${ukuranKey}`;
-    const wKey = namaWarna.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
-    return `${modelId}__${ukuranKey}__${wKey}`;
-  }
-
   const stokBarangJadiRefs = new Map<string, ReturnType<typeof doc>>();
   for (const item of detailBerhasil) {
     const q = batch.nama_warna
@@ -1281,7 +1565,7 @@ export async function completeBatchProduksi(
       : query(collection(db, 'stok_barang_jadi'), where('model_id', '==', batch.model_id), where('ukuran', 'in', ukuranAliases(item.ukuran)));
     const snap = await getDocs(q);
     const ref = snap.empty
-      ? doc(db, 'stok_barang_jadi', buildBarangJadiId(batch.model_id, item.ukuran, batch.nama_warna))
+      ? doc(db, 'stok_barang_jadi', buildStokBarangJadiDocId(batch.model_id, item.ukuran, batch.nama_warna))
       : snap.docs[0].ref;
     stokBarangJadiRefs.set(item.ukuran, ref);
   }
@@ -1314,6 +1598,7 @@ export async function completeBatchProduksi(
     transaction.update(batchRef, {
       status: 'COMPLETED' as StatusBatch,
       pcs_saat_ini: riwayat.pcs_berhasil,
+      ...(steamWorker ? { 'penugasan.steam': steamWorker } : {}),
       updatedAt: serverTimestamp(),
     });
 
@@ -1346,7 +1631,9 @@ export async function completeBatchProduksi(
       const lot: SumberProduksi = {
         batch_id: currentBatch.id,
         jumlah_pcs: item.jumlah_pcs,
-        ...(currentBatch.penugasan ? { penugasan: currentBatch.penugasan } : {}),
+        ...(currentBatch.penugasan || steamWorker
+          ? { penugasan: { ...(currentBatch.penugasan ?? {}), ...(steamWorker ? { steam: steamWorker } : {}) } }
+          : {}),
       };
 
       if (!stokSnap.exists()) {

@@ -8,6 +8,7 @@ import {
   orderBy,
   limit,
   query,
+  runTransaction,
   serverTimestamp,
   Timestamp,
   updateDoc,
@@ -27,12 +28,15 @@ import type {
   BudgetBulananInput,
   SaldoAwalKeuangan,
   SaldoAwalKeuanganInput,
+  TutupBukuTahunan,
+  TutupBukuTahunanInput,
 } from '$lib/types';
 
 const COL = 'transaksi_keuangan';
 const COL_ASET = 'aset_perusahaan';
 const COL_BUDGET = 'budget_bulanan';
 const COL_SALDO_AWAL = 'saldo_awal_keuangan';
+const COL_TUTUP_BUKU = 'tutup_buku_keuangan';
 
 export const KATEGORI_PEMASUKAN: Record<KategoriPemasukan, string> = {
   penjualan_manual: 'Penjualan Manual',
@@ -46,6 +50,7 @@ export const KATEGORI_PENGELUARAN: Record<KategoriPengeluaran, string> = {
   aset: 'Pembelian Aset',
   bahan_baku: 'Bahan Baku',
   gaji: 'Gaji',
+  pembagian_laba: 'Pembagian Laba Karyawan',
   operasional: 'Operasional',
   transport: 'Transport',
   sewa: 'Sewa',
@@ -88,14 +93,14 @@ export const DEFAULT_MASA_MANFAAT_BULAN: Record<string, number> = {
 const KATEGORI_PEMASUKAN_NON_PENDAPATAN = new Set(['modal', 'piutang_tertagih', 'refund']);
 
 export function transaksiBerdampakLabaRugi(tipe: TipeTransaksiKeuangan, kategori: string): boolean {
-  if (tipe === 'pengeluaran') return !['aset', 'bahan_baku'].includes(kategori);
+  if (tipe === 'pengeluaran') return !['aset', 'bahan_baku', 'pembagian_laba'].includes(kategori);
   return !KATEGORI_PEMASUKAN_NON_PENDAPATAN.has(kategori);
 }
 
 function jenisTransaksi(tipe: TipeTransaksiKeuangan, kategori: string): TransaksiKeuangan['jenis_transaksi'] {
   if (kategori === 'bahan_baku') return 'pembelian_persediaan';
   if (kategori === 'aset') return 'pembelian_aset';
-  if (tipe === 'pemasukan' && !transaksiBerdampakLabaRugi(tipe, kategori)) return 'non_pendapatan';
+  if (!transaksiBerdampakLabaRugi(tipe, kategori)) return 'non_pendapatan';
   return 'operasional';
 }
 
@@ -152,6 +157,10 @@ function cleanText(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function isTutupBukuTransaction(data: Partial<TransaksiKeuangan> | undefined): boolean {
+  return data?.tipe === 'pengeluaran' && data.kategori === 'pembagian_laba' && data.referensi?.startsWith('tutup_buku:') === true;
+}
+
 export function kategoriLabel(tipe: TipeTransaksiKeuangan, kategori: string): string {
   if (tipe === 'pemasukan') {
     return KATEGORI_PEMASUKAN[kategori as KategoriPemasukan] ?? kategori;
@@ -184,6 +193,10 @@ export async function updateTransaksiKeuangan(
   id: string,
   data: Partial<TransaksiKeuanganInput>,
 ): Promise<void> {
+  const existingSnap = await getDoc(doc(db, COL, id));
+  const existing = existingSnap.data() as TransaksiKeuangan | undefined;
+  if (isTutupBukuTransaction(existing)) throw new Error('Transaksi pembagian laba dari tutup buku tidak dapat diedit.');
+
   const payload: Record<string, unknown> = {
     updatedAt: serverTimestamp(),
   };
@@ -196,8 +209,6 @@ export async function updateTransaksiKeuangan(
   if (data.referensi !== undefined) payload.referensi = cleanText(data.referensi) ?? '';
   if (data.catatan !== undefined) payload.catatan = cleanText(data.catatan) ?? '';
   if (data.tipe !== undefined || data.kategori !== undefined) {
-    const existingSnap = await getDoc(doc(db, COL, id));
-    const existing = existingSnap.data() as TransaksiKeuangan | undefined;
     const tipe = data.tipe ?? existing?.tipe;
     const kategori = data.kategori ?? existing?.kategori;
     if (tipe && kategori) {
@@ -209,6 +220,9 @@ export async function updateTransaksiKeuangan(
 }
 
 export async function deleteTransaksiKeuangan(id: string): Promise<void> {
+  const existingSnap = await getDoc(doc(db, COL, id));
+  const existing = existingSnap.data() as TransaksiKeuangan | undefined;
+  if (isTutupBukuTransaction(existing)) throw new Error('Transaksi pembagian laba dari tutup buku tidak dapat dihapus.');
   await deleteDoc(doc(db, COL, id));
 }
 
@@ -282,6 +296,72 @@ export async function saveSaldoAwalKeuangan(data: SaldoAwalKeuanganInput, id?: s
 
 export async function deleteSaldoAwalKeuangan(id: string): Promise<void> {
   await deleteDoc(doc(db, COL_SALDO_AWAL, id));
+}
+
+export async function getTutupBukuTahunanList(): Promise<TutupBukuTahunan[]> {
+  const snap = await getDocs(query(collection(db, COL_TUTUP_BUKU), orderBy('tahun', 'desc')));
+  return snap.docs.map((item) => ({ id: item.id, ...item.data() }) as TutupBukuTahunan);
+}
+
+/**
+ * Menyimpan snapshot tutup buku dan transaksi pembagian laba dalam satu
+ * transaksi Firestore supaya tidak ada tutup buku tanpa pengurangan kas.
+ */
+export async function catatTutupBukuTahunan(data: TutupBukuTahunanInput): Promise<string> {
+  const tahun = Math.floor(Number(data.tahun) || 0);
+  if (tahun < 2000 || tahun > 2200) throw new Error('Tahun tutup buku tidak valid.');
+  const pembagianLaba = Math.max(0, Number(data.pembagian_laba) || 0);
+  const closeRef = doc(db, COL_TUTUP_BUKU, String(tahun));
+  const transaksiRef = pembagianLaba > 0 ? doc(collection(db, COL)) : null;
+
+  await runTransaction(db, async (transaction) => {
+    const existing = await transaction.get(closeRef);
+    if (existing.exists()) throw new Error(`Tutup buku tahun ${tahun} sudah tersimpan.`);
+
+    if (transaksiRef) {
+      transaction.set(transaksiRef, {
+        tipe: 'pengeluaran',
+        kategori: 'pembagian_laba',
+        tanggal: toTimestamp(data.tanggal_tutup),
+        nominal: pembagianLaba,
+        deskripsi: `Pembagian laba tahun ${tahun} untuk ${data.pembagian_karyawan.length} karyawan`,
+        dampak_laba_rugi: false,
+        jenis_transaksi: 'non_pendapatan',
+        metode: 'transfer',
+        referensi: `tutup_buku:${tahun}`,
+        ...(cleanText(data.catatan) ? { catatan: cleanText(data.catatan) } : {}),
+        ...(data.dibuat_oleh_uid ? { dibuat_oleh_uid: data.dibuat_oleh_uid } : {}),
+        ...(data.dibuat_oleh_nama ? { dibuat_oleh_nama: data.dibuat_oleh_nama } : {}),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+
+    transaction.set(closeRef, {
+      tahun,
+      tanggal_tutup: toTimestamp(data.tanggal_tutup),
+      saldo_kas_sebelum_pembagian: Math.max(0, Number(data.saldo_kas_sebelum_pembagian) || 0),
+      pembagian_laba: pembagianLaba,
+      saldo_kas_akhir: Math.max(0, Number(data.saldo_kas_akhir) || 0),
+      penjualan: Math.max(0, Number(data.penjualan) || 0),
+      hpp: Math.max(0, Number(data.hpp) || 0),
+      beban_operasional: Math.max(0, Number(data.beban_operasional) || 0),
+      laba_bersih: Number(data.laba_bersih) || 0,
+      nilai_persediaan_barang_jadi: Math.max(0, Number(data.nilai_persediaan_barang_jadi) || 0),
+      nilai_persediaan_kain: Math.max(0, Number(data.nilai_persediaan_kain) || 0),
+      nilai_persediaan_hijab: Math.max(0, Number(data.nilai_persediaan_hijab) || 0),
+      nilai_persediaan_total: Math.max(0, Number(data.nilai_persediaan_total) || 0),
+      snapshot_persediaan: data.snapshot_persediaan,
+      pembagian_karyawan: data.pembagian_karyawan,
+      saldo_awal_tahun_berikutnya: data.saldo_awal_tahun_berikutnya,
+      ...(cleanText(data.catatan) ? { catatan: cleanText(data.catatan) } : {}),
+      ...(data.dibuat_oleh_uid ? { dibuat_oleh_uid: data.dibuat_oleh_uid } : {}),
+      ...(data.dibuat_oleh_nama ? { dibuat_oleh_nama: data.dibuat_oleh_nama } : {}),
+      createdAt: serverTimestamp(),
+    });
+  });
+
+  return closeRef.id;
 }
 
 export async function getBudgetBulanan(bulan?: string): Promise<BudgetBulanan[]> {

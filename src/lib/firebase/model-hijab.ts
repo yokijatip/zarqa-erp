@@ -23,6 +23,11 @@ function normalizeModel(model: ModelHijab): ModelHijab {
     nama_hijab: model.nama_hijab ?? '',
     warna_tersedia: Array.isArray(model.warna_tersedia) ? model.warna_tersedia : [],
     harga_jual: Number(model.harga_jual) || 0,
+    harga_jual_per_kanal: Object.fromEntries(
+      Object.entries(model.harga_jual_per_kanal ?? {})
+        .map(([channelId, price]) => [channelId, Math.max(0, Number(price) || 0)] as const)
+        .filter(([, price]) => price > 0),
+    ),
     harga_produksi: Number(model.harga_produksi) || 0,
     aktif: model.aktif !== false,
   };
@@ -72,6 +77,11 @@ export async function addModelHijab(data: ModelHijabInput): Promise<string> {
     ...(data.foto_url?.trim() ? { foto_url: data.foto_url.trim() } : {}),
     ...(data.deskripsi?.trim() ? { deskripsi: data.deskripsi.trim() } : {}),
     harga_jual: Math.max(0, Number(data.harga_jual) || 0),
+    harga_jual_per_kanal: Object.fromEntries(
+      Object.entries(data.harga_jual_per_kanal ?? {})
+        .map(([channelId, price]) => [channelId, Math.max(0, Number(price) || 0)] as const)
+        .filter(([, price]) => price > 0),
+    ),
     harga_produksi: Math.max(0, Number(data.harga_produksi) || 0),
     aktif: true,
     createdAt: serverTimestamp(),
@@ -88,6 +98,13 @@ export async function updateModelHijab(id: string, data: Partial<ModelHijabInput
   if (data.foto_url !== undefined) payload.foto_url = data.foto_url.trim();
   if (data.deskripsi !== undefined) payload.deskripsi = data.deskripsi.trim();
   if (data.harga_jual !== undefined) payload.harga_jual = Math.max(0, Number(data.harga_jual) || 0);
+  if (data.harga_jual_per_kanal !== undefined) {
+    payload.harga_jual_per_kanal = Object.fromEntries(
+      Object.entries(data.harga_jual_per_kanal)
+        .map(([channelId, price]) => [channelId, Math.max(0, Number(price) || 0)] as const)
+        .filter(([, price]) => price > 0),
+    );
+  }
   if (data.harga_produksi !== undefined) payload.harga_produksi = Math.max(0, Number(data.harga_produksi) || 0);
   await updateDoc(doc(db, COL, id), payload);
 }

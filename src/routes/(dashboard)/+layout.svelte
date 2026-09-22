@@ -34,6 +34,7 @@
     '/laporan/aktivitas': [{ label: 'Laporan', href: '/laporan' }, { label: 'Aktivitas Akun' }],
     '/penjualan':        [{ label: 'Penjualan' }],
     '/penjualan/order':  [{ label: 'Penjualan', href: '/penjualan' }, { label: 'Order Penjualan' }],
+    '/penjualan/pengaturan': [{ label: 'Penjualan', href: '/penjualan' }, { label: 'Pengaturan Penjualan' }],
     '/karyawan':         [{ label: 'Karyawan' }],
     '/karyawan/data':    [{ label: 'Karyawan', href: '/karyawan' }, { label: 'Data Karyawan' }],
     '/karyawan/penggajian': [{ label: 'Karyawan', href: '/karyawan' }, { label: 'Penggajian' }],
@@ -102,6 +103,9 @@
   let crumbs = $derived.by((): Crumb[] => {
     const pathname = $page.url.pathname;
     if (ROUTE_MAP[pathname]) return ROUTE_MAP[pathname];
+    if (/^\/model-baju\/[^/]+\/edit$/.test(pathname)) {
+      return [...ROUTE_MAP['/model-baju'], { label: 'Edit' }];
+    }
     // Handle dynamic routes like /model-baju/[id]
     const base = Object.keys(ROUTE_MAP).find(
       (k) => k !== '/' && pathname.startsWith(k + '/')

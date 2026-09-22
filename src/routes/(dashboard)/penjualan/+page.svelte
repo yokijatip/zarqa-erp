@@ -76,7 +76,9 @@
   let products = $derived(productSalesRows(itemRows));
   let popularProducts = $derived(productSalesRows(popularItemRows));
 
-  let totalPenjualan = $derived(rows.reduce((sum, row) => sum + row.nilaiJual, 0));
+  let totalBruto = $derived(rows.reduce((sum, row) => sum + row.nilaiJual, 0));
+  let totalBiayaAdmin = $derived(rows.reduce((sum, row) => sum + row.biayaAdmin, 0));
+  let totalPenjualan = $derived(rows.reduce((sum, row) => sum + row.nilaiBersih, 0));
   let totalOrder = $derived(rows.length);
   let totalPcs = $derived(rows.reduce((sum, row) => sum + row.pcsKeluar, 0));
   let totalPending = $derived(rows.reduce((sum, row) => sum + row.pcsPending, 0));
@@ -84,7 +86,7 @@
     const map = new Map<string, { tujuan: string; total: number; pcs: number; order: number }>();
     for (const row of source) {
       const item = map.get(row.tujuan) ?? { tujuan: row.tujuan, total: 0, pcs: 0, order: 0 };
-      item.total += row.nilaiJual;
+      item.total += row.nilaiBersih;
       item.pcs += row.pcsKeluar;
       item.order += 1;
       map.set(row.tujuan, item);
@@ -112,7 +114,7 @@
     for (const item of products) {
       const existing = map.get(item.nama_model) ?? { model: item.nama_model, pcs: 0, total: 0, laba: 0 };
       existing.pcs += item.pcs;
-      existing.total += item.nilaiJual;
+      existing.total += item.nilaiBersih;
       existing.laba += item.laba;
       map.set(item.nama_model, existing);
     }
@@ -127,11 +129,12 @@
     return query ? popularProducts.filter((item) => item.nama_model.toLowerCase().includes(query)) : popularProducts;
   });
   let popularModelRows = $derived.by(() => {
-    const map = new Map<string, { model_id: string; nama_model: string; pcs: number; nilaiJual: number; orderCount: number }>();
+    const map = new Map<string, { model_id: string; nama_model: string; pcs: number; nilaiJual: number; nilaiBersih: number; orderCount: number }>();
     for (const item of filteredProducts) {
-      const existing = map.get(item.model_id) ?? { model_id: item.model_id, nama_model: item.nama_model, pcs: 0, nilaiJual: 0, orderCount: 0 };
+      const existing = map.get(item.model_id) ?? { model_id: item.model_id, nama_model: item.nama_model, pcs: 0, nilaiJual: 0, nilaiBersih: 0, orderCount: 0 };
       existing.pcs += item.pcs;
-      existing.nilaiJual += item.nilaiJual;
+      existing.nilaiJual += item.nilaiBersih;
+      existing.nilaiBersih += item.nilaiBersih;
       existing.orderCount += item.orderCount;
       map.set(item.model_id, existing);
     }
@@ -252,7 +255,8 @@
   {/if}
 
   <div class="grid gap-3 md:grid-cols-4">
-    <StatCard title="Penjualan" value={rupiah(totalPenjualan)} icon={TrendingUpIcon} {loading} footerSubtext="nilai order keluar" class="border-green-100 bg-green-50" valueClass="text-green-700" />
+    <StatCard title="Penjualan Bersih" value={rupiah(totalPenjualan)} icon={TrendingUpIcon} {loading} footerSubtext="setelah biaya admin" class="border-green-100 bg-green-50" valueClass="text-green-700" />
+    <StatCard title="Biaya Admin" value={rupiah(totalBiayaAdmin)} icon={TrendingUpIcon} {loading} footerSubtext={`dari bruto ${rupiah(totalBruto)}`} class="border-orange-100 bg-orange-50" valueClass="text-orange-700" />
     <StatCard title="Order" value={String(totalOrder)} icon={ShoppingBagIcon} {loading} footerSubtext={`${totalPcs} pcs terkirim`} />
     <StatCard title="Pending" value={`${totalPending} pcs`} icon={ClockIcon} {loading} footerSubtext="stok belum terpenuhi" class={totalPending > 0 ? "border-amber-100 bg-amber-50" : ""} valueClass={totalPending > 0 ? "text-amber-700" : ""} />
   </div>
@@ -304,7 +308,7 @@
             </div>
             <div class="text-right">
               <p class="font-semibold text-gray-900">{item.pcs} pcs</p>
-              <p class="text-xs text-green-700">{rupiah(item.nilaiJual)}</p>
+              <p class="text-xs text-green-700">{rupiah(item.nilaiBersih)}</p>
             </div>
           </a>
         {:else}
@@ -331,7 +335,7 @@
           >
             <div class="flex justify-between gap-3">
               <p class="font-medium text-gray-800">{row.label}</p>
-              <p class="font-semibold text-green-700">{rupiah(row.nilaiJual)}</p>
+              <p class="font-semibold text-green-700">{rupiah(row.nilaiBersih)}</p>
             </div>
             <p class="mt-0.5 text-xs text-gray-400">{row.tujuan} · {row.pcsKeluar} pcs · {formatDate(row.tanggal)}</p>
           </button>

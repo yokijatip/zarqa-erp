@@ -9,8 +9,9 @@
     updateModelHijab,
   } from '$lib/firebase/model-hijab';
   import { isAdmin, isOwner } from '$lib/stores/auth.store';
+  import { getKanalPenjualan } from '$lib/firebase/penjualan';
   import { modelHijabCache, warnaCache } from '$lib/stores/data-cache.svelte';
-  import type { ModelHijab, Warna, WarnaTersedia } from '$lib/types';
+  import type { KanalPenjualan, ModelHijab, Warna, WarnaTersedia } from '$lib/types';
   import * as Dialog from '$lib/components/ui/dialog';
   import * as Popover from '$lib/components/ui/popover';
   import { Button } from '$lib/components/ui/button';
@@ -22,6 +23,7 @@
   import CheckIcon from '@lucide/svelte/icons/check';
   import Trash2Icon from '@lucide/svelte/icons/trash-2';
   import PackageIcon from '@lucide/svelte/icons/package';
+  import ChannelLogo from '$lib/components/channel-logo.svelte';
 
   let modelList = $state<ModelHijab[]>([]);
   let loading = $state(true);
@@ -43,7 +45,11 @@
   let fDeskripsi = $state('');
   let fWarna = $state<WarnaTersedia[]>([]);
   let fHargaJual = $state('');
+  let fHargaJualPerKanal = $state<Record<string, string>>({});
+  let fHargaJualKanalAktif = $state('default');
   let fHargaProduksi = $state('');
+  let kanalList = $state<KanalPenjualan[]>([]);
+  let kanalHargaAktif = $derived(kanalList.filter((channel) => channel.aktif && channel.id !== 'gudang_central'));
 
   let filteredList = $derived.by(() => {
     const search = searchQuery.trim().toLowerCase();
@@ -105,6 +111,11 @@
       ]);
       warnaList = warna;
       modelList = models.filter((model) => tampilNonaktif || model.aktif);
+      try {
+        kanalList = await getKanalPenjualan();
+      } catch {
+        kanalList = [];
+      }
     } catch (error) {
       logLoadError('Gagal memuat data.', error);
     } finally {
@@ -125,6 +136,8 @@
     fDeskripsi = '';
     fWarna = [];
     fHargaJual = '';
+    fHargaJualPerKanal = {};
+    fHargaJualKanalAktif = 'default';
     fHargaProduksi = '';
   }
 
@@ -141,6 +154,10 @@
     fDeskripsi = model.deskripsi ?? '';
     fWarna = [...(model.warna_tersedia ?? [])];
     fHargaJual = String(model.harga_jual ?? 0);
+    fHargaJualPerKanal = Object.fromEntries(
+      Object.entries(model.harga_jual_per_kanal ?? {}).map(([channelId, price]) => [channelId, String(price)]),
+    );
+    fHargaJualKanalAktif = 'default';
     fHargaProduksi = String(model.harga_produksi ?? 0);
     openForm = true;
   }
@@ -157,6 +174,11 @@
         ...(fDeskripsi.trim() ? { deskripsi: fDeskripsi.trim() } : {}),
         warna_tersedia: fWarna.length > 0 ? fWarna : [],
         harga_jual: Math.max(0, Number(fHargaJual) || 0),
+        harga_jual_per_kanal: Object.fromEntries(
+          Object.entries(fHargaJualPerKanal)
+            .map(([channelId, price]) => [channelId, Math.max(0, Number(price) || 0)] as const)
+            .filter(([, price]) => price > 0),
+        ),
         harga_produksi: Math.max(0, Number(fHargaProduksi) || 0),
       };
       if (editingId) {
@@ -314,6 +336,12 @@
               <div><p class="text-[11px] text-muted-foreground">Harga jual / pcs</p><p class="mt-1 text-sm font-semibold text-foreground">{rupiah(model.harga_jual)}</p></div>
               <div><p class="text-[11px] text-muted-foreground">Harga produksi / pcs</p><p class="mt-1 text-sm font-semibold text-foreground">{rupiah(model.harga_produksi)}</p></div>
             </div>
+            {#each Object.entries(model.harga_jual_per_kanal ?? {}) as [channelId, price]}
+              <div class="border-t pt-3">
+                <p class="flex items-center gap-1.5 text-[11px] text-muted-foreground"><ChannelLogo name={kanalList.find((channel) => channel.id === channelId)?.nama ?? channelId} size="sm" />Harga {kanalList.find((channel) => channel.id === channelId)?.nama ?? channelId} / pcs</p>
+                <p class="mt-1 text-sm font-semibold text-foreground">{rupiah(price)}</p>
+              </div>
+            {/each}
           {/if}
           <a href={`/stok-hijab?model_id=${model.id}`} class="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"><PackageIcon class="h-3.5 w-3.5" />Kelola stok hijab</a>
         </div>
@@ -396,7 +424,40 @@
         {/if}
       </div>
       {#if $isOwner}
-        <div class="rounded-lg border bg-muted/30 p-4"><p class="text-sm font-semibold text-foreground">Harga pusat hijab</p><p class="mt-1 text-xs text-muted-foreground">Harga ini berlaku per pcs hijab dan dipakai sebagai referensi. Harga jual paket tetap diatur pada varian model baju.</p><div class="mt-3 grid gap-3 sm:grid-cols-2"><div><label for="model-hijab-sale-price" class="mb-1 block text-xs font-medium">Harga jual / pcs</label><Input id="model-hijab-sale-price" type="number" min="0" bind:value={fHargaJual} placeholder="0" /></div><div><label for="model-hijab-production-price" class="mb-1 block text-xs font-medium">Harga produksi / pcs</label><Input id="model-hijab-production-price" type="number" min="0" bind:value={fHargaProduksi} placeholder="0" /></div></div></div>
+        <div class="space-y-3 rounded-lg border bg-muted/30 p-4">
+          <div>
+            <p class="text-sm font-semibold text-foreground">Harga pusat hijab</p>
+            <p class="mt-1 text-xs text-muted-foreground">Harga jual dapat dibuat berbeda per e-commerce. Harga produksi tetap satu nilai internal.</p>
+          </div>
+          <div class="border-t pt-3">
+            <p class="mb-2 text-xs font-medium">Harga jual / pcs</p>
+            {#if kanalHargaAktif.length > 0}
+              <div class="mb-2 flex flex-wrap gap-1.5" role="tablist" aria-label="Kanal harga hijab">
+                <button type="button" role="tab" aria-selected={fHargaJualKanalAktif === 'default'} onclick={() => (fHargaJualKanalAktif = 'default')} class={`rounded-md border px-2 py-1 text-[11px] font-medium ${fHargaJualKanalAktif === 'default' ? 'border-gray-900 bg-gray-900 text-white' : 'border-gray-200 bg-white text-gray-600'}`}>Harga dasar</button>
+                {#each kanalHargaAktif as channel}
+                  <button type="button" role="tab" aria-selected={fHargaJualKanalAktif === channel.id} onclick={() => (fHargaJualKanalAktif = channel.id)} class={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-medium ${fHargaJualKanalAktif === channel.id ? 'border-gray-900 bg-gray-900 text-white' : 'border-gray-200 bg-white text-gray-600'}`}><ChannelLogo name={channel.nama} size="sm" />{channel.nama}</button>
+                {/each}
+              </div>
+            {/if}
+            <label for="model-hijab-sale-price" class="mb-1 block text-xs font-medium">{fHargaJualKanalAktif === 'default' ? 'Harga dasar' : kanalList.find((channel) => channel.id === fHargaJualKanalAktif)?.nama}</label>
+            <Input
+              id="model-hijab-sale-price"
+              type="number"
+              min="0"
+              value={fHargaJualKanalAktif === 'default' ? fHargaJual : fHargaJualPerKanal[fHargaJualKanalAktif] ?? ''}
+              oninput={(event) => {
+                const value = (event.currentTarget as HTMLInputElement).value;
+                if (fHargaJualKanalAktif === 'default') fHargaJual = value;
+                else fHargaJualPerKanal = { ...fHargaJualPerKanal, [fHargaJualKanalAktif]: value };
+              }}
+              placeholder="0"
+            />
+          </div>
+          <div>
+            <label for="model-hijab-production-price" class="mb-1 block text-xs font-medium">Harga produksi / pcs</label>
+            <Input id="model-hijab-production-price" type="number" min="0" bind:value={fHargaProduksi} placeholder="0" />
+          </div>
+        </div>
       {/if}
     </div>
     <Dialog.Footer class="shrink-0 border-t px-6 py-4"><Button variant="outline" onclick={() => (openForm = false)}>Batal</Button><Button onclick={submitForm} disabled={saving || !canSubmit}>{saving ? 'Menyimpan...' : isEditing ? 'Simpan Perubahan' : 'Tambah Model'}</Button></Dialog.Footer>

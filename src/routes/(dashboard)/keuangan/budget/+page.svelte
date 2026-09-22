@@ -165,7 +165,7 @@
       <p class="mt-1 text-sm text-gray-500">Tetapkan batas pengeluaran untuk satu kategori dalam satu bulan.</p>
       <div class="mt-5 space-y-4">
         <label class="block text-sm font-medium text-gray-700">Bulan<input class="mt-1.5 h-10 w-full rounded-lg border border-gray-200 px-3" type="month" bind:value={bulan} /></label>
-        <label class="block text-sm font-medium text-gray-700">Kategori<select class="mt-1.5 h-10 w-full rounded-lg border border-gray-200 bg-white px-3" bind:value={kategori}>{#each Object.entries(KATEGORI_PENGELUARAN).filter(([key]) => !["aset", "bahan_baku", "gaji"].includes(key)) as [key, label]}<option value={key}>{label}</option>{/each}</select></label>
+        <label class="block text-sm font-medium text-gray-700">Kategori<select class="mt-1.5 h-10 w-full rounded-lg border border-gray-200 bg-white px-3" bind:value={kategori}>{#each Object.entries(KATEGORI_PENGELUARAN).filter(([key]) => !["aset", "bahan_baku", "gaji", "pembagian_laba"].includes(key)) as [key, label]}<option value={key}>{label}</option>{/each}</select></label>
         <label class="block text-sm font-medium text-gray-700">Nominal budget<input class="mt-1.5 h-10 w-full rounded-lg border border-gray-200 px-3" type="number" min="1" bind:value={nominal} /></label>
         <label class="block text-sm font-medium text-gray-700">Catatan<input class="mt-1.5 h-10 w-full rounded-lg border border-gray-200 px-3" placeholder="Contoh: WiFi kantor" bind:value={catatan} /></label>
       </div>

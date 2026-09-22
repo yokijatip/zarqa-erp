@@ -83,6 +83,7 @@
       items: [
         { title: "Ringkasan Penjualan", url: "/penjualan" },
         { title: "Order Penjualan", url: "/penjualan/order" },
+        { title: "Pengaturan Penjualan", url: "/penjualan/pengaturan" },
       ],
     },
     {

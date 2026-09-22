@@ -55,6 +55,8 @@
   let stockLoading = $state(false);
   let errorMsg = $state<string | null>(null);
   let searchQuery = $state("");
+  const PAGE_SIZE = 10;
+  let currentPage = $state(1);
 
   // Quick-action dialog (steam inline popup)
   let quickOpen = $state(false);
@@ -211,11 +213,27 @@
     return list;
   });
 
-  let visibleBatches = $derived(filteredBatches);
+  let totalPages = $derived(Math.max(1, Math.ceil(filteredBatches.length / PAGE_SIZE)));
+  let visibleBatches = $derived(
+    filteredBatches.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE),
+  );
 
   function setSearchQuery(value: string) {
     searchQuery = value;
+    currentPage = 1;
   }
+
+  function previousPage() {
+    currentPage = Math.max(1, currentPage - 1);
+  }
+
+  function nextPage() {
+    currentPage = Math.min(totalPages, currentPage + 1);
+  }
+
+  $effect(() => {
+    if (currentPage > totalPages) currentPage = totalPages;
+  });
 
   let readyCount = $derived(
     filteredBatches.filter((batch) =>
@@ -670,10 +688,16 @@
                       size="sm"
                       onclick={(e: MouseEvent) => {
                         e.stopPropagation();
-                        openQuickAction(batch);
+                        if (config.key === "steam") {
+                          goto(`/monitor-produksi/${batch.id}`);
+                        } else {
+                          openQuickAction(batch);
+                        }
                       }}
                     >
-                      {batch.status === "JAHIT_DONE"
+                      {config.key === "steam"
+                        ? "Buka Proses"
+                        : batch.status === "JAHIT_DONE"
                         ? "Mulai Steam"
                         : "Selesaikan"}
                     </Button>
@@ -683,8 +707,35 @@
             {/each}
           </Table.Body>
         </Table.Root>
-        <div class="border-t border-gray-100 px-5 py-3 text-xs text-gray-500">
-          Menampilkan {filteredBatches.length} batch
+        <div class="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 px-5 py-3 text-xs text-gray-500">
+          <p>
+            Menampilkan {visibleBatches.length > 0 ? (currentPage - 1) * PAGE_SIZE + 1 : 0}-{Math.min(currentPage * PAGE_SIZE, filteredBatches.length)} dari {filteredBatches.length} batch
+          </p>
+          {#if totalPages > 1}
+            <div class="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                aria-label="Halaman sebelumnya"
+                disabled={currentPage === 1}
+                onclick={previousPage}
+              >
+                Sebelumnya
+              </Button>
+              <span class="whitespace-nowrap font-medium text-gray-700">
+                Halaman {currentPage} / {totalPages}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                aria-label="Halaman berikutnya"
+                disabled={currentPage === totalPages}
+                onclick={nextPage}
+              >
+                Berikutnya
+              </Button>
+            </div>
+          {/if}
         </div>
       {/if}
     </div>

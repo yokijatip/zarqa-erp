@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { afterNavigate } from "$app/navigation";
+  import { afterNavigate, goto } from "$app/navigation";
   import { onMount } from "svelte";
   import {
     addModelBaju,
@@ -10,11 +10,13 @@
   } from "$lib/firebase/model-baju";
   import { modelBajuCache, modelHijabCache, stokHijabCache, warnaCache } from "$lib/stores/data-cache.svelte";
   import { isAdmin, isOwner } from "$lib/stores/auth.store";
+  import { getKanalPenjualan } from "$lib/firebase/penjualan";
   import {
     UKURAN_ORDER,
     getAddOnPenjualan,
     warnaMappingKey,
     type KomponenVarianPenjualan,
+    type KanalPenjualan,
     type ModeHargaVarian,
     type ModelBaju,
     type ModelHijab,
@@ -34,6 +36,7 @@
   import { Input } from "$lib/components/ui/input";
   import { uploadToCloudinary } from "$lib/cloudinary";
   import * as Select from "$lib/components/ui/select/index.js";
+  import ChannelLogo from "$lib/components/channel-logo.svelte";
 
   // ── State ──────────────────────────────────────────────────────────
   let modelList = $state<ModelBaju[]>([]);
@@ -59,6 +62,8 @@
   let fVariantSellingMode = $state<ModeHargaVarian>("induk_plus_addon");
   let fVariantProductionMode = $state<ModeHargaVarian>("induk_plus_addon");
   let fVariantSellingPricesBySize = $state<Partial<Record<UkuranBaju, string>>>({});
+  let fVariantSellingPricesByChannel = $state<Record<string, Partial<Record<UkuranBaju, string>>>>({});
+  let fVariantSellingChannel = $state("default");
   let fVariantProductionPricesBySize = $state<Partial<Record<UkuranBaju, string>>>({});
   let fVariantHijabId = $state("");
   let fVariantAccessoryId = $state("");
@@ -67,6 +72,7 @@
   let fVariantStockByWarna = $state<Record<string, string>>({});
   let stokHijabList = $state<StokHijab[]>([]);
   let modelHijabList = $state<Array<ModelHijab & { stok_tersedia: number }>>([]);
+  let kanalList = $state<KanalPenjualan[]>([]);
 
   // Form fields
   let fNama = $state("");
@@ -77,6 +83,8 @@
   let fUkuran = $state<UkuranBaju[]>([]);
   let fWarna = $state<WarnaTersedia[]>([]);
   let fHargaJualByUkuran = $state<Partial<Record<UkuranBaju, string>>>({});
+  let fHargaJualPerKanal = $state<Record<string, Partial<Record<UkuranBaju, string>>>>({});
+  let fHargaJualKanalAktif = $state("default");
   let fHargaProduksiByUkuran = $state<Partial<Record<UkuranBaju, string>>>({});
   let fKebutuhanYard = $state<Partial<Record<UkuranBaju, string>>>({});
   let fTarifCutting = $state("");
@@ -135,6 +143,13 @@
       const nextHarga = { ...fHargaJualByUkuran };
       delete nextHarga[u];
       fHargaJualByUkuran = nextHarga;
+      fHargaJualPerKanal = Object.fromEntries(
+        Object.entries(fHargaJualPerKanal).map(([channelId, prices]) => {
+          const nextPrices = { ...prices };
+          delete nextPrices[u];
+          return [channelId, nextPrices];
+        }),
+      );
       const nextHargaProduksi = { ...fHargaProduksiByUkuran };
       delete nextHargaProduksi[u];
       fHargaProduksiByUkuran = nextHargaProduksi;
@@ -172,6 +187,8 @@
     fUkuran = [];
     fWarna = [];
     fHargaJualByUkuran = {};
+    fHargaJualPerKanal = {};
+    fHargaJualKanalAktif = "default";
     fHargaProduksiByUkuran = {};
     fKebutuhanYard = {};
     fTarifCutting = "";
@@ -186,6 +203,8 @@
       fWarna = [];
       // A linked model has no independent production cost, tariff, or yard.
       fHargaJualByUkuran = {};
+      fHargaJualPerKanal = {};
+      fHargaJualKanalAktif = "default";
       fHargaProduksiByUkuran = {};
       fKebutuhanYard = {};
       fTarifCutting = "";
@@ -194,12 +213,40 @@
     }
   }
 
+  let kanalHargaAktif = $derived(kanalList.filter((channel) => channel.aktif && channel.id !== "gudang_central"));
+
+  function hargaJualFormValue(ukuran: UkuranBaju): string {
+    return fHargaJualKanalAktif === "default"
+      ? fHargaJualByUkuran[ukuran] ?? ""
+      : fHargaJualPerKanal[fHargaJualKanalAktif]?.[ukuran] ?? "";
+  }
+
+  function setHargaJualFormValue(ukuran: UkuranBaju, value: string) {
+    if (fHargaJualKanalAktif === "default") {
+      fHargaJualByUkuran = { ...fHargaJualByUkuran, [ukuran]: value };
+      return;
+    }
+    fHargaJualPerKanal = {
+      ...fHargaJualPerKanal,
+      [fHargaJualKanalAktif]: {
+        ...(fHargaJualPerKanal[fHargaJualKanalAktif] ?? {}),
+        [ukuran]: value,
+      },
+    };
+  }
+
+  function namaKanal(id: string): string {
+    return kanalList.find((channel) => channel.id === id)?.nama ?? id;
+  }
+
   function resetVariantForm() {
     fVariantName = "";
     fVariantSku = "";
     fVariantSellingMode = "induk_plus_addon";
     fVariantProductionMode = "induk_plus_addon";
     fVariantSellingPricesBySize = {};
+    fVariantSellingPricesByChannel = {};
+    fVariantSellingChannel = "default";
     fVariantProductionPricesBySize = {};
     fVariantHijabId = "";
     fVariantAccessoryId = "";
@@ -231,6 +278,10 @@
     return result;
   }
 
+  function variantChannelPriceMap(variant: VarianPenjualan, channelId: string): Partial<Record<UkuranBaju, number>> {
+    return { ...(variant.harga_jual_per_kanal?.[channelId] ?? {}) };
+  }
+
   function cleanPriceMap(map: Partial<Record<UkuranBaju, number>>) {
     return Object.fromEntries(
       Object.entries(map).filter(([, value]) => Number(value) > 0),
@@ -245,6 +296,7 @@
       : { harga_produksi_mode: mode };
     if (mode === "induk_plus_addon") {
       if (kind === "jual") patch.harga_jual_per_ukuran = undefined;
+      if (kind === "jual") patch.harga_jual_per_kanal = {};
       else patch.harga_produksi_per_ukuran = undefined;
     } else {
       const map = variantPriceMap(variant, kind);
@@ -267,6 +319,20 @@
     );
   }
 
+  function updateVariantChannelPrice(index: number, ukuran: UkuranBaju, value: string) {
+    const variant = variantList[index];
+    if (!variant || fVariantSellingChannel === "default") return;
+    const current = variantChannelPriceMap(variant, fVariantSellingChannel);
+    const next = { ...current, [ukuran]: Number(value) > 0 ? Number(value) : undefined };
+    updateVariant(index, {
+      harga_jual_mode: "custom",
+      harga_jual_per_kanal: {
+        ...(variant.harga_jual_per_kanal ?? {}),
+        [fVariantSellingChannel]: next,
+      },
+    });
+  }
+
   function updateNewVariantPriceMode(kind: VariantPriceKind, mode: ModeHargaVarian) {
     if (kind === "jual") fVariantSellingMode = mode;
     else fVariantProductionMode = mode;
@@ -278,6 +344,25 @@
     } else {
       fVariantProductionPricesBySize = { ...fVariantProductionPricesBySize, [ukuran]: value };
     }
+  }
+
+  function updateNewVariantChannelPrice(ukuran: UkuranBaju, value: string) {
+    if (fVariantSellingChannel === "default") return;
+    fVariantSellingPricesByChannel = {
+      ...fVariantSellingPricesByChannel,
+      [fVariantSellingChannel]: {
+        ...(fVariantSellingPricesByChannel[fVariantSellingChannel] ?? {}),
+        [ukuran]: value,
+      },
+    };
+  }
+
+  function cleanChannelPriceMaps(value: Record<string, Partial<Record<UkuranBaju, number>>> | undefined) {
+    return Object.fromEntries(
+      Object.entries(value ?? {})
+        .map(([channelId, prices]) => [channelId, cleanPriceMap(prices)] as const)
+        .filter(([, prices]) => Object.keys(prices).length > 0),
+    );
   }
 
   function openVariantManager(model: ModelBaju) {
@@ -375,6 +460,12 @@
               harga_jual_per_ukuran: cleanPriceMap(Object.fromEntries(
                 Object.entries(fVariantSellingPricesBySize).map(([ukuran, value]) => [ukuran, Number(value) || 0]),
               ) as Partial<Record<UkuranBaju, number>>),
+              harga_jual_per_kanal: cleanChannelPriceMaps(Object.fromEntries(
+                Object.entries(fVariantSellingPricesByChannel).map(([channelId, prices]) => [
+                  channelId,
+                  Object.fromEntries(Object.entries(prices).map(([ukuran, value]) => [ukuran, Number(value) || 0])),
+                ]),
+              )),
             }
           : {}),
         harga_produksi_mode: fVariantProductionMode,
@@ -591,6 +682,7 @@
           harga_produksi,
           harga_jual_mode,
           harga_jual_per_ukuran,
+          harga_jual_per_kanal,
           harga_produksi_mode,
           harga_produksi_per_ukuran,
           ...rest
@@ -603,6 +695,9 @@
           harga_jual_mode: jualMode,
           harga_jual_per_ukuran: jualMode === "custom"
             ? cleanPriceMap(variantPriceMap(variant, "jual"))
+            : {},
+          harga_jual_per_kanal: jualMode === "custom"
+            ? cleanChannelPriceMaps(harga_jual_per_kanal)
             : {},
           harga_produksi_mode: produksiMode,
           harga_produksi_per_ukuran: produksiMode === "custom"
@@ -628,33 +723,7 @@
   }
 
   function bukaEdit(model: ModelBaju) {
-    editingId = model.id;
-    fNama = model.nama_model;
-    fStokModelId = model.stok_model_id ?? "";
-    fFotoUrl = model.foto_url ?? "";
-    fFotoFile = null;
-    fDeskripsi = model.deskripsi ?? "";
-    fUkuran = [...model.ukuran_tersedia];
-    fWarna = model.stok_model_id ? [] : [...(model.warna_tersedia ?? [])];
-    fHargaJualByUkuran = Object.fromEntries(
-      Object.entries(model.harga_jual_per_ukuran ?? {}).map(([ukuran, value]) => [
-        ukuran,
-        value != null ? String(value) : "",
-      ]),
-    ) as Partial<Record<UkuranBaju, string>>;
-    fHargaProduksiByUkuran = Object.fromEntries(
-      Object.entries(model.harga_produksi_per_ukuran ?? {}).map(([ukuran, value]) => [ukuran, value != null ? String(value) : ""]),
-    ) as Partial<Record<UkuranBaju, string>>;
-    fKebutuhanYard = Object.fromEntries(
-      Object.entries(model.kebutuhan_yard_per_pcs ?? {}).map(([ukuran, value]) => [
-        ukuran,
-        value != null ? String(value) : "",
-      ]),
-    ) as Partial<Record<UkuranBaju, string>>;
-    fTarifCutting = model.tarif_cutting != null ? String(model.tarif_cutting) : "";
-    fTarifJahit = model.tarif_jahit != null ? String(model.tarif_jahit) : "";
-    fTarifSteam = model.tarif_steam != null ? String(model.tarif_steam) : "";
-    openForm = true;
+    void goto(`/model-baju/${model.id}/edit`);
   }
 
   function bukaHapus(model: ModelBaju) {
@@ -698,6 +767,11 @@
         if (item.model_hijab_id) stokPerModel.set(item.model_hijab_id, (stokPerModel.get(item.model_hijab_id) ?? 0) + item.stok_tersedia);
       }
       modelHijabList = modelHijab.map((item) => ({ ...item, stok_tersedia: stokPerModel.get(item.id) ?? 0 }));
+      try {
+        kanalList = await getKanalPenjualan();
+      } catch {
+        kanalList = [];
+      }
       await fetchModels(force);
     } catch {
       showError("Gagal memuat data. Periksa koneksi Firebase.");
@@ -729,6 +803,18 @@
           .map((ukuran) => [ukuran, Number(fHargaProduksiByUkuran[ukuran]) || 0] as const)
           .filter(([, value]) => value > 0),
       );
+      const ownChannelPrices = Object.fromEntries(
+        Object.entries(fHargaJualPerKanal)
+          .map(([channelId, prices]) => [
+            channelId,
+            Object.fromEntries(
+              fUkuran
+                .map((ukuran) => [ukuran, Number(prices[ukuran]) || 0] as const)
+                .filter(([, value]) => value > 0),
+            ),
+          ] as const)
+          .filter(([, prices]) => Object.keys(prices).length > 0),
+      );
       const input = {
         nama_model: fNama.trim(),
         stok_model_id: fStokModelId || null,
@@ -740,6 +826,7 @@
         kebutuhan_yard_per_pcs: linkedToSource ? {} : ownYard,
         harga_jual: 0,
         harga_jual_per_ukuran: linkedToSource ? {} : ownSellingPrices,
+        harga_jual_per_kanal: linkedToSource ? {} : ownChannelPrices,
         harga_produksi: 0,
         harga_produksi_per_ukuran: linkedToSource ? {} : ownProductionPrices,
         tarif_cutting: linkedToSource ? 0 : Number(fTarifCutting) || 0,
@@ -1205,6 +1292,22 @@
             </div>
           </div>
 
+          {#each Object.entries(model.harga_jual_per_kanal ?? {}) as [channelId, prices]}
+            <div class="mt-2 border-t border-gray-100 pt-2.5">
+              <p class="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+                <ChannelLogo name={namaKanal(channelId)} size="sm" />
+                Harga {namaKanal(channelId)} / Ukuran
+              </p>
+              <div class="flex flex-wrap gap-1.5 text-xs">
+                {#each UKURAN_ORDER.filter((u) => model.ukuran_tersedia.includes(u)) as u}
+                  <span class="rounded-md border border-border bg-transparent px-2 py-0.5 font-medium text-muted-foreground">
+                    {u}: {prices[u] ? `Rp${prices[u].toLocaleString("id-ID")}` : "-"}
+                  </span>
+                {/each}
+              </div>
+            </div>
+          {/each}
+
           <div>
             <p class="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
               Harga Produksi / Ukuran
@@ -1626,6 +1729,34 @@
             <div class="border-t border-gray-200 pt-2.5">
               <p class="mb-1.5 text-[11px] font-medium text-gray-700">Harga jual per ukuran</p>
               <p class="mb-2 text-[11px] text-gray-500">Harga jual tiap ukuran.</p>
+              {#if kanalHargaAktif.length > 0}
+                <div class="mb-2 flex flex-wrap gap-1.5" role="tablist" aria-label="Kanal harga jual">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={fHargaJualKanalAktif === "default"}
+                    onclick={() => (fHargaJualKanalAktif = "default")}
+                    class={`rounded-md border px-2 py-1 text-[11px] font-medium ${fHargaJualKanalAktif === "default" ? "border-gray-900 bg-gray-900 text-white" : "border-gray-200 bg-white text-gray-600"}`}
+                  >
+                    Harga dasar
+                  </button>
+                  {#each kanalHargaAktif as channel}
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={fHargaJualKanalAktif === channel.id}
+                      onclick={() => (fHargaJualKanalAktif = channel.id)}
+                      class={`rounded-md border px-2 py-1 text-[11px] font-medium ${fHargaJualKanalAktif === channel.id ? "border-gray-900 bg-gray-900 text-white" : "border-gray-200 bg-white text-gray-600"}`}
+                  >
+                    <ChannelLogo name={channel.nama} size="sm" />
+                    {channel.nama}
+                  </button>
+                  {/each}
+                </div>
+                <p class="mb-2 text-[11px] text-gray-500">
+                  {fHargaJualKanalAktif === "default" ? "Harga dasar model." : `Harga khusus ${namaKanal(fHargaJualKanalAktif)}. Kosongkan untuk mengikuti harga dasar.`}
+                </p>
+              {/if}
               <div class="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
                 {#each fUkuran as ukuran}
                   <div>
@@ -1639,12 +1770,9 @@
                         type="number"
                         min="0"
                         placeholder="0"
-                        value={fHargaJualByUkuran[ukuran] ?? ""}
+                        value={hargaJualFormValue(ukuran)}
                         oninput={(e) => {
-                          fHargaJualByUkuran = {
-                            ...fHargaJualByUkuran,
-                            [ukuran]: (e.currentTarget as HTMLInputElement).value,
-                          };
+                          setHargaJualFormValue(ukuran, (e.currentTarget as HTMLInputElement).value);
                         }}
                         class="h-8 pl-7 text-xs"
                       />
@@ -1900,6 +2028,34 @@
                     </div>
                   {/each}
                 </div>
+                {#if kanalHargaAktif.length > 0}
+                  <div class="mt-3 border-t border-gray-200 pt-2.5">
+                    <div class="mb-2 flex flex-wrap gap-1.5" role="tablist" aria-label={`Kanal harga ${variant.nama_varian}`}>
+                      <button type="button" role="tab" aria-selected={fVariantSellingChannel === "default"} onclick={() => (fVariantSellingChannel = "default")} class={`rounded-md border px-2 py-1 text-[10px] font-medium ${fVariantSellingChannel === "default" ? "border-gray-900 bg-gray-900 text-white" : "border-gray-200 bg-white text-gray-600"}`}>Harga dasar</button>
+                      {#each kanalHargaAktif as channel}
+                        <button type="button" role="tab" aria-selected={fVariantSellingChannel === channel.id} onclick={() => (fVariantSellingChannel = channel.id)} class={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] font-medium ${fVariantSellingChannel === channel.id ? "border-gray-900 bg-gray-900 text-white" : "border-gray-200 bg-white text-gray-600"}`}><ChannelLogo name={channel.nama} size="sm" />{channel.nama}</button>
+                      {/each}
+                    </div>
+                    {#if fVariantSellingChannel !== "default"}
+                      <p class="mb-2 text-[10px] text-gray-500">Harga khusus {namaKanal(fVariantSellingChannel)}. Kosongkan untuk mengikuti harga custom dasar.</p>
+                      <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                        {#each variantModel?.ukuran_tersedia ?? [] as ukuran}
+                          <div>
+                            <label class="mb-1 block text-[10px] text-gray-500" for={`variant-channel-price-${variant.id}-${fVariantSellingChannel}-${ukuran}`}>{ukuran}</label>
+                            <Input
+                              id={`variant-channel-price-${variant.id}-${fVariantSellingChannel}-${ukuran}`}
+                              type="number"
+                              min="0"
+                              value={variantChannelPriceMap(variant, fVariantSellingChannel)[ukuran] != null ? String(variantChannelPriceMap(variant, fVariantSellingChannel)[ukuran]) : ""}
+                              oninput={(event) => updateVariantChannelPrice(index, ukuran, (event.currentTarget as HTMLInputElement).value)}
+                              class="h-8 text-xs"
+                            />
+                          </div>
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
+                {/if}
               </div>
             {/if}
             {#if $isOwner && variantPriceMode(variant, "produksi") === "custom"}
@@ -2093,8 +2249,36 @@
                       class="h-8 text-xs"
                     />
                   </div>
-                {/each}
+                  {/each}
               </div>
+              {#if kanalHargaAktif.length > 0}
+                <div class="mt-3 border-t border-gray-200 pt-2.5">
+                  <div class="mb-2 flex flex-wrap gap-1.5" role="tablist" aria-label="Kanal harga varian baru">
+                    <button type="button" role="tab" aria-selected={fVariantSellingChannel === "default"} onclick={() => (fVariantSellingChannel = "default")} class={`rounded-md border px-2 py-1 text-[10px] font-medium ${fVariantSellingChannel === "default" ? "border-gray-900 bg-gray-900 text-white" : "border-gray-200 bg-white text-gray-600"}`}>Harga dasar</button>
+                    {#each kanalHargaAktif as channel}
+                      <button type="button" role="tab" aria-selected={fVariantSellingChannel === channel.id} onclick={() => (fVariantSellingChannel = channel.id)} class={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] font-medium ${fVariantSellingChannel === channel.id ? "border-gray-900 bg-gray-900 text-white" : "border-gray-200 bg-white text-gray-600"}`}><ChannelLogo name={channel.nama} size="sm" />{channel.nama}</button>
+                    {/each}
+                  </div>
+                  {#if fVariantSellingChannel !== "default"}
+                    <p class="mb-2 text-[10px] text-gray-500">Harga khusus {namaKanal(fVariantSellingChannel)}. Kosongkan untuk mengikuti harga custom dasar.</p>
+                    <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                      {#each variantModel?.ukuran_tersedia ?? [] as ukuran}
+                        <div>
+                          <label class="mb-1 block text-[10px] text-gray-500" for={`new-variant-channel-price-${fVariantSellingChannel}-${ukuran}`}>{ukuran}</label>
+                          <Input
+                            id={`new-variant-channel-price-${fVariantSellingChannel}-${ukuran}`}
+                            type="number"
+                            min="0"
+                            value={fVariantSellingPricesByChannel[fVariantSellingChannel]?.[ukuran] ?? ""}
+                            oninput={(event) => updateNewVariantChannelPrice(ukuran, (event.currentTarget as HTMLInputElement).value)}
+                            class="h-8 text-xs"
+                          />
+                        </div>
+                      {/each}
+                    </div>
+                  {/if}
+                </div>
+              {/if}
             </div>
           {/if}
           {#if fVariantProductionMode === "custom"}
