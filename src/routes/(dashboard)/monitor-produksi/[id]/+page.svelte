@@ -252,10 +252,7 @@
       batch.status !== "COMPLETED",
   );
   let canDelete = $derived(
-    !!$userRole &&
-      (["owner", "developer"] as UserRole[]).includes($userRole as UserRole) &&
-      !!batch &&
-      batch.status !== "COMPLETED",
+    canManage,
   );
 
   // ── Delete dialog ─────────────────────────────────────────────────
