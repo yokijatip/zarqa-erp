@@ -451,26 +451,16 @@
   }
 
   function displayRiwayatWorkerName(r: RiwayatProses): string {
-    if (
-      !batch ||
-      (r.tipe && r.tipe !== "status_update" && r.tipe !== "setor_proses")
-    ) {
-      return r.updated_by_nama;
-    }
-    if (
-      r.status_ke === "CUTTING_IN_PROGRESS" ||
-      r.status_ke === "CUTTING_DONE"
-    ) {
-      return (
-        sourceCuttingBatches.find((source) => source.penugasan?.cutting)
-          ?.penugasan?.cutting?.nama ??
-        batch.penugasan?.cutting?.nama ??
-        r.updated_by_nama
-      );
-    }
-    return (
-      assignedWorkerForStatus(batch, r.status_ke)?.nama ?? r.updated_by_nama
-    );
+    // Riwayat adalah snapshot saat event dicatat. Jangan mengambil nama dari
+    // penugasan batch saat ini karena penugasan dapat berubah dan satu batch
+    // dari potongan dapat memiliki lebih dari satu sumber cutting.
+    const snapshotName = r.updated_by_nama?.trim();
+    if (snapshotName) return snapshotName;
+
+    // Fallback untuk data lama yang belum menyimpan nama petugas.
+    return batch
+      ? assignedWorkerForStatus(batch, r.status_ke)?.nama ?? "-"
+      : "-";
   }
 
   let currentAssignedWorker = $derived(
