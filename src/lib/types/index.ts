@@ -740,6 +740,25 @@ export interface RiwayatStokHijab {
   timestamp?: Timestamp;
 }
 
+// Pekerjaan Steam mandiri tidak terikat ke batch produksi. Steam tetap
+// dibayar berdasarkan pekerjaan aktual, tetapi tidak mengubah alur stok/HPP.
+export interface PekerjaanSteam {
+  id?: string;
+  uid: string;
+  nama: string;
+  model_id: string;
+  nama_model: string;
+  warna_id?: string;
+  nama_warna?: string;
+  kode_hex_warna?: string;
+  ukuran: string;
+  pcs: number;
+  tarif_steam_snapshot?: number;
+  catatan?: string;
+  timestamp?: Timestamp;
+  createdAt?: Timestamp;
+}
+
 // KEUANGAN
 
 export type TipeTransaksiKeuangan = 'pemasukan' | 'pengeluaran';

@@ -89,11 +89,6 @@
       icon: PackageIcon,
     },
     {
-      label: "Steam",
-      statuses: ["STEAM_IN_PROGRESS", "STEAM_DONE"] as StatusBatch[],
-      icon: ZapIcon,
-    },
-    {
       label: "Selesai",
       statuses: ["COMPLETED"] as StatusBatch[],
       icon: CheckCircleIcon,
@@ -150,19 +145,18 @@
       case "JAHIT_IN_PROGRESS":
         return {
           label: "Selesaikan Jahit",
-          nextStatus: "JAHIT_DONE",
+          nextStatus: "COMPLETED",
           needsWorker: false,
           needsPcs: true,
-          isFinal: false,
+          isFinal: true,
         };
       case "JAHIT_DONE":
         return {
-          label: "Mulai Steam",
-          nextStatus: "STEAM_IN_PROGRESS",
-          needsWorker: true,
-          workerRole: "kepala_steam",
+          label: "Kirim ke Barang Jadi",
+          nextStatus: "COMPLETED",
+          needsWorker: false,
           needsPcs: false,
-          isFinal: false,
+          isFinal: true,
         };
       case "STEAM_IN_PROGRESS":
         // Steam bisa disetor sebagian pada batch yang sama dan petugasnya
@@ -561,7 +555,7 @@
       ? actionTotalBerhasil + actionTotalReject >= actionTotalRemaining
       : true,
   );
-  // Hanya Jahit yang punya alur "setor parsial" (sebagian hasil lanjut ke Steam,
+  // Hanya Jahit yang punya alur "setor parsial" (sebagian hasil masuk stok,
   // sisanya tetap dikerjakan). Cutting selalu dituntaskan sekali jalan dengan pcs
   // aktual yang didapat — tidak ada mekanisme lanjutan di backend untuk cutting.
   let actionCanPartial = $derived(
@@ -728,13 +722,29 @@
         batch.status === "JAHIT_IN_PROGRESS" &&
         !actionCompletesStage
       ) {
-        await splitJahitPartialToSteam(
+        const childId = await splitJahitPartialToSteam(
           batch.id,
           riwayatUid,
           riwayatNama,
           submitDetailUkuran,
           submitDetailReject,
         );
+        // Setoran parsial yang sudah selesai dijahit langsung masuk stok
+        // barang jadi; tidak lagi membuat antrean Steam.
+        if (childId) {
+          await completeBatchProduksi(
+            childId,
+            riwayatUid,
+            riwayatNama,
+            {
+              status_dari: "JAHIT_DONE",
+              pcs_berhasil: pcsBerhasil,
+              pcs_reject: 0,
+              detail_ukuran: submitDetailUkuran,
+            },
+            submitDetailUkuran,
+          );
+        }
       } else if (currentAction.isFinal && batch.status === "STEAM_IN_PROGRESS" && !actionCompletesStage) {
         await recordSteamPartialProgress(
           batch.id,
@@ -810,7 +820,7 @@
     }
   }
 
-  async function completeSteamDirectly() {
+  async function completeJahitDirectly() {
     if (
       !batch ||
       !$currentUser ||
@@ -821,21 +831,13 @@
     directSteamSaving = true;
     const operatorUid = $currentUser.uid;
     const operatorNama = $currentUser.name || $currentUser.email || operatorUid;
-    const steamWorker = assignedWorkerForStatus(batch, "STEAM_IN_PROGRESS");
-    const uid = steamWorker?.uid ?? operatorUid;
-    const nama = steamWorker?.nama ?? operatorNama;
     const pcs = batch.pcs_saat_ini ?? batch.total_pcs;
     try {
-      await updateStatusBatch(batch.id, "STEAM_IN_PROGRESS", uid, nama, {
-        status_dari: batch.status,
+      await completeBatchProduksi(batch.id, operatorUid, operatorNama, {
+        status_dari: "JAHIT_DONE",
         pcs_berhasil: pcs,
         pcs_reject: 0,
-      });
-      await completeBatchProduksi(batch.id, uid, nama, {
-        status_dari: "STEAM_IN_PROGRESS",
-        pcs_berhasil: pcs,
-        pcs_reject: 0,
-        catatan: "Steam diselesaikan langsung oleh admin",
+        catatan: "Batch dikirim langsung ke barang jadi setelah jahit",
       });
       batchCache.invalidate();
       const id = $page.params.id ?? "";
@@ -845,7 +847,7 @@
         riwayat = r;
       }
     } catch (e: any) {
-      actionError = e?.message ?? "Gagal menyelesaikan steam langsung.";
+      actionError = e?.message ?? "Gagal mengirim batch ke barang jadi.";
       actionOpen = true;
     } finally {
       directSteamSaving = false;
@@ -1126,11 +1128,9 @@
                 Ganti Penugasan
               </DropdownMenu.Item>
               {#if batch.status === "JAHIT_DONE"}
-                <DropdownMenu.Item onclick={completeSteamDirectly}>
-                  <ZapIcon class="mr-2 h-4 w-4" />
-                  {directSteamSaving
-                    ? "Menyelesaikan..."
-                    : "Selesaikan Steam Langsung"}
+                <DropdownMenu.Item onclick={completeJahitDirectly}>
+                  <CheckCircleIcon class="mr-2 h-4 w-4" />
+                  {directSteamSaving ? "Mengirim..." : "Kirim ke Barang Jadi"}
                 </DropdownMenu.Item>
               {/if}
             {/if}
@@ -1268,7 +1268,7 @@
           Penugasan
         </p>
         <div class="space-y-2">
-          {#each [{ label: "Cutting", worker: batch.penugasan?.cutting ?? sourceCuttingWorker(), icon: ScissorsIcon }, { label: "Jahit", worker: batch.penugasan?.jahit, icon: PackageIcon }, { label: "Steam", worker: batch.penugasan?.steam, icon: ZapIcon }] as p}
+          {#each [{ label: "Cutting", worker: batch.penugasan?.cutting ?? sourceCuttingWorker(), icon: ScissorsIcon }, { label: "Jahit", worker: batch.penugasan?.jahit, icon: PackageIcon }] as p}
             {@const PIcon = p.icon}
             <div
               class="flex items-center justify-between rounded-lg border border-gray-100 px-3 py-2"
@@ -1726,7 +1726,7 @@
                   </div>
                 {/if}
               </div>
-              <p class="mt-2 text-xs text-gray-400">Hijab tidak memakai ukuran. Hasil boleh disetor sebagian; sisanya tetap menjadi pekerjaan Steam.</p>
+              <p class="mt-2 text-xs text-gray-400">Hijab tidak memakai ukuran. Hasil boleh disetor sebagian; sisanya tetap menjadi pekerjaan Jahit.</p>
             </div>
           {:else}
           <!-- Tabel per-ukuran -->
@@ -1852,7 +1852,7 @@
           {/if}
           {#if batch?.status === "STEAM_IN_PROGRESS"}
             <p class="text-xs text-emerald-600">
-              Hasil yang dicatat langsung masuk ke {batch?.jenis_produk === "hijab" ? "stok hijab" : "stok barang jadi"}; sisa batch tetap menjadi pekerjaan Steam berikutnya.
+              Hasil yang dicatat langsung masuk ke {batch?.jenis_produk === "hijab" ? "stok hijab" : "stok barang jadi"}; sisa batch tetap menjadi pekerjaan Jahit berikutnya.
             </p>
           {:else if currentAction?.needsPcs && !actionCanPartial}
             <p class="text-xs text-emerald-600">

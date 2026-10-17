@@ -64,7 +64,10 @@ export async function getPerformaPerDivisi(options?: { dari?: string; sampai?: s
       if (!timestamp || (dari && timestamp < dari) || (sampai && timestamp > sampai)) return;
     }
 
-    const divisi = STATUS_DIVISI[d.status_ke as StatusBatch];
+    const divisi = d.status_ke === 'COMPLETED' &&
+      (d.status_dari === 'JAHIT_DONE' || d.status_dari === 'JAHIT_IN_PROGRESS')
+      ? 'Jahit'
+      : STATUS_DIVISI[d.status_ke as StatusBatch];
     if (!divisi) return;
 
     const uid = d.updated_by_uid || d.updated_by_nama;

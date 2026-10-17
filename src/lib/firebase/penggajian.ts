@@ -11,6 +11,7 @@ import { collectionGroup, getDocs, getDoc, doc, collection, addDoc, serverTimest
 import { db } from './config';
 import { consumeSumberCuttingLots } from './batch-produksi';
 import { getKaryawanList } from './karyawan';
+import { getPekerjaanSteamPeriode } from './pekerjaan-steam';
 import { getCursorPage, type FirestoreCursor, type CursorPage } from './pagination';
 import { canonicalUkuran } from '$lib/types';
 import type {
@@ -31,7 +32,6 @@ const STATUS_DIVISI: Partial<Record<StatusBatch, DivisiProduksi>> = {
   // belum berstatus COMPLETED.
   STEAM_IN_PROGRESS: 'Steam',
   STEAM_DONE: 'Steam',
-  COMPLETED: 'Steam',
 };
 
 const DIVISI_ROLE: Record<DivisiProduksi, UserRole> = {
@@ -155,7 +155,13 @@ async function getRiwayatEvents(range: { start: Date; end: Date } | null): Promi
   snap.docs.forEach((d) => {
     const data = d.data() as RiwayatProses;
     const statusKe = data.status_ke as StatusBatch;
-    const divisi = STATUS_DIVISI[statusKe];
+    const divisi = statusKe === 'COMPLETED'
+      ? data.status_dari === 'JAHIT_DONE' || data.status_dari === 'JAHIT_IN_PROGRESS'
+        ? 'Jahit'
+        : data.status_dari === 'STEAM_DONE' || data.status_dari === 'STEAM_IN_PROGRESS'
+          ? 'Steam'
+          : undefined
+      : STATUS_DIVISI[statusKe];
     if (!divisi) return;
 
     const uid = data.updated_by_uid || data.updated_by_nama;
@@ -301,8 +307,11 @@ export interface PenggajianData {
 export async function getPenggajianPeriode(
   range: { start: Date; end: Date } | null
 ): Promise<PenggajianData[]> {
-  const events = await getRiwayatEvents(range);
-  if (events.length === 0) return [];
+  const [events, pekerjaanSteam] = await Promise.all([
+    getRiwayatEvents(range),
+    getPekerjaanSteamPeriode(range),
+  ]);
+  if (events.length === 0 && pekerjaanSteam.length === 0) return [];
 
   const [batchMap, karyawanList] = await Promise.all([
     getBatchMap(events.map((e) => e.batchId)),
@@ -340,8 +349,11 @@ export async function getPenggajianPeriode(
     }
     if (ev.statusKe === 'CUTTING_DONE') return batch.penugasan?.cutting ?? { uid: ev.uid, nama: ev.nama };
     if (ev.statusKe === 'JAHIT_DONE') return batch.penugasan?.jahit ?? { uid: ev.uid, nama: ev.nama };
-    if (ev.statusKe === 'STEAM_DONE' || ev.statusKe === 'COMPLETED') {
+    if (ev.statusKe === 'STEAM_DONE' || (ev.statusKe === 'COMPLETED' && ev.divisi === 'Steam')) {
       return batch.penugasan?.steam ?? { uid: ev.uid, nama: ev.nama };
+    }
+    if (ev.statusKe === 'COMPLETED' && ev.divisi === 'Jahit') {
+      return batch.penugasan?.jahit ?? { uid: ev.uid, nama: ev.nama };
     }
     return { uid: ev.uid, nama: ev.nama };
   }
@@ -429,6 +441,26 @@ export async function getPenggajianPeriode(
 
       entry.breakdown.push(detail);
     }
+  }
+
+  // Steam mandiri dicatat oleh pengguna Steam tanpa mengubah status batch,
+  // stok barang jadi, atau HPP. Log ini tetap masuk slip payroll Steam.
+  for (const pekerjaan of pekerjaanSteam) {
+    if (pekerjaan.pcs <= 0) continue;
+    const profile = karyawanMap.get(pekerjaan.uid);
+    if (!profile || profile.status_kerja === 'nonaktif' || profile.role !== DIVISI_ROLE.Steam) continue;
+
+    const entry = getOrCreate(profile.uid, profile.name || pekerjaan.nama, 'Steam');
+    entry.total_pcs += pekerjaan.pcs;
+    entry.jumlah_batch += 1;
+    entry.breakdown.push({
+      nama_model: pekerjaan.nama_model,
+      nama_warna: pekerjaan.nama_warna,
+      ukuran: pekerjaan.ukuran || 'All Size',
+      pcs: pekerjaan.pcs,
+      tanggal: formatTanggal(pekerjaan.timestamp ? tsToDate(pekerjaan.timestamp) : null),
+      batch_id: `steam_${pekerjaan.id ?? 'manual'}`,
+    });
   }
 
   const result = [...map.values()];

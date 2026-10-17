@@ -63,7 +63,7 @@
         { title: "Monitor Produksi", url: "/monitor-produksi" },
         { title: "Produksi Cutting", url: "/produksi/cutting" },
         { title: "Produksi Jahit", url: "/produksi/jahit" },
-        { title: "Produksi Steam", url: "/produksi/steam" },
+        { title: "Pekerjaan Steam", url: "/produksi/steam" },
       ],
     },
     {
@@ -134,7 +134,7 @@
               { title: "Monitor Produksi", url: "/monitor-produksi" },
               { title: "Produksi Cutting", url: "/produksi/cutting" },
               { title: "Produksi Jahit", url: "/produksi/jahit" },
-              { title: "Produksi Steam", url: "/produksi/steam" },
+              { title: "Pekerjaan Steam", url: "/produksi/steam" },
             ]
           : [
               ...(role === "kepala_cutting"
@@ -144,7 +144,7 @@
                 ? [{ title: "Produksi Jahit", url: "/produksi/jahit" }]
                 : []),
               ...(role === "kepala_steam"
-                ? [{ title: "Produksi Steam", url: "/produksi/steam" }]
+                ? [{ title: "Pekerjaan Steam", url: "/produksi/steam" }]
                 : []),
             ];
         // Arahkan top-level klik ke halaman relevan per role

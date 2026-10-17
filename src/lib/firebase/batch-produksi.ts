@@ -1159,7 +1159,12 @@ async function completeBatchHijabProduksi(
     if (currentBatch.status === 'COMPLETED') {
       throw new Error('Batch sudah diselesaikan oleh pengguna lain');
     }
-    if (currentBatch.status !== 'STEAM_DONE' && currentBatch.status !== 'STEAM_IN_PROGRESS') {
+    if (
+      currentBatch.status !== 'JAHIT_DONE' &&
+      currentBatch.status !== 'JAHIT_IN_PROGRESS' &&
+      currentBatch.status !== 'STEAM_DONE' &&
+      currentBatch.status !== 'STEAM_IN_PROGRESS'
+    ) {
       throw new Error('Status batch sudah berubah, muat ulang halaman lalu coba lagi');
     }
 
@@ -1502,8 +1507,9 @@ export async function recordSteamPartialProgress(
   });
 }
 
-// Selesaikan batch + tambah stok barang jadi dalam satu transaction
-// Bisa dipanggil dari STEAM_IN_PROGRESS (skip STEAM_DONE) atau STEAM_DONE (recovery)
+// Selesaikan batch + tambah stok barang jadi dalam satu transaction.
+// Batch baru selesai langsung dari Jahit; status Steam lama tetap diterima
+// agar riwayat batch sebelum perubahan ini tetap bisa dipulihkan.
 export async function completeBatchProduksi(
   batchId: string,
   updatedByUid: string,
@@ -1520,8 +1526,13 @@ export async function completeBatchProduksi(
   newDetailUkuran = newDetailUkuran ? normalizeDetailUkuran(newDetailUkuran) : newDetailUkuran;
   const batch = await getBatchById(batchId);
   if (!batch) throw new Error('Batch tidak ditemukan');
-  if (batch.status !== 'STEAM_DONE' && batch.status !== 'STEAM_IN_PROGRESS') {
-    throw new Error('Batch hanya bisa diselesaikan dari status Steam atau Steam Selesai');
+  if (
+    batch.status !== 'JAHIT_DONE' &&
+    batch.status !== 'JAHIT_IN_PROGRESS' &&
+    batch.status !== 'STEAM_DONE' &&
+    batch.status !== 'STEAM_IN_PROGRESS'
+  ) {
+    throw new Error('Batch hanya bisa diselesaikan dari status Jahit atau Steam lama');
   }
   if (riwayat.pcs_berhasil <= 0) {
     throw new Error('PCS berhasil harus lebih dari 0 untuk menyelesaikan batch');
@@ -1581,7 +1592,12 @@ export async function completeBatchProduksi(
     if (currentBatch.status === 'COMPLETED') {
       throw new Error('Batch sudah diselesaikan oleh pengguna lain');
     }
-    if (currentBatch.status !== 'STEAM_DONE' && currentBatch.status !== 'STEAM_IN_PROGRESS') {
+    if (
+      currentBatch.status !== 'JAHIT_DONE' &&
+      currentBatch.status !== 'JAHIT_IN_PROGRESS' &&
+      currentBatch.status !== 'STEAM_DONE' &&
+      currentBatch.status !== 'STEAM_IN_PROGRESS'
+    ) {
       throw new Error('Status batch sudah berubah, muat ulang halaman lalu coba lagi');
     }
 

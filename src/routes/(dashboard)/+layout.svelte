@@ -23,7 +23,7 @@
     '/monitor-produksi': [{ label: 'Monitor Produksi' }],
     '/produksi/cutting': [{ label: 'Monitor Produksi', href: '/monitor-produksi' }, { label: 'Produksi Cutting' }],
     '/produksi/jahit':   [{ label: 'Monitor Produksi', href: '/monitor-produksi' }, { label: 'Produksi Jahit' }],
-    '/produksi/steam':   [{ label: 'Monitor Produksi', href: '/monitor-produksi' }, { label: 'Produksi Steam' }],
+    '/produksi/steam':   [{ label: 'Monitor Produksi', href: '/monitor-produksi' }, { label: 'Pekerjaan Steam' }],
     '/stok-potongan':    [{ label: 'Gudang', href: '/gudang' }, { label: 'Stok Potongan' }],
     '/barang-jadi':      [{ label: 'Gudang', href: '/gudang' }, { label: 'Barang Jadi' }],
     '/barang-keluar':    [{ label: 'Gudang', href: '/gudang' }, { label: 'Barang Keluar' }],

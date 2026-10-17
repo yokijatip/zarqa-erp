@@ -5,7 +5,6 @@
   import ActivityIcon from '@lucide/svelte/icons/activity';
   import ScissorsIcon from '@lucide/svelte/icons/scissors';
   import ShirtIcon from '@lucide/svelte/icons/shirt';
-  import ZapIcon from '@lucide/svelte/icons/zap';
   import UsersIcon from '@lucide/svelte/icons/users';
   import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
   import TrendingUpIcon from '@lucide/svelte/icons/trending-up';
@@ -16,7 +15,6 @@
   const STAGE_GROUPS: StageGroup[] = [
     { label: 'Cutting', statuses: ['PENDING_KAIN', 'PENDING_CUTTING', 'CUTTING_IN_PROGRESS', 'CUTTING_DONE'], color: 'orange', icon: ScissorsIcon, card: 'border-orange-100 bg-orange-50', title: 'text-orange-700', value: 'text-orange-800', iconColor: 'text-orange-500' },
     { label: 'Jahit', statuses: ['JAHIT_IN_PROGRESS', 'JAHIT_DONE'], color: 'blue', icon: ShirtIcon, card: 'border-blue-100 bg-blue-50', title: 'text-blue-700', value: 'text-blue-800', iconColor: 'text-blue-500' },
-    { label: 'Steam', statuses: ['STEAM_IN_PROGRESS', 'STEAM_DONE'], color: 'violet', icon: ZapIcon, card: 'border-violet-100 bg-violet-50', title: 'text-violet-700', value: 'text-violet-800', iconColor: 'text-violet-500' },
   ];
   const ACTIVE_STATUSES: StatusBatch[] = STAGE_GROUPS.flatMap((group) => group.statuses);
   const DIVISI: DivisiKey[] = ['Cutting', 'Jahit', 'Steam'];
@@ -28,7 +26,7 @@
     COMPLETED: 'bg-green-100 text-green-700',
   };
   const STATUS_DISPLAY: Record<StatusBatch, string> = {
-    ...STATUS_LABEL, CUTTING_DONE: 'Siap Jahit', JAHIT_DONE: 'Siap Steam', STEAM_DONE: 'Siap Masuk Gudang',
+    ...STATUS_LABEL, CUTTING_DONE: 'Siap Jahit', JAHIT_DONE: 'Siap Barang Jadi', STEAM_DONE: 'Siap Masuk Gudang',
   };
 
   let batches = $state<BatchProduksi[]>([]);
