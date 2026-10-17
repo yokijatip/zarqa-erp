@@ -101,6 +101,79 @@
     isLocked?: boolean;
   };
 
+  type InventoryDetail = {
+    ukuran: string;
+    stok: number;
+    warna: string;
+    kodeHex?: string;
+    nilaiProduksi: number;
+    nilaiJual: number;
+    hargaProduksi: number;
+    hargaJual: number;
+  };
+
+  type InventoryRow = {
+    key: string;
+    model: string;
+    pcs: number;
+    nilaiProduksi: number;
+    nilaiJual: number;
+    incompletePrice: boolean;
+    isShared: boolean;
+    stockOwnerId?: string;
+    stockOwnerName?: string;
+    linkedModels: Array<{ id: string; name: string }>;
+    details: InventoryDetail[];
+  };
+
+  type InventoryColorGroup = {
+    key: string;
+    warna: string;
+    kodeHex?: string;
+    pcs: number;
+    details: InventoryDetail[];
+  };
+
+  const ukuranOrder = new Map([
+    ["XS", 0],
+    ["S/M", 1],
+    ["L/XL", 2],
+    ["XXL", 3],
+  ]);
+
+  function groupInventoryDetails(details: InventoryDetail[]): InventoryColorGroup[] {
+    const groups = new Map<string, InventoryColorGroup>();
+    for (const detail of details) {
+      const warna = detail.warna || "Warna belum diisi";
+      const key = warna.toLowerCase();
+      const group = groups.get(key) ?? {
+        key,
+        warna,
+        kodeHex: detail.kodeHex,
+        pcs: 0,
+        details: [],
+      };
+      group.pcs += detail.stok;
+      const existing = group.details.find((item) => item.ukuran === detail.ukuran);
+      if (existing) {
+        existing.stok += detail.stok;
+        existing.nilaiProduksi += detail.nilaiProduksi;
+        existing.nilaiJual += detail.nilaiJual;
+      } else {
+        group.details.push({ ...detail });
+      }
+      groups.set(key, group);
+    }
+    return [...groups.values()]
+      .map((group) => ({
+        ...group,
+        details: [...group.details].sort(
+          (a, b) => (ukuranOrder.get(a.ukuran) ?? 99) - (ukuranOrder.get(b.ukuran) ?? 99),
+        ),
+      }))
+      .sort((a, b) => a.warna.localeCompare(b.warna));
+  }
+
   let reportDateRange = $state<DateRange>(getPeriodRange("semua"));
   let transactionDateRange = $state<DateRange>(getPeriodRange("semua"));
   let overviewDateRange = $state<DateRange>(getPeriodRange("semua"));
@@ -523,22 +596,9 @@
   });
 
   let inventoryRows = $derived.by(() => {
-    const map = new Map<
-      string,
-      {
-        key: string;
-        model: string;
-        pcs: number;
-        nilaiProduksi: number;
-        nilaiJual: number;
-        incompletePrice: boolean;
-        linkedModels: Array<{ id: string; name: string }>;
-        details: Array<{ ukuran: string; stok: number; nilaiProduksi: number; nilaiJual: number; hargaProduksi: number; hargaJual: number }>;
-      }
-    >();
+    const map = new Map<string, InventoryRow>();
 
     for (const model of modelList) {
-      if (model.stok_model_id && model.stok_model_id !== model.id) continue;
       map.set(model.id, {
         key: model.id,
         model: model.nama_model,
@@ -546,6 +606,13 @@
         nilaiProduksi: 0,
         nilaiJual: 0,
         incompletePrice: false,
+        isShared: Boolean(model.stok_model_id && model.stok_model_id !== model.id),
+        ...(model.stok_model_id && model.stok_model_id !== model.id
+          ? {
+              stockOwnerId: model.stok_model_id,
+              stockOwnerName: modelMap.get(model.stok_model_id)?.nama_model ?? "Model sumber tidak ditemukan",
+            }
+          : {}),
         linkedModels: [],
         details: [],
       });
@@ -553,7 +620,8 @@
 
     for (const stok of stokBarangJadi) {
       const model = modelMap.get(stok.model_id) ?? modelNameMap.get(stok.nama_model.toLowerCase());
-      const sourceModel = model?.stok_model_id ? modelMap.get(model.stok_model_id) ?? model : model;
+      const sourceId = model?.stok_model_id && model.stok_model_id !== model.id ? model.stok_model_id : model?.id;
+      const sourceModel = (sourceId ? modelMap.get(sourceId) : undefined) ?? model;
       const key = sourceModel?.id ?? stok.model_id ?? stok.nama_model;
       const row =
         map.get(key) ??
@@ -564,6 +632,7 @@
           nilaiProduksi: 0,
           nilaiJual: 0,
           incompletePrice: false,
+          isShared: false,
           linkedModels: [],
           details: [],
         };
@@ -572,7 +641,16 @@
       row.pcs += stok.stok_tersedia;
       row.nilaiProduksi += stok.stok_tersedia * hargaProduksi;
       row.nilaiJual += stok.stok_tersedia * hargaJual;
-      row.details.push({ ukuran: stok.ukuran, stok: stok.stok_tersedia, nilaiProduksi: stok.stok_tersedia * hargaProduksi, nilaiJual: stok.stok_tersedia * hargaJual, hargaProduksi, hargaJual });
+      row.details.push({
+        ukuran: stok.ukuran,
+        stok: stok.stok_tersedia,
+        warna: stok.nama_warna ?? "Warna belum diisi",
+        ...(stok.kode_hex_warna ? { kodeHex: stok.kode_hex_warna } : {}),
+        nilaiProduksi: stok.stok_tersedia * hargaProduksi,
+        nilaiJual: stok.stok_tersedia * hargaJual,
+        hargaProduksi,
+        hargaJual,
+      });
       if (!hargaProduksi || !hargaJual) row.incompletePrice = true;
       map.set(key, row);
     }
@@ -583,6 +661,16 @@
       const sourceRow = map.get(sourceId);
       if (sourceRow && !sourceRow.linkedModels.some((linked) => linked.id === model.id)) {
         sourceRow.linkedModels.push({ id: model.id, name: model.nama_model });
+      }
+      const linkedRow = map.get(model.id);
+      if (linkedRow && sourceRow) {
+        // Shared models are visible for completeness, but their physical stock
+        // is copied from the owner and excluded from inventory snapshots below.
+        linkedRow.pcs = sourceRow.pcs;
+        linkedRow.nilaiProduksi = sourceRow.nilaiProduksi;
+        linkedRow.nilaiJual = sourceRow.nilaiJual;
+        linkedRow.incompletePrice = sourceRow.incompletePrice;
+        linkedRow.details = sourceRow.details.map((detail) => ({ ...detail }));
       }
     }
 
@@ -599,6 +687,7 @@
   let snapshotPersediaan = $derived.by<SnapshotPersediaanKeuangan[]>(() => {
     const rows: SnapshotPersediaanKeuangan[] = [];
     for (const row of inventoryRows) {
+      if (row.isShared) continue;
       for (const detail of row.details) {
         if (detail.stok <= 0) continue;
         rows.push({
@@ -2290,9 +2379,23 @@
                     <ChevronDownIcon class="h-4 w-4 transition-transform {isExpanded ? 'rotate-180' : ''}" />
                     {row.model}
                   </span>
+                  {#if row.isShared}
+                    <div class="ml-6 mt-1 text-[11px] font-normal text-gray-400">
+                      Stok bersama:
+                      {#if row.stockOwnerId}
+                        <a
+                          href={`/barang-jadi/${row.stockOwnerId}`}
+                          class="text-teal-700 hover:underline"
+                          onclick={(event) => event.stopPropagation()}
+                        >{row.stockOwnerName}</a>
+                      {:else}
+                        {row.stockOwnerName}
+                      {/if}
+                    </div>
+                  {/if}
                   {#if row.linkedModels.length > 0}
                     <div class="ml-6 mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] font-normal text-gray-400">
-                      <span>Stok bersama:</span>
+                      <span>Model penjualan terkait:</span>
                       {#each row.linkedModels as linked}
                         <a
                           href={`/barang-jadi/${linked.id}`}
@@ -2315,18 +2418,42 @@
               {#if isExpanded}
                 <Table.Row class="bg-gray-50/70">
                   <Table.Cell colspan={5} class="p-0">
-                    <div class="grid gap-2 px-5 py-3 sm:grid-cols-2 lg:grid-cols-4">
-                      {#each row.details as detail}
-                        <a href={`/barang-jadi/${row.key}`} class="block rounded-lg border border-gray-100 bg-white px-3 py-2 text-xs transition hover:border-teal-200 hover:bg-teal-50/30" onclick={(event) => event.stopPropagation()}>
-                          <div class="flex items-center justify-between font-semibold text-gray-800">
-                            <span>{detail.ukuran}</span>
-                            <span>{detail.stok.toLocaleString("id-ID")} pcs</span>
+                    {@const colorGroups = groupInventoryDetails(row.details)}
+                    <div class="space-y-3 px-5 py-3">
+                      {#if colorGroups.length === 0}
+                        <p class="text-sm text-gray-400">Belum ada stok fisik untuk model ini.</p>
+                      {:else}
+                        {#each colorGroups as colorGroup}
+                          <div class="rounded-lg border border-gray-100 bg-white p-3">
+                            <div class="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 pb-2">
+                              <div class="flex items-center gap-2 font-semibold text-gray-800">
+                                {#if colorGroup.kodeHex}
+                                  <span class="h-3 w-3 rounded-full border border-gray-300" style={`background-color: ${colorGroup.kodeHex}`}></span>
+                                {/if}
+                                <span>{colorGroup.warna}</span>
+                              </div>
+                              <span class="text-xs font-semibold text-gray-500">{colorGroup.pcs.toLocaleString("id-ID")} pcs</span>
+                            </div>
+                            <div class="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                              {#each colorGroup.details as detail}
+                                <a
+                                  href={`/barang-jadi/${row.stockOwnerId ?? row.key}`}
+                                  class="block rounded-md border border-gray-100 px-3 py-2 text-xs transition hover:border-teal-200 hover:bg-teal-50/30"
+                                  onclick={(event) => event.stopPropagation()}
+                                >
+                                  <div class="flex items-center justify-between font-semibold text-gray-800">
+                                    <span>{detail.ukuran}</span>
+                                    <span>{detail.stok.toLocaleString("id-ID")} pcs</span>
+                                  </div>
+                                  <p class="mt-1 text-teal-700">Produksi: {rupiah(detail.nilaiProduksi)}</p>
+                                  <p class="text-gray-600">Jual: {rupiah(detail.nilaiJual)}</p>
+                                  <p class="mt-1 text-[11px] text-gray-400">{rupiah(detail.hargaProduksi)} produksi/pcs / {rupiah(detail.hargaJual)} jual/pcs</p>
+                                </a>
+                              {/each}
+                            </div>
                           </div>
-                          <p class="mt-1 text-teal-700">Produksi: {rupiah(detail.nilaiProduksi)}</p>
-                          <p class="text-gray-600">Jual: {rupiah(detail.nilaiJual)}</p>
-                          <p class="mt-1 text-[11px] text-gray-400">{rupiah(detail.hargaProduksi)} produksi/pcs · {rupiah(detail.hargaJual)} jual/pcs</p>
-                        </a>
-                      {/each}
+                        {/each}
+                      {/if}
                     </div>
                   </Table.Cell>
                 </Table.Row>
