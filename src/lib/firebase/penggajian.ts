@@ -44,6 +44,7 @@ interface RiwayatEvent {
   batchId: string;
   divisi: DivisiProduksi;
   statusKe: StatusBatch;
+  statusDari?: StatusBatch;
   uid: string;
   nama: string;
   pcsBerhasil: number;
@@ -74,6 +75,26 @@ function dedupeSteamFinalizationEvents(events: RiwayatEvent[]): RiwayatEvent[] {
     if (event.sumber === 'reject_diperbaiki') return true;
     if (event.statusKe !== 'COMPLETED' || event.divisi !== 'Steam') return true;
     return !steamDoneKeys.has(steamPayrollKey(event));
+  });
+}
+
+// Batch sekarang langsung selesai setelah Jahit (tanpa Steam). Pada setor
+// parsial, batch anak mencatat dua riwayat: "JAHIT_DONE" lalu "COMPLETED"
+// (dari JAHIT_DONE) dengan pcs yang sama. Keduanya terbaca sebagai pekerjaan
+// Jahit sehingga gaji dobel. Jika satu batch sudah punya event JAHIT_DONE,
+// event COMPLETED dari JAHIT_DONE dianggap duplikat dan dibuang.
+function dedupeJahitFinalizationEvents(events: RiwayatEvent[]): RiwayatEvent[] {
+  const jahitDoneBatches = new Set(
+    events
+      .filter((event) => event.statusKe === 'JAHIT_DONE' && event.divisi === 'Jahit' && event.pcsBerhasil > 0)
+      .map((event) => event.batchId)
+  );
+
+  return events.filter((event) => {
+    if (event.sumber === 'reject_diperbaiki') return true;
+    if (event.statusKe !== 'COMPLETED' || event.divisi !== 'Jahit') return true;
+    if (event.statusDari !== 'JAHIT_DONE') return true;
+    return !jahitDoneBatches.has(event.batchId);
   });
 }
 
@@ -183,6 +204,7 @@ async function getRiwayatEvents(range: { start: Date; end: Date } | null): Promi
       batchId,
       divisi,
       statusKe,
+      statusDari: data.status_dari as StatusBatch | undefined,
       uid,
       nama: data.updated_by_nama,
       pcsBerhasil: data.pcs_berhasil ?? 0,
@@ -198,7 +220,7 @@ async function getRiwayatEvents(range: { start: Date; end: Date } | null): Promi
   });
 
   events.push(...await getRejectRepairEvents(range));
-  const payrollEvents = dedupeSteamFinalizationEvents(events);
+  const payrollEvents = dedupeJahitFinalizationEvents(dedupeSteamFinalizationEvents(events));
   if (!range) return payrollEvents;
   return payrollEvents.filter((event) => {
     if (!event.timestamp) return false;
@@ -648,4 +670,3 @@ export async function getPembayaranGajiKaryawanPage(
     : page.items;
   return { ...page, items };
 }
-

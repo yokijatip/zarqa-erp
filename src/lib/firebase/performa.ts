@@ -57,8 +57,26 @@ export async function getPerformaPerDivisi(options?: { dari?: string; sampai?: s
     return existing;
   }
 
+  // Batch yang sudah punya event JAHIT_DONE: event COMPLETED dari JAHIT_DONE
+  // adalah pencatatan ganda untuk pcs yang sama, jadi tidak dihitung lagi.
+  const batchDenganJahitDone = new Set<string>();
   snap.docs.forEach((doc) => {
     const d = doc.data() as RiwayatProses;
+    if (d.status_ke === 'JAHIT_DONE' && (d.pcs_berhasil ?? 0) > 0) {
+      const batchId = doc.ref.parent.parent?.id;
+      if (batchId) batchDenganJahitDone.add(batchId);
+    }
+  });
+
+  snap.docs.forEach((doc) => {
+    const d = doc.data() as RiwayatProses;
+    if (
+      d.status_ke === 'COMPLETED' &&
+      d.status_dari === 'JAHIT_DONE' &&
+      batchDenganJahitDone.has(doc.ref.parent.parent?.id ?? '')
+    ) {
+      return;
+    }
     if (dari || sampai) {
       const timestamp = d.timestamp?.toDate ? d.timestamp.toDate() : d.timestamp ? new Date(d.timestamp as any) : null;
       if (!timestamp || (dari && timestamp < dari) || (sampai && timestamp > sampai)) return;
