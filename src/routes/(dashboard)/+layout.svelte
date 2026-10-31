@@ -83,7 +83,7 @@
     }
 
     if (pathname.startsWith('/karyawan')) {
-      return hasRole(role, ['admin_hr']);
+      return hasRole(role, ['admin_gudang', 'admin_hr']);
     }
 
     if (pathname.startsWith('/laporan/aktivitas')) {

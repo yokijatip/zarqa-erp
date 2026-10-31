@@ -134,6 +134,17 @@
     details: InventoryDetail[];
   };
 
+  type HijabInventoryRow = {
+    key: string;
+    model: string;
+    warna: string;
+    kodeHex?: string;
+    pcs: number;
+    harga: number;
+    nilai: number;
+    minimum: number;
+  };
+
   const ukuranOrder = new Map([
     ["XS", 0],
     ["S/M", 1],
@@ -676,6 +687,25 @@
 
     return [...map.values()].sort((a, b) => b.nilaiProduksi - a.nilaiProduksi);
   });
+
+  let hijabInventoryRows = $derived.by<HijabInventoryRow[]>(() =>
+    stokHijabList
+      .filter((hijab) => hijab.stok_tersedia > 0)
+      .map((hijab) => {
+        const harga = Math.max(0, hijab.harga_per_unit ?? 0);
+        return {
+          key: hijab.id,
+          model: hijab.nama_hijab,
+          warna: hijab.nama_warna ?? "Warna belum diisi",
+          ...(hijab.kode_hex_warna ? { kodeHex: hijab.kode_hex_warna } : {}),
+          pcs: hijab.stok_tersedia,
+          harga,
+          nilai: hijab.stok_tersedia * harga,
+          minimum: hijab.stok_minimum ?? 0,
+        };
+      })
+      .sort((a, b) => a.model.localeCompare(b.model) || a.warna.localeCompare(b.warna)),
+  );
 
   function toggleGudangModel(key: string) {
     const next = new Set(expandedGudangModels);
@@ -2346,10 +2376,11 @@
           </div>
         </div>
       </div>
-      {#if inventoryRows.length === 0}
-        <div class="py-16 text-center text-sm text-gray-400">Belum ada stok barang jadi.</div>
+      {#if inventoryRows.length === 0 && hijabInventoryRows.length === 0}
+        <div class="py-16 text-center text-sm text-gray-400">Belum ada persediaan gudang.</div>
       {:else}
-        <Table.Root class="table-fixed">
+        {#if inventoryRows.length > 0}
+          <Table.Root class="table-fixed">
           <Table.Header>
             <Table.Row class="bg-gray-50 hover:bg-gray-50">
               <Table.Head>Model</Table.Head>
@@ -2460,7 +2491,54 @@
               {/if}
             {/each}
           </Table.Body>
-        </Table.Root>
+          </Table.Root>
+        {/if}
+
+        {#if hijabInventoryRows.length > 0}
+          <div class="border-t border-gray-100">
+            <div class="flex items-center justify-between px-4 py-4">
+              <div>
+                <h3 class="text-sm font-semibold text-gray-800">Stok Hijab</h3>
+                <p class="mt-0.5 text-xs text-gray-400">Persediaan hijab yang tersedia, terpisah dari stok barang jadi baju.</p>
+              </div>
+              <div class="text-right">
+                <p class="text-xs text-gray-400">Total stok hijab</p>
+                <p class="font-semibold text-violet-700">{hijabInventoryRows.reduce((sum, row) => sum + row.pcs, 0).toLocaleString("id-ID")} pcs</p>
+              </div>
+            </div>
+            <Table.Root class="table-fixed">
+              <Table.Header>
+                <Table.Row class="bg-gray-50 hover:bg-gray-50">
+                  <Table.Head>Model Hijab</Table.Head>
+                  <Table.Head>Warna</Table.Head>
+                  <Table.Head class="w-[14%] text-right">Stok</Table.Head>
+                  <Table.Head class="w-[18%] text-right">Nilai Persediaan</Table.Head>
+                  <Table.Head class="w-[16%] text-center">Harga</Table.Head>
+                </Table.Row>
+              </Table.Header>
+              <Table.Body>
+                {#each hijabInventoryRows as row}
+                  <Table.Row>
+                    <Table.Cell class="font-medium text-gray-900">{row.model}</Table.Cell>
+                    <Table.Cell>
+                      <span class="inline-flex items-center gap-2">
+                        {#if row.kodeHex}<span class="h-3 w-3 rounded-full border border-gray-300" style={`background-color: ${row.kodeHex}`}></span>{/if}
+                        {row.warna}
+                      </span>
+                    </Table.Cell>
+                    <Table.Cell class="text-right">{row.pcs.toLocaleString("id-ID")} pcs</Table.Cell>
+                    <Table.Cell class="text-right font-semibold text-violet-700">{rupiah(row.nilai)}</Table.Cell>
+                    <Table.Cell class="text-center">
+                      <span class="rounded-full px-2.5 py-0.5 text-xs font-semibold {row.harga > 0 ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}">
+                        {row.harga > 0 ? rupiah(row.harga) : "Belum diisi"}
+                      </span>
+                    </Table.Cell>
+                  </Table.Row>
+                {/each}
+              </Table.Body>
+            </Table.Root>
+          </div>
+        {/if}
       {/if}
     </section>
   {/if}
